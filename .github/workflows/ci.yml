@@ -37,7 +37,11 @@ jobs:
       - run: npm ci
 
       # `pretest` builds, so this also verifies the TypeScript build.
+      # The seed is pinned here as well as in the source: a property failure in
+      # CI has to be reproducible from the log, and the seed is the whole input.
       - run: npm test
+        env:
+          FAST_CHECK_SEED: '20260815'
 
   smoke:
     name: smoke (dogfood the CLI end-to-end)
@@ -60,6 +64,64 @@ jobs:
       # script fails the job (set -euo pipefail).
       - name: End-to-end smoke against the MCP reference server
         run: bash scripts/smoke.sh
+
+  action:
+    name: action (dogfood the composite action)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The action posts one results comment. A pull request from a fork gets a
+      # read-only token whatever this says; the action warns and stays green.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - run: npm ci
+
+      # `version: local` below runs this build rather than a published release,
+      # so the action under test is the one in this commit.
+      - run: npm run build
+
+      - name: Gate a clean server against its committed snapshot
+        uses: ./
+        with:
+          server-command: node tests/fixtures/tiny-server.mjs
+          snapshot-file: tests/fixtures/tiny-server.snapshot.json
+          version: local
+          fail-on: dangerous
+
+      # A gate that has only ever been seen passing is not known to be a gate.
+      # TINY_V2 makes the fixture server remove a tool and add a required
+      # parameter; the action must go red, and the job must go green because of
+      # it.
+      # TINY_V2 rides in the server command rather than in the step's `env:`,
+      # so this does not depend on how a composite action inherits step
+      # environment — the flag reaches the fixture the same way a consumer's
+      # own wrapper command would.
+      - name: Gate a drifted server (expected to fail)
+        id: drift
+        continue-on-error: true
+        uses: ./
+        with:
+          server-command: env TINY_V2=1 node tests/fixtures/tiny-server.mjs
+          snapshot-file: tests/fixtures/tiny-server.snapshot.json
+          version: local
+          comment: 'false'
+
+      - name: Assert the gate fired
+        env:
+          OUTCOME: ${{ steps.drift.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::the contract gate passed a breaking diff (outcome: $OUTCOME)"
+            exit 1
+          fi
 
   smoke-canary:
     name: smoke-canary (unpinned reference server, non-blocking)

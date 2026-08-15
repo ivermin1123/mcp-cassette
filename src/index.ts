@@ -31,10 +31,18 @@ export { lintTool, LINT_RULES, type LintFinding } from "./lint.js";
 export { runCheck, printReport, type CheckReport, type CheckFinding } from "./check.js";
 export {
   captureContract,
+  countChanges,
   diffContracts,
   printChanges,
   readSnapshot,
+  shouldFail,
   writeSnapshot,
-  type ContractSnapshot,
+  CHANGE_KINDS,
+  CONTRACT_RULES,
+  type ChangeCounts,
+  type ChangeKind,
   type ContractChange,
+  type ContractRule,
+  type ContractSnapshot,
+  type FailOn,
 } from "./snapshot.js";

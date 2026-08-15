@@ -71,22 +71,79 @@ mcp-cassette snapshot --check --stdio "npx -y my-server"    # CI: fails on break
 ```
 
 ```
-[BREAKING] add: parameter "precision" is now required
-[BREAKING] slugify: tool removed
-[MINOR]    add: parameter "mode" added
-result: FAIL (2 breaking, 1 minor, 0 info)
+[BREAKING] slugify: tool removed (tool-removed)
+[BREAKING] add: parameter "precision" is now required (input-property-became-required)
+[DANGEROUS] add: parameter "mode" added (input-property-added-optional)
+result: FAIL (2 breaking, 1 dangerous, 0 minor, 0 info; gate: breaking)
 ```
 
-## CI recipe (GitHub Actions)
+Every finding carries a stable rule ID in parentheses. Match on those, not on the wording — the prose can be reworded in a patch release, the IDs cannot.
+
+## CI in three lines
 
 ```yaml
-- name: MCP contract & safety checks
-  run: |
-    npx mcp-cassette check    --stdio "node dist/my-server.js"
-    npx mcp-cassette snapshot --check --stdio "node dist/my-server.js"
+- uses: ivermin1123/mcp-cassette@v0
+  with:
+    server-command: node dist/my-server.js
+```
 
-- name: Agent integration tests (offline, via cassette)
-  run: npx vitest run   # your tests point the MCP client at: mcp-cassette replay fixtures/session.cassette.jsonl
+That runs the safety check *and* the contract gate against the snapshot you committed, then leaves one comment on the pull request with the classified diff — updated in place on every push, not appended.
+
+<details>
+<summary>Full workflow</summary>
+
+```yaml
+name: MCP contract
+
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write   # the results comment
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+      - run: npm ci && npm run build      # your server must exist before it can be started
+
+      - uses: ivermin1123/mcp-cassette@v0
+        with:
+          server-command: node dist/my-server.js
+          snapshot-file: mcp-contract.snapshot.json
+          mode: both            # check | snapshot | both
+          fail-on: breaking     # or: dangerous
+          comment: 'true'
+
+      # Agent integration tests, offline, against a recorded cassette:
+      # point your MCP client at `mcp-cassette replay fixtures/session.cassette.jsonl`
+      - run: npx vitest run
+```
+
+| Input | Default | What it does |
+|---|---|---|
+| `server-command` | *(required)* | Command that starts your MCP server on stdio. |
+| `snapshot-file` | `mcp-contract.snapshot.json` | The committed contract to diff against. Create it once with `mcp-cassette snapshot` and commit it. |
+| `mode` | `both` | `check` (health + safety lint), `snapshot` (contract drift), or `both`. |
+| `fail-on` | `breaking` | Lowest tier that fails the job. `dangerous` also gates enum widening, default-value drift and added optional parameters. |
+| `comment` | `true` | Post and afterwards update one results comment. Ignored outside pull requests. |
+| `version` | pinned | Version of `mcp-cassette` to run from npm. |
+| `github-token` | `${{ github.token }}` | Needs `pull-requests: write` to comment. A fork's read-only token makes the action warn, not fail. |
+
+A pull request from a fork gets a read-only `GITHUB_TOKEN`, so the comment is skipped there with a warning — the gate itself still runs and still blocks.
+
+</details>
+
+Prefer plain commands? They are the same gate:
+
+```yaml
+- run: |
+    npx mcp-cassette check    --stdio "node dist/my-server.js"
+    npx mcp-cassette snapshot --check --fail-on dangerous --stdio "node dist/my-server.js"
 ```
 
 ## Commands
@@ -96,8 +153,23 @@ result: FAIL (2 breaking, 1 minor, 0 info)
 | `record -o <file> [--no-redact] -- <server cmd>` | Transparent stdio proxy; captures every JSON-RPC frame (both directions) into an open JSONL cassette. Bytes are forwarded verbatim — recording is invisible to both sides. Secrets are [redacted](#secrets-redaction) before they hit the file. |
 | `replay <file>` | Serves the cassette as a stdio MCP server. Requests are matched by method + arguments (volatile `_meta` ignored); repeated identical calls replay in recorded order; unrecorded `ping` is synthesized; anything else gets a clear JSON-RPC error. |
 | `check [--stdio "cmd" \| --url <url>] [--json]` | Lifecycle handshake, `tools/resources/prompts` listing, JSON Schema validation (ajv; draft-07 + 2020-12 by declared dialect), duplicate/name/description checks, and the safety lint below. Exit 1 on errors. |
-| `snapshot [--check] [--update] [-f file]` | Canonical contract snapshot (tools + schemas + annotations). `--check` classifies drift: **breaking** (removed tool/param, new required param, type change, enum narrowed) / **minor** (additive) / **info** (descriptions). Exit 1 on breaking. |
+| `snapshot [--check] [--update] [--fail-on tier] [--json] [-f file]` | Canonical contract snapshot (tools + schemas + annotations). `--check` classifies drift into four tiers (below) and exits 1 at `--fail-on` (default `breaking`). `--json` emits the whole diff, rule IDs included, for tooling. |
 | `redact <cassette> -o <out> \| --scan` | Redact an existing cassette, or audit one in place. `--scan` writes nothing and exits 1 if it finds anything. |
+
+### Contract drift tiers
+
+`breaking` and `minor` are the obvious ends. The interesting tier is the middle one, borrowed from GraphQL-Inspector's trichotomy: changes that keep every existing call valid and still change what a caller observes.
+
+| Tier | Rule IDs | Why here |
+|---|---|---|
+| **breaking** | `tool-removed`, `input-property-removed`, `input-property-became-required`, `input-property-added-required`, `input-property-type-changed`, `input-schema-type-changed`, `input-enum-value-removed`, `input-schema-replaced`, `input-schema-changed-unclassified` | A call that used to work now fails. |
+| **dangerous** | `input-enum-value-added`, `input-property-default-changed`, `input-property-added-optional` | Everything still validates. An agent that switch-cases over the enum meets a value it has no branch for; a caller that relied on a default silently gets a different one; a newly-added optional parameter is a surface nothing was tested against. |
+| **minor** | `tool-added`, `input-property-became-optional` | Strictly additive or strictly relaxing. |
+| **info** | `tool-description-changed`, `tool-annotations-changed` | Prose and hints. Worth reading — a description is [attack surface](#safety-lint-rules) — never a gate. |
+
+`dangerous` is reported always and gated only with `--fail-on dangerous`, so upgrading does not turn anyone's CI red on its own.
+
+An unrecognized structural change lands in `input-schema-changed-unclassified` and counts as breaking. That is deliberate: an unknown change to a contract is not evidence of safety.
 
 ### Safety lint rules
 

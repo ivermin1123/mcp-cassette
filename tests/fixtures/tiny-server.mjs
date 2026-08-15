@@ -33,7 +33,8 @@ const tools = [
     description: "Add two numbers.",
     inputSchema: v2
       ? {
-          // v2 introduces a breaking change (new required param) + a minor one (optional param)
+          // v2 introduces a breaking change (new required param) + a dangerous
+          // one (added optional param, plus the `mode` enum a caller may widen)
           type: "object",
           properties: {
             a: { type: "number" },

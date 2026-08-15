@@ -320,6 +320,15 @@ describe("snapshot contract diff across server versions", () => {
     expect(
       breaking.some((c) => c.subject === "add" && c.message.includes('"precision"'))
     ).toBe(true);
-    expect(changes.some((c) => c.kind === "minor" && c.message.includes('"mode"'))).toBe(true);
+    // v2 also adds an optional `mode` parameter: valid for every existing
+    // caller, and still a behaviour change an agent can trip over — dangerous.
+    expect(
+      changes.some(
+        (c) =>
+          c.kind === "dangerous" &&
+          c.rule === "input-property-added-optional" &&
+          c.message.includes('"mode"')
+      )
+    ).toBe(true);
   }, 20_000);
 });

@@ -19,10 +19,13 @@ import { redactCassette, scanCassette } from "./redact.js";
 import { VERSION } from "./version.js";
 import {
   captureContract,
+  countChanges,
   diffContracts,
   printChanges,
   readSnapshot,
+  shouldFail,
   writeSnapshot,
+  type FailOn,
 } from "./snapshot.js";
 import type { Target } from "./client.js";
 
@@ -126,36 +129,62 @@ program
   .option("-f, --file <file>", "snapshot file", "mcp-contract.snapshot.json")
   .option("--check", "compare against existing snapshot instead of writing")
   .option("--update", "rewrite the snapshot file even if it exists")
-  .action(async (opts: { stdio?: string; url?: string; file: string; check?: boolean; update?: boolean }) => {
-    try {
-      const { target } = resolveTarget(opts);
-      const live = await captureContract(target);
+  .option(
+    "--fail-on <tier>",
+    "lowest tier that fails --check: breaking | dangerous",
+    "breaking"
+  )
+  .option("--json", "machine-readable diff output (--check only)")
+  .action(
+    async (opts: {
+      stdio?: string;
+      url?: string;
+      file: string;
+      check?: boolean;
+      update?: boolean;
+      failOn: string;
+      json?: boolean;
+    }) => {
+      try {
+        if (opts.failOn !== "breaking" && opts.failOn !== "dangerous") {
+          throw new Error(`--fail-on must be "breaking" or "dangerous" (got "${opts.failOn}")`);
+        }
+        const failOn = opts.failOn as FailOn;
+        const { target } = resolveTarget(opts);
+        const live = await captureContract(target);
 
-      if (opts.check) {
-        if (!fs.existsSync(opts.file)) {
-          process.stderr.write(`snapshot --check: no snapshot at ${opts.file} (run snapshot first)\n`);
+        if (opts.check) {
+          if (!fs.existsSync(opts.file)) {
+            process.stderr.write(`snapshot --check: no snapshot at ${opts.file} (run snapshot first)\n`);
+            process.exit(2);
+          }
+          const stored = readSnapshot(opts.file);
+          const changes = diffContracts(stored, live);
+          const failed = shouldFail(changes, failOn);
+          if (opts.json) {
+            const report = { ok: !failed, failOn, counts: countChanges(changes), changes };
+            process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+          } else {
+            printChanges(changes, failOn);
+          }
+          process.exit(failed ? 1 : 0);
+        }
+
+        if (fs.existsSync(opts.file) && !opts.update) {
+          process.stderr.write(
+            `snapshot: ${opts.file} already exists — use --check to compare or --update to overwrite\n`
+          );
           process.exit(2);
         }
-        const stored = readSnapshot(opts.file);
-        const changes = diffContracts(stored, live);
-        printChanges(changes);
-        process.exit(changes.some((c) => c.kind === "breaking") ? 1 : 0);
-      }
-
-      if (fs.existsSync(opts.file) && !opts.update) {
-        process.stderr.write(
-          `snapshot: ${opts.file} already exists — use --check to compare or --update to overwrite\n`
-        );
+        writeSnapshot(opts.file, live);
+        process.stdout.write(`wrote ${opts.file} (${live.tools.length} tools)\n`);
+        process.exit(0);
+      } catch (err) {
+        process.stderr.write(`snapshot failed: ${(err as Error).message}\n`);
         process.exit(2);
       }
-      writeSnapshot(opts.file, live);
-      process.stdout.write(`wrote ${opts.file} (${live.tools.length} tools)\n`);
-      process.exit(0);
-    } catch (err) {
-      process.stderr.write(`snapshot failed: ${(err as Error).message}\n`);
-      process.exit(2);
     }
-  });
+  );
 
 program
   .command("redact")
