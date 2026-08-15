@@ -93,3 +93,92 @@ jobs:
           git tag -f "$MAJOR" "$GITHUB_SHA"
           git push -f origin "refs/tags/$MAJOR"
           echo "$MAJOR now points at $GITHUB_REF_NAME ($GITHUB_SHA)"
+
+  # Everything above proves the tarball builds and tests green *here*. This job
+  # proves the artifact that actually reached consumers works *there*: a clean
+  # runner, no checkout on the module path, no node_modules, nothing but what
+  # `npx` pulls from the registry. It catches the failure mode local CI cannot
+  # see — a bad `files` list, a missing shebang or bin bit, a dependency that
+  # only ever resolved because it was hoisted in this repo.
+  #
+  # It runs after publish because it can only run after publish, which is the
+  # whole point: the window where a broken release is still cheap to blunt with
+  # `npm deprecate` is measured in minutes, and nobody watches a registry they
+  # were not told to look at.
+  #
+  # A failure here goes red and stops. It does NOT unpublish, deprecate, or
+  # move any tag back — an automated rollback of a release the world may
+  # already have installed is a worse outcome than a loud alert. Read the log,
+  # then decide.
+  verify-publish:
+    name: verify the published package from npm
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # For tests/fixtures/tiny-server.mjs and the action definition. The CLI
+      # under test comes from the registry, never from this checkout.
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+
+      - name: Resolve the released version
+        id: version
+        run: |
+          set -euo pipefail
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # A publish is not instantly readable from every registry edge, so a
+      # bare `npx` right after it can 404 on a package that is perfectly fine.
+      # Poll first, and only then let a failure mean something.
+      - name: Wait for the registry to serve the version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -uo pipefail
+          for attempt in $(seq 1 20); do
+            if npm view "mcp-cassette@$VERSION" version > /dev/null 2>&1; then
+              echo "mcp-cassette@$VERSION is on the registry (attempt $attempt)"
+              exit 0
+            fi
+            echo "not visible yet (attempt $attempt); retrying in 15s"
+            sleep 15
+          done
+          echo "::error::mcp-cassette@$VERSION never became visible on the registry"
+          exit 1
+
+      # Deliberately no `npm ci`, no global install, and run from an empty
+      # directory: `npx pkg@<exact>` will happily run an already-present
+      # binary of another version instead of the pin — observed locally, where
+      # a global mcp-cassette@0.1.1 answered a `npx -y mcp-cassette@0.1.2
+      # --version` with "0.1.1". A runner has neither, and this keeps it that
+      # way, so a mismatch here means the tarball really is wrong.
+      - name: The published CLI reports the tagged version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          got="$(npx -y "mcp-cassette@$VERSION" --version)"
+          echo "npx reported: $got"
+          if [ "$got" != "$VERSION" ]; then
+            echo "::error::published CLI reports '$got' but the tag says '$VERSION'" >&2
+            exit 1
+          fi
+
+      # `version:` is the released number, not `local`, so the action resolves
+      # its CLI through `npx -y mcp-cassette@<version>` — the same path a
+      # consumer's workflow takes. `comment` is off: a tag push has no pull
+      # request to comment on.
+      - name: The published action gates the fixture server
+        uses: ./
+        with:
+          server-command: node tests/fixtures/tiny-server.mjs
+          snapshot-file: tests/fixtures/tiny-server.snapshot.json
+          version: ${{ steps.version.outputs.version }}
+          fail-on: dangerous
+          comment: 'false'
