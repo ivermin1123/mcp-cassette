@@ -222,7 +222,7 @@ footer {
 
 <p>Works at the transport level — any server, any SDK, any language, any spec revision.</p>
 
-<h2>The four commands</h2>
+<h2>The five commands</h2>
 
 <h3>check</h3>
 <p>Health-check any live server: lifecycle handshake, tool/resource/prompt listing, JSON Schema
@@ -264,6 +264,19 @@ mcp-cassette snapshot --check --stdio "npx -y my-server"    # CI: fails on break
 [BREAKING] slugify: tool removed
 [MINOR]    add: parameter "mode" added
 result: FAIL (2 breaking, 1 minor, 0 info)</code></pre>
+
+<h3>redact</h3>
+<p>Cleans a cassette you already have, or audits one without touching it.
+<code>--scan</code> writes nothing and exits non-zero if it finds anything, so it drops into CI
+as a tripwire on committed fixtures. New recordings are
+<a href="#secrets-redaction">redacted by default</a> — this is for the ones that came before.</p>
+
+<pre><code>mcp-cassette redact session.cassette.jsonl -o session.redacted.jsonl   # clean a recording
+mcp-cassette redact session.cassette.jsonl --scan                      # audit only, exit 1 on a hit</code></pre>
+
+<pre><code>[keyctx] c2s tools/call params.arguments.token: ghp_**************** (39 chars)
+[github] s2c tools/call result.content[0].text: ghp_**************** (39 chars)
+result: FOUND (2 secret(s) detected)</code></pre>
 
 <h2>CI recipe</h2>
 
