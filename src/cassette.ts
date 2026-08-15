@@ -17,7 +17,7 @@
  */
 
 import fs from "node:fs";
-import { JsonRpcFrame } from "./jsonrpc.js";
+import { JsonRpcFrame, JsonRpcId } from "./jsonrpc.js";
 import { RECORDER } from "./version.js";
 
 export const CASSETTE_VERSION = 2;
@@ -72,6 +72,12 @@ export interface RawEntry {
   data: string;
 }
 
+/** One streamed frame as it appeared on the wire; `t` is the ms offset from session start. */
+export interface StreamChunk {
+  t: number;
+  frame: JsonRpcFrame;
+}
+
 export interface ChunksEntry {
   type: "chunks";
   t: number;
@@ -80,8 +86,7 @@ export interface ChunksEntry {
   id?: number | string;
   /** How the stream was opened: "post" (default, may be omitted) or "get". */
   via?: "post" | "get";
-  /** Each streamed frame as it appeared on the wire; `t` is the ms offset from session start. */
-  chunks: { t: number; frame: JsonRpcFrame }[];
+  chunks: StreamChunk[];
   /** Present on entries appended by `replay --on-miss passthrough`, absent on originally recorded ones. */
   origin?: "live";
 }
@@ -172,6 +177,33 @@ export class CassetteWriter {
 
   raw(dir: Direction, data: string): void {
     this.emit({ type: "raw", t: Date.now() - this.start, dir, data });
+  }
+
+  /**
+   * A streamed (SSE) answer, whole: one entry per stream, frames in wire order.
+   * `t` defaults to now but a stream is stamped with when it *opened*, so the
+   * caller passes the offset it took at the start. `via: "post"` is the default
+   * and is left out of the file (§1.3); an id-less entry is the legacy
+   * standalone GET stream.
+   */
+  chunks(
+    dir: Direction,
+    chunks: StreamChunk[],
+    meta: { t?: number; id?: JsonRpcId; via?: "post" | "get" } = {}
+  ): void {
+    this.emit({
+      type: "chunks",
+      t: meta.t ?? this.elapsed(),
+      dir,
+      ...(meta.id !== undefined ? { id: meta.id } : {}),
+      ...(meta.via && meta.via !== "post" ? { via: meta.via } : {}),
+      chunks,
+    });
+  }
+
+  /** Milliseconds since the session started — the stamp every entry carries. */
+  elapsed(): number {
+    return Date.now() - this.start;
   }
 
   close(): Promise<void> {
