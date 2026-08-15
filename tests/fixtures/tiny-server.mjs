@@ -124,6 +124,9 @@ rl.on("line", (line) => {
     case "ping":
       send({ jsonrpc: "2.0", id, result: {} });
       break;
+    case "block":
+      // Deliberately never answers — lets tests exercise response timeouts.
+      break;
     case "tools/list":
       send({ jsonrpc: "2.0", id, result: { tools } });
       break;
