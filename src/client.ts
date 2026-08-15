@@ -8,6 +8,7 @@
  */
 
 import { spawn, ChildProcess } from "node:child_process";
+import { VERSION } from "./version.js";
 import {
   isResponse,
   JsonRpcFrame,
@@ -111,7 +112,7 @@ export class MiniClient {
     const res = await this.request("initialize", {
       protocolVersion: CLIENT_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: "mcp-cassette", version: "0.1.0" },
+      clientInfo: { name: "mcp-cassette", version: VERSION },
     }).catch((err: Error) => {
       throw new Error(
         `initialize failed: ${err.message}. If this server only speaks the 2026-07-28 stateless lifecycle, ` +

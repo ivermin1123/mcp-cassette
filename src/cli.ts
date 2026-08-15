@@ -16,6 +16,7 @@ import { runReplay } from "./replay.js";
 import { runCheck, printReport } from "./check.js";
 import { readCassette, writeCassette } from "./cassette.js";
 import { redactCassette, scanCassette } from "./redact.js";
+import { VERSION } from "./version.js";
 import {
   captureContract,
   diffContracts,
@@ -67,7 +68,7 @@ const program = new Command();
 program
   .name("mcp-cassette")
   .description("Record a real MCP session once — replay it forever. VCR + contract tests for MCP servers.")
-  .version("0.1.0");
+  .version(VERSION);
 
 program
   .command("record")
