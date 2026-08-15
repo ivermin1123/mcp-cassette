@@ -1,23 +1,17 @@
 /**
- * MiniClient — a deliberately small MCP client used by `check` and `snapshot`.
+ * MiniClient — a deliberately small MCP client used by `check`, `snapshot`,
+ * and `verify`.
  *
  * Speaks the widely-deployed MCP lifecycle (initialize → notifications/initialized
- * → requests) over stdio or Streamable HTTP. Servers that only implement the
+ * → requests) and knows nothing about how frames travel: that is the
+ * Transport's job (see transport.ts). Servers that only implement the
  * 2026-07-28 stateless lifecycle are detected and reported with a clear message
  * (full stateless support is on the roadmap).
  */
 
-import { spawn, ChildProcess } from "node:child_process";
 import { VERSION } from "./version.js";
-import {
-  isResponse,
-  JsonRpcFrame,
-  JsonRpcRequest,
-  JsonRpcResponse,
-  LineBuffer,
-  parseFrame,
-  serializeFrame,
-} from "./jsonrpc.js";
+import { JsonRpcFrame, JsonRpcRequest, JsonRpcResponse } from "./jsonrpc.js";
+import { HttpTransport, StdioTransport, Transport } from "./transport.js";
 
 export interface ServerInfo {
   name?: string;
@@ -56,28 +50,23 @@ export type Target = StdioTarget | HttpTarget;
 const CLIENT_PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-interface Pending {
-  resolve: (res: JsonRpcResponse) => void;
-  reject: (err: Error) => void;
-  timer: NodeJS.Timeout;
+/** The transport a target speaks. */
+function createTransport(target: Target): Transport {
+  return target.kind === "stdio"
+    ? new StdioTransport(target.command)
+    : new HttpTransport(target.url, target.headers);
 }
 
 export class MiniClient {
-  private child?: ChildProcess;
   private nextId = 1;
-  private pending = new Map<string, Pending>();
-  private buf = new LineBuffer();
-  private sessionId?: string;
-  private negotiatedVersion?: string;
   readonly timeoutMs: number;
 
-  private constructor(private target: Target, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  private constructor(private transport: Transport, timeoutMs = DEFAULT_TIMEOUT_MS) {
     this.timeoutMs = timeoutMs;
   }
 
   static async connect(target: Target, timeoutMs?: number): Promise<{ client: MiniClient; init: InitializeResult }> {
-    const client = new MiniClient(target, timeoutMs);
-    if (target.kind === "stdio") client.spawnChild(target);
+    const client = new MiniClient(createTransport(target), timeoutMs);
     try {
       const init = await client.initialize();
       return { client, init };
@@ -86,37 +75,6 @@ export class MiniClient {
       await client.close();
       throw err;
     }
-  }
-
-  private spawnChild(target: StdioTarget): void {
-    const [cmd, ...args] = target.command;
-    if (!cmd) throw new Error("stdio target: empty command");
-    this.child = spawn(cmd, args, { stdio: ["pipe", "pipe", "inherit"] });
-    this.child.on("error", (err) => {
-      for (const p of this.pending.values()) {
-        // Clear the timer too, or it keeps the event loop alive for the full
-        // timeout after the process has already failed.
-        clearTimeout(p.timer);
-        p.reject(new Error(`server process error: ${err.message}`));
-      }
-      this.pending.clear();
-    });
-    this.child.stdout!.on("data", (chunk: Buffer) => {
-      for (const line of this.buf.feed(chunk.toString("utf8"))) {
-        const frame = parseFrame(line);
-        if (frame && isResponse(frame)) this.settle(frame);
-        // v1: server-initiated requests/notifications are ignored by MiniClient
-      }
-    });
-  }
-
-  private settle(res: JsonRpcResponse): void {
-    const key = String(res.id);
-    const p = this.pending.get(key);
-    if (!p) return;
-    this.pending.delete(key);
-    clearTimeout(p.timer);
-    p.resolve(res);
   }
 
   private async initialize(): Promise<InitializeResult> {
@@ -134,85 +92,24 @@ export class MiniClient {
       throw new Error(`initialize returned error ${res.error.code}: ${res.error.message}`);
     }
     const init = (res.result ?? {}) as InitializeResult;
-    this.negotiatedVersion = init.protocolVersion;
+    if (init.protocolVersion) this.transport.setProtocolVersion(init.protocolVersion);
     await this.notify("notifications/initialized");
     return init;
   }
 
   async request(method: string, params?: unknown): Promise<JsonRpcResponse> {
-    const id = this.nextId++;
-    const frame: JsonRpcRequest = { jsonrpc: "2.0", id, method, ...(params !== undefined ? { params } : {}) };
-    if (this.target.kind === "stdio") {
-      return new Promise<JsonRpcResponse>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          this.pending.delete(String(id));
-          reject(new Error(`timeout after ${this.timeoutMs}ms waiting for "${method}"`));
-        }, this.timeoutMs);
-        this.pending.set(String(id), { resolve, reject, timer });
-        this.child!.stdin!.write(serializeFrame(frame));
-      });
-    }
-    return this.httpRequest(frame);
+    const frame: JsonRpcRequest = {
+      jsonrpc: "2.0",
+      id: this.nextId++,
+      method,
+      ...(params !== undefined ? { params } : {}),
+    };
+    return this.transport.request(frame, this.timeoutMs);
   }
 
   async notify(method: string, params?: unknown): Promise<void> {
     const frame: JsonRpcFrame = { jsonrpc: "2.0", method, ...(params !== undefined ? { params } : {}) };
-    if (this.target.kind === "stdio") {
-      this.child!.stdin!.write(serializeFrame(frame));
-      return;
-    }
-    await this.httpSend(frame).catch(() => undefined); // notifications: 202, no body expected
-  }
-
-  /** Experimental Streamable HTTP support (classic lifecycle). */
-  private async httpRequest(frame: JsonRpcRequest): Promise<JsonRpcResponse> {
-    const response = await this.httpSend(frame);
-    if (!response) throw new Error(`HTTP transport returned no body for "${frame.method}"`);
-    return response;
-  }
-
-  private async httpSend(frame: JsonRpcFrame): Promise<JsonRpcResponse | null> {
-    const target = this.target as HttpTarget;
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      ...(target.headers ?? {}),
-    };
-    if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
-    if (this.negotiatedVersion) headers["mcp-protocol-version"] = this.negotiatedVersion;
-
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
-    try {
-      const res = await fetch(target.url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(frame),
-        signal: ctrl.signal,
-      });
-      const sid = res.headers.get("mcp-session-id");
-      if (sid) this.sessionId = sid;
-      if (res.status === 202) return null;
-      if (!res.ok) throw new Error(`HTTP ${res.status} from server`);
-      const ct = res.headers.get("content-type") ?? "";
-      const text = await res.text();
-      if (ct.includes("application/json")) {
-        return JSON.parse(text) as JsonRpcResponse;
-      }
-      if (ct.includes("text/event-stream")) {
-        for (const line of text.split("\n")) {
-          if (!line.startsWith("data:")) continue;
-          const parsed = parseFrame(line.slice(5));
-          if (parsed && isResponse(parsed) && "id" in frame && String(parsed.id) === String((frame as JsonRpcRequest).id)) {
-            return parsed;
-          }
-        }
-        throw new Error("no matching response found in SSE stream");
-      }
-      throw new Error(`unexpected content-type: ${ct}`);
-    } finally {
-      clearTimeout(timer);
-    }
+    await this.transport.notify(frame, this.timeoutMs);
   }
 
   /** Paginated list helper: tools/list, resources/list, prompts/list. */
@@ -232,28 +129,6 @@ export class MiniClient {
   }
 
   async close(): Promise<void> {
-    for (const p of this.pending.values()) clearTimeout(p.timer);
-    this.pending.clear();
-    if (this.child) {
-      this.child.stdin?.end();
-      const child = this.child;
-      await new Promise<void>((resolve) => {
-        const t = setTimeout(() => {
-          child.kill("SIGKILL");
-          resolve();
-        }, 2000);
-        child.on("close", () => {
-          clearTimeout(t);
-          resolve();
-        });
-        child.kill("SIGTERM");
-      });
-    }
-    if (this.target.kind === "http" && this.sessionId) {
-      await fetch((this.target as HttpTarget).url, {
-        method: "DELETE",
-        headers: { "mcp-session-id": this.sessionId },
-      }).catch(() => undefined);
-    }
+    await this.transport.close();
   }
 }
