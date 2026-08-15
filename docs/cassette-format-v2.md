@@ -1,9 +1,11 @@
 # Cassette format v2 — design sketch
 
-Status: **design only**. Nothing in this document is implemented; v1 (see
-"Cassette format" in the README and `src/cassette.ts`) remains the only format
-the tool reads and writes. This sketch exists so that when the MCP spec lands
-streamed results, we change a payload — not break the format.
+Status: **format implemented** as firmed up by
+`docs/design/http-record-replay.md` — `src/cassette.ts` writes v2 (header
+`era`/`url`/`sessioned`, `chunks[]`, `http.status`) and reads v1 forever. The
+HTTP record/replay behavior that fills these fields lands over the v0.3 PR
+sequence; `state`/`seq` below remains a sketch. This document is kept as the
+rationale for the shape.
 
 ## Why plan v2 now
 
