@@ -1,6 +1,8 @@
 [![CI](https://github.com/ivermin1123/mcp-cassette/actions/workflows/ci.yml/badge.svg)](https://github.com/ivermin1123/mcp-cassette/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/mcp-cassette.svg)](https://www.npmjs.com/package/mcp-cassette)
 
+![Terminal demo: check a live MCP server, record a session, replay it offline, then fail on breaking contract changes](.github/demo.gif)
+
 # mcp-cassette
 
 **Record a real MCP session once — replay it forever.**
