@@ -117,6 +117,9 @@ export const KEYCTX_RULE = "keyctx";
 /** Recognizes our own output, so redacting twice is a no-op. */
 const PLACEHOLDER = /^\[REDACTED:[a-z]+:[0-9a-f]{8}\]$/;
 
+/** The same shape, anywhere inside a longer string. */
+const PLACEHOLDER_ANYWHERE = /\[REDACTED:[a-z]+:[0-9a-f]{8}\]/;
+
 /**
  * `SENSITIVE_KEY` is deliberately unanchored so it still catches camelCase keys
  * like `accessToken` — weakening it would trade a visible false positive for a
@@ -205,6 +208,16 @@ function applyRule(s: string, rule: RedactRule, onHit?: (secret: string) => void
     const wanted = rule.group ?? 0;
     const secret = wanted === 0 ? match : groups[wanted - 1];
     if (secret === undefined) return match;
+    // Never redact our own output. A placeholder is ordinary text to a pattern
+    // that reads a delimited field: `urlcreds` sees the password slot of
+    // `postgres://user:[REDACTED:urlcreds:76880d60]@host/db` and happily
+    // redacts it again under a *different* hash, because the hash is taken of
+    // whatever was there. That breaks the promise the whole scheme rests on —
+    // one secret, one placeholder — and with it replay matching, which
+    // fingerprints requests through this same function. Guarding here rather
+    // than in each pattern makes idempotence a property of the mechanism
+    // instead of something every future rule has to remember.
+    if (PLACEHOLDER_ANYWHERE.test(secret)) return match;
     onHit?.(secret);
     if (wanted === 0) return placeholder(rule.id, secret);
     // Keep whatever the rule matched around its capture group (e.g. "Bearer ").
