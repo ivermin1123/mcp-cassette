@@ -12,6 +12,7 @@
 
 import fs from "node:fs";
 import { JsonRpcFrame } from "./jsonrpc.js";
+import { RECORDER } from "./version.js";
 
 export const CASSETTE_VERSION = 1;
 
@@ -58,7 +59,7 @@ export class CassetteWriter {
     const header: CassetteHeader = {
       type: "header",
       cassetteVersion: CASSETTE_VERSION,
-      recorder: "mcp-cassette@0.1.0",
+      recorder: RECORDER,
       startedAt: new Date().toISOString(),
       transport: "stdio",
       command,
