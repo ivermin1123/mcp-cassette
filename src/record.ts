@@ -5,15 +5,23 @@
  * the server; every byte is forwarded verbatim in both directions while every
  * JSON-RPC frame is captured into the cassette. Works with any server,
  * any SDK, any spec revision — recording happens at the transport level.
+ *
+ * Frames are redacted on the way into the cassette (see redact.ts) so the file
+ * is safe to commit; the bytes forwarded to the client and the server are the
+ * originals, so redaction stays invisible to the live session.
  */
 
 import { spawn } from "node:child_process";
 import { CassetteWriter } from "./cassette.js";
 import { LineBuffer, parseFrame } from "./jsonrpc.js";
+import { redactCommand, redactFrame, redactRawLine } from "./redact.js";
+import type { JsonRpcFrame } from "./jsonrpc.js";
 
 export interface RecordOptions {
   out: string;
   command: string[];
+  /** Redact secrets before writing. Default: true. */
+  redact?: boolean;
 }
 
 export function runRecord(opts: RecordOptions): Promise<number> {
@@ -24,7 +32,12 @@ export function runRecord(opts: RecordOptions): Promise<number> {
       return;
     }
 
-    const writer = new CassetteWriter(opts.out, opts.command);
+    const redact = opts.redact !== false;
+    const writer = new CassetteWriter(
+      opts.out,
+      redact ? redactCommand(opts.command) : opts.command,
+      { applied: redact }
+    );
     const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "inherit"] });
 
     const c2sBuf = new LineBuffer();
@@ -34,8 +47,8 @@ export function runRecord(opts: RecordOptions): Promise<number> {
       for (const line of lines) {
         if (line.trim() === "") continue;
         const frame = parseFrame(line);
-        if (frame) writer.frame(dir, frame);
-        else writer.raw(dir, line);
+        if (frame) writer.frame(dir, redact ? (redactFrame(frame) as JsonRpcFrame) : frame);
+        else writer.raw(dir, redact ? redactRawLine(line) : line);
       }
     };
 

@@ -6,6 +6,7 @@
  *   replay    serve a cassette as a deterministic mock MCP server
  *   check     health + safety check of a live server (CI exit codes)
  *   snapshot  contract snapshot & breaking-change detection
+ *   redact    redact (or audit) secrets in an existing cassette
  */
 
 import { Command } from "commander";
@@ -13,6 +14,8 @@ import fs from "node:fs";
 import { runRecord } from "./record.js";
 import { runReplay } from "./replay.js";
 import { runCheck, printReport } from "./check.js";
+import { readCassette, writeCassette } from "./cassette.js";
+import { redactCassette, scanCassette } from "./redact.js";
 import {
   captureContract,
   diffContracts,
@@ -70,10 +73,11 @@ program
   .command("record")
   .description("Record a session: run as a transparent stdio proxy in front of a server command")
   .requiredOption("-o, --out <file>", "cassette output path (.cassette.jsonl)")
+  .option("--no-redact", "record secrets verbatim instead of redacting them")
   .argument("<command...>", "server command (prefix with -- )")
-  .action(async (command: string[], opts: { out: string }) => {
+  .action(async (command: string[], opts: { out: string; redact: boolean }) => {
     try {
-      const code = await runRecord({ out: opts.out, command });
+      const code = await runRecord({ out: opts.out, command, redact: opts.redact });
       process.exit(code);
     } catch (err) {
       process.stderr.write(`${(err as Error).message}\n`);
@@ -149,6 +153,53 @@ program
     } catch (err) {
       process.stderr.write(`snapshot failed: ${(err as Error).message}\n`);
       process.exit(2);
+    }
+  });
+
+program
+  .command("redact")
+  .description("Redact secrets in an existing cassette, or --scan to audit one without writing")
+  .argument("<cassette>", "path to a .cassette.jsonl file")
+  .option("-o, --out <file>", "write the redacted cassette here")
+  .option("--scan", "report detected secrets and exit 1 if any were found (no file is written)")
+  .action((cassettePath: string, opts: { out?: string; scan?: boolean }) => {
+    try {
+      if (opts.scan && opts.out) {
+        process.stderr.write("redact: --scan writes nothing — drop -o, or drop --scan\n");
+        process.exitCode = 2;
+        return;
+      }
+      const cassette = readCassette(cassettePath);
+
+      if (opts.scan) {
+        const hits = scanCassette(cassette);
+        // One write: process.exit() would truncate an unbounded report on a pipe.
+        const lines = hits.map((hit) => {
+          const where = hit.method ? `${hit.dir} ${hit.method}` : hit.dir;
+          return `[${hit.rule}] ${where} ${hit.path}: ${hit.excerpt}\n`;
+        });
+        lines.push(
+          hits.length === 0
+            ? "result: CLEAN (0 secrets detected)\n"
+            : `result: FOUND (${hits.length} secret(s) detected)\n`
+        );
+        process.stdout.write(lines.join(""));
+        process.exitCode = hits.length === 0 ? 0 : 1;
+        return;
+      }
+
+      if (!opts.out) {
+        process.stderr.write("redact: pass -o <file> to write a redacted cassette, or --scan to audit\n");
+        process.exitCode = 2;
+        return;
+      }
+
+      const found = scanCassette(cassette).length;
+      writeCassette(opts.out, redactCassette(cassette));
+      process.stdout.write(`wrote ${opts.out} (${found} secret(s) redacted)\n`);
+    } catch (err) {
+      process.stderr.write(`redact failed: ${(err as Error).message}\n`);
+      process.exitCode = 2;
     }
   });
 

@@ -24,6 +24,8 @@ export interface CassetteHeader {
   startedAt: string;
   transport: "stdio";
   command?: string[];
+  /** Absent on cassettes written before redaction existed — treat as not applied. */
+  redaction?: { applied: boolean };
 }
 
 export interface FrameEntry {
@@ -51,7 +53,7 @@ export class CassetteWriter {
   private stream: fs.WriteStream;
   private start = Date.now();
 
-  constructor(path: string, command?: string[]) {
+  constructor(path: string, command?: string[], redaction: { applied: boolean } = { applied: false }) {
     this.stream = fs.createWriteStream(path, { flags: "w" });
     const header: CassetteHeader = {
       type: "header",
@@ -60,6 +62,7 @@ export class CassetteWriter {
       startedAt: new Date().toISOString(),
       transport: "stdio",
       command,
+      redaction,
     };
     this.stream.write(JSON.stringify(header) + "\n");
   }
@@ -100,4 +103,10 @@ export function readCassette(path: string): Cassette {
     if (entry.type === "frame" || entry.type === "raw") entries.push(entry);
   }
   return { header: first, entries };
+}
+
+/** Write a cassette back out in the same append-only JSONL shape. */
+export function writeCassette(path: string, cassette: Cassette): void {
+  const lines = [cassette.header, ...cassette.entries].map((e) => JSON.stringify(e));
+  fs.writeFileSync(path, lines.join("\n") + "\n");
 }

@@ -11,6 +11,21 @@ export {
   runReplay,
   type ReplayIndex,
 } from "./replay.js";
+export {
+  maskSecret,
+  redactCassette,
+  redactCommand,
+  redactFrame,
+  redactRawLine,
+  redactString,
+  scanRawLine,
+  scanCassette,
+  scanFrame,
+  REDACT_RULES,
+  type CassetteSecretHit,
+  type RedactRule,
+  type SecretHit,
+} from "./redact.js";
 export { MiniClient, type Target, type Tool, type InitializeResult } from "./client.js";
 export { lintTool, LINT_RULES, type LintFinding } from "./lint.js";
 export { runCheck, printReport, type CheckReport, type CheckFinding } from "./check.js";
