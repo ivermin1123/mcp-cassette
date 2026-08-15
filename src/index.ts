@@ -2,15 +2,32 @@
 
 export * from "./jsonrpc.js";
 export * from "./cassette.js";
-export { runRecord, type RecordOptions } from "./record.js";
+export { runRecord, type RecordMode, type RecordOptions } from "./record.js";
 export {
   buildReplayIndex,
+  diagnoseMiss,
   fingerprint,
   handleFrame,
   matchResponse,
   runReplay,
+  type OnMissMode,
   type ReplayIndex,
+  type ReplayOptions,
 } from "./replay.js";
+export { diffValues, escapePointerSegment, formatValue, splitPointer, type DiffEntry } from "./diff.js";
+export {
+  classifyPair,
+  collectVerifyPairs,
+  isAllowedChange,
+  normalizeForDiff,
+  printVerifyReport,
+  removePointer,
+  verifyAgainstServer,
+  verifyFailed,
+  type VerifyOptions,
+  type VerifyResult,
+  type VerifyStatus,
+} from "./verify.js";
 export {
   maskSecret,
   redactCassette,
