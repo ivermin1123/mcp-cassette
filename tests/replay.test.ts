@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReplayIndex, fingerprint, handleFrame } from "../src/replay.js";
+import { buildReplayIndex, diagnoseMiss, fingerprint, handleFrame } from "../src/replay.js";
 import { redactFrame } from "../src/redact.js";
 import type { Cassette } from "../src/cassette.js";
 import type { JsonRpcRequest, JsonRpcResponse } from "../src/jsonrpc.js";
@@ -222,5 +222,56 @@ describe("replay matching with numeric secrets", () => {
     const pin = (recorded.result as { pin: unknown }).pin;
     expect(typeof pin).toBe("string");
     expect(pin).toMatch(/^\[REDACTED:keyctx:[0-9a-f]{8}\]$/);
+  });
+});
+
+describe("near-miss diagnostics", () => {
+  const call = (id: number, name: string, args: unknown): JsonRpcRequest =>
+    req(id, "tools/call", { name, arguments: args });
+
+  it("explains an exhausted fingerprint pool", () => {
+    const index = buildReplayIndex(cassetteWith([[call(1, "echo", { m: "x" }), res(1, { ok: 1 })]]));
+    expect(handleFrame(index, call(10, "echo", { m: "x" }))).toMatchObject({ result: { ok: 1 } });
+    const out = handleFrame(index, call(11, "echo", { m: "x" }))! as JsonRpcResponse;
+    expect(out.error?.code).toBe(-32601);
+    expect(out.error?.message).toContain("recorded 1 time(s)");
+    expect(out.error?.message).toContain("already consumed");
+  });
+
+  it("names the missing method and lists recorded ones", () => {
+    const index = buildReplayIndex(cassetteWith([[req(1, "resources/read", { uri: "a" }), res(1, {})]]));
+    expect(diagnoseMiss(index, req(2, "prompts/get", { name: "x" }))).toBe(
+      'no recorded request has method "prompts/get" — recorded methods: resources/read'
+    );
+  });
+
+  it("names the missing tool and lists recorded tools", () => {
+    const index = buildReplayIndex(
+      cassetteWith([
+        [call(1, "echo", { m: "x" }), res(1, {})],
+        [call(2, "add", { a: 1 }), res(2, {})],
+      ])
+    );
+    expect(diagnoseMiss(index, call(9, "slugify", { title: "t" }))).toBe(
+      'no recorded tools/call for tool "slugify" — recorded tools: add, echo'
+    );
+  });
+
+  it("pinpoints the diverging arguments path against the nearest recording", () => {
+    // Two echo recordings; the incoming call is closest to the {m,extra} one.
+    const index = buildReplayIndex(
+      cassetteWith([
+        [call(1, "echo", { m: "recorded", extra: 1 }), res(1, {})],
+        [call(2, "echo", { m: "other", flag: true, extra: 2 }), res(2, {})],
+      ])
+    );
+    const msg = diagnoseMiss(index, call(9, "echo", { m: "incoming", extra: 1 }));
+    expect(msg).toContain("arguments differ at");
+    expect(msg).toContain('/m (recorded "recorded", got "incoming")');
+  });
+
+  it("reports an empty cassette plainly", () => {
+    const index = buildReplayIndex(cassetteWith([]));
+    expect(diagnoseMiss(index, call(1, "echo", {}))).toContain("no request/response pairs");
   });
 });
