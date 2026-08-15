@@ -158,3 +158,69 @@ describe("replay matching after redaction", () => {
     expect(handleFrame(index, callWith(50, TOKEN_A))).toMatchObject({ result: { content: "raw" } });
   });
 });
+
+/**
+ * Redacting a numeric secret turns it into a placeholder *string*, so the value
+ * a replay serves back changes JSON type. Matching is the part that must not
+ * change: both sides of the comparison go through the same redaction, so a live
+ * number still lands on the recording made from it.
+ */
+describe("replay matching with numeric secrets", () => {
+  const PIN_A = 123456789;
+  const PIN_B = 987654321;
+
+  const payWith = (id: number, pin: number): JsonRpcRequest =>
+    req(id, "tools/call", { name: "pay", arguments: { pin } });
+
+  const redactedCassette = () =>
+    cassetteWith(
+      [
+        [redactFrame(payWith(1, PIN_A)) as JsonRpcRequest, res(1, { charged: "A" })],
+        [redactFrame(payWith(2, PIN_B)) as JsonRpcRequest, res(2, { charged: "B" })],
+      ],
+      { applied: true }
+    );
+
+  it("matches a live numeric secret against its redacted recording", () => {
+    const index = buildReplayIndex(redactedCassette());
+    expect(handleFrame(index, payWith(99, PIN_B))).toMatchObject({
+      id: 99,
+      result: { charged: "B" },
+    });
+    expect(handleFrame(index, payWith(100, PIN_A))).toMatchObject({
+      id: 100,
+      result: { charged: "A" },
+    });
+  });
+
+  it("matches a client that sends the same secret as a string", () => {
+    // The placeholder is hashed from the decimal text, so `123456789` and
+    // "123456789" are the same secret and fingerprint identically.
+    const index = buildReplayIndex(redactedCassette());
+    const asString = req(7, "tools/call", { name: "pay", arguments: { pin: String(PIN_A) } });
+    expect(handleFrame(index, asString)).toMatchObject({ id: 7, result: { charged: "A" } });
+  });
+
+  it("distinguishes two pins that differ only in the redacted digits", () => {
+    // The guard against the lazy fix: collapsing every number to one constant
+    // placeholder would pass the tests above and fail this one.
+    const index = buildReplayIndex(redactedCassette());
+    expect(fingerprint(redactFrame(payWith(1, PIN_A)) as JsonRpcRequest)).not.toBe(
+      fingerprint(redactFrame(payWith(2, PIN_B)) as JsonRpcRequest)
+    );
+    expect(handleFrame(index, payWith(50, PIN_B))).toMatchObject({ result: { charged: "B" } });
+  });
+
+  it("serves a redacted response value as a string, not a number", () => {
+    // The accepted cost, pinned so it cannot regress silently: a client asserting
+    // `typeof result.pin === "number"` sees the placeholder and fails loudly.
+    const recorded = redactFrame({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { pin: PIN_A },
+    }) as JsonRpcResponse;
+    const pin = (recorded.result as { pin: unknown }).pin;
+    expect(typeof pin).toBe("string");
+    expect(pin).toMatch(/^\[REDACTED:keyctx:[0-9a-f]{8}\]$/);
+  });
+});

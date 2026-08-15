@@ -63,8 +63,34 @@ export const REDACT_RULES: readonly RedactRule[] = Object.freeze([
 export const SENSITIVE_KEY =
   /(token|secret|password|passwd|api[_-]?key|authorization|credential)/i;
 
+/**
+ * Sensitive names that are only safe to match as a whole segment.
+ *
+ * `pin` cannot join `SENSITIVE_KEY`'s unanchored alternation: it is a substring
+ * of `shipping`, `mapping` and `spinner`, and redacting a shipping address is a
+ * worse failure than the leak it prevents. Matching per segment gives `pin`,
+ * `card_pin` and `pinCode` without touching any of those.
+ */
+export const SEGMENTED_SENSITIVE_KEYS: ReadonlySet<string> = new Set(["pin"]);
+
+/** `cardPin_code` → ["card", "pin", "code"]. Splits camelCase and separators. */
+function keySegments(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[\s_.-]+/)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.toLowerCase());
+}
+
 /** Values shorter than this under a sensitive key are left alone (flags, "none", …). */
 export const KEYCTX_MIN_LENGTH = 8;
+
+/**
+ * The same floor applied to a number, counted in digits. `{"pin": 123456789}`
+ * is a credential; `{"password_attempts": 3}` and `{"token_budget": 4096}` are
+ * not, and redacting them would wreck ordinary recordings to no benefit.
+ */
+export const KEYCTX_MIN_DIGITS = KEYCTX_MIN_LENGTH;
 
 export const KEYCTX_RULE = "keyctx";
 
@@ -114,6 +140,35 @@ function isKeyctxSecret(key: string, value: string): boolean {
   return true;
 }
 
+/**
+ * A PIN, an account number or a numeric API key is a credential whether or not
+ * the server bothered to quote it, so key context has to reach numbers too.
+ *
+ * The secret is hashed from its decimal text, which means `123456789` and
+ * `"123456789"` collapse to the *same* placeholder — a server that answers with
+ * a number and a client that sends the same value as a string still match on
+ * replay.
+ *
+ * Only finite numbers qualify; `NaN`, `Infinity` and non-integers stringify to
+ * something with too few digits or none at all, and none of them are secrets.
+ */
+function isKeyctxNumericSecret(value: number): boolean {
+  if (!Number.isFinite(value)) return false;
+  return numericSecretText(value).replace(/\D/g, "").length >= KEYCTX_MIN_DIGITS;
+}
+
+/**
+ * The digits as they were written. `String()` is not enough on its own: at 1e21
+ * it switches to exponential form, and hashing `"1e+21"` would key the
+ * placeholder on JavaScript's formatting rather than on the value. `toFixed(0)`
+ * gives up at exactly the same threshold, so integers past it go through BigInt,
+ * which always spells them out.
+ */
+function numericSecretText(value: number): string {
+  if (Number.isInteger(value) && !Number.isSafeInteger(value)) return BigInt(value).toString();
+  return String(value);
+}
+
 function hash8(secret: string): string {
   return createHash("sha256").update(secret, "utf8").digest("hex").slice(0, 8);
 }
@@ -154,7 +209,8 @@ export function redactCommand(command: string[]): string[] {
 type SensitiveKey = string | null;
 
 function sensitiveKeyOf(key: string): SensitiveKey {
-  return SENSITIVE_KEY.test(key) ? key : null;
+  if (SENSITIVE_KEY.test(key)) return key;
+  return keySegments(key).some((segment) => SEGMENTED_SENSITIVE_KEYS.has(segment)) ? key : null;
 }
 
 /**
@@ -173,6 +229,17 @@ function redactValue(value: unknown, sensitiveKey: SensitiveKey): unknown {
       return placeholder(KEYCTX_RULE, value);
     }
     return redactString(value);
+  }
+  // A redacted number becomes a string, which changes the JSON type a strict
+  // client sees on replay. That is the deliberate trade: a type mismatch fails
+  // loudly and points at the placeholder in the error, whereas a numeric stand-in
+  // would forge plausible data, defeat the `[REDACTED:…]` marker that makes
+  // redaction idempotent and auditable, and leave the leak invisible.
+  if (typeof value === "number") {
+    if (sensitiveKey !== null && isKeyctxNumericSecret(value)) {
+      return placeholder(KEYCTX_RULE, numericSecretText(value));
+    }
+    return value;
   }
   if (Array.isArray(value)) return value.map((v) => redactValue(v, sensitiveKey));
   if (value && typeof value === "object") {
@@ -245,6 +312,16 @@ function scanValue(value: unknown, path: string, sensitiveKey: SensitiveKey, out
     }
     return;
   }
+  if (typeof value === "number") {
+    if (sensitiveKey !== null && isKeyctxNumericSecret(value)) {
+      out.push({
+        rule: KEYCTX_RULE,
+        path,
+        excerpt: maskSecret(numericSecretText(value), KEYCTX_RULE),
+      });
+    }
+    return;
+  }
   if (Array.isArray(value)) {
     value.forEach((v, i) => scanValue(v, `${path}[${i}]`, sensitiveKey, out));
     return;
@@ -279,13 +356,34 @@ export function scanFrame(frame: unknown): SecretHit[] {
  * which is what makes a raw entry a faithful transcript. A line that is not JSON
  * at all gets the shape rules and nothing more — object walking has nothing to
  * walk, and no key context exists to recover.
+ *
+ * A *numeric* secret is the one case that surgery cannot do safely. Its digits
+ * are unquoted in the text, the placeholder is a string, and the same digits can
+ * legitimately appear inside a neighbouring string or a longer number — so a
+ * literal substring swap can just as easily produce invalid JSON as a redacted
+ * line. Those lines are re-serialized from the parsed tree instead: exact bytes
+ * are the weaker promise, and it is the one worth losing.
  */
 function processRawLine(line: string, onHit?: (hit: SecretHit) => void): string {
+  const keyctx = collectKeyctxSecrets(line);
   let text = line;
-  for (const { path, secret } of collectKeyctxSecrets(line)) {
+
+  const numeric = keyctx.filter((hit) => hit.numeric);
+  if (numeric.length > 0) {
+    for (const { path, secret } of numeric) {
+      onHit?.({ rule: KEYCTX_RULE, path, excerpt: maskSecret(secret, KEYCTX_RULE) });
+    }
+    // Only the numbers are replaced here, so every string secret is still
+    // present verbatim for the byte-preserving pass below to find.
+    text = JSON.stringify(redactNumericKeyctx(JSON.parse(line), null));
+  }
+
+  for (const { path, secret, numeric: isNumber } of keyctx) {
+    if (isNumber) continue;
     onHit?.({ rule: KEYCTX_RULE, path, excerpt: maskSecret(secret, KEYCTX_RULE) });
     text = replaceLiteral(text, secret, placeholder(KEYCTX_RULE, secret));
   }
+
   let out = text;
   for (const rule of REDACT_RULES) {
     out = applyRule(out, rule, (secret) =>
@@ -303,19 +401,33 @@ function replaceLiteral(text: string, secret: string, replacement: string): stri
   return out;
 }
 
+/** A key-context secret found in a raw line. `secret` is always its text form. */
+interface RawKeyctxHit {
+  path: string;
+  secret: string;
+  /** Written unquoted in the line, so it cannot be swapped out in place. */
+  numeric: boolean;
+}
+
 /** Key-context secrets inside a line that happens to hold JSON. */
-function collectKeyctxSecrets(line: string): Array<{ path: string; secret: string }> {
+function collectKeyctxSecrets(line: string): RawKeyctxHit[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
     return []; // not JSON — no keys, no key context
   }
-  const found: Array<{ path: string; secret: string }> = [];
+  const found: RawKeyctxHit[] = [];
   const walk = (value: unknown, path: string, sensitiveKey: SensitiveKey): void => {
     if (typeof value === "string") {
       if (sensitiveKey !== null && isKeyctxSecret(sensitiveKey, value)) {
-        found.push({ path, secret: value });
+        found.push({ path, secret: value, numeric: false });
+      }
+      return;
+    }
+    if (typeof value === "number") {
+      if (sensitiveKey !== null && isKeyctxNumericSecret(value)) {
+        found.push({ path, secret: numericSecretText(value), numeric: true });
       }
       return;
     }
@@ -331,6 +443,27 @@ function collectKeyctxSecrets(line: string): Array<{ path: string; secret: strin
   };
   walk(parsed, "", null);
   return found;
+}
+
+/**
+ * Replace key-context *numbers* and nothing else. Strings are left exactly as
+ * parsed so the byte-preserving pass in `processRawLine` can still find them.
+ */
+function redactNumericKeyctx(value: unknown, sensitiveKey: SensitiveKey): unknown {
+  if (typeof value === "number") {
+    return sensitiveKey !== null && isKeyctxNumericSecret(value)
+      ? placeholder(KEYCTX_RULE, numericSecretText(value))
+      : value;
+  }
+  if (Array.isArray(value)) return value.map((v) => redactNumericKeyctx(v, sensitiveKey));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+      define(out, key, redactNumericKeyctx(v, sensitiveKeyOf(key)));
+    }
+    return out;
+  }
+  return value;
 }
 
 /** Redact a captured line that is not a JSON-RPC frame. */

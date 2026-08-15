@@ -427,6 +427,146 @@ describe("scanning", () => {
   });
 });
 
+describe("segment-matched sensitive keys", () => {
+  // `pin` is a credential name that is also a substring of ordinary words, so it
+  // matches per segment rather than by the unanchored alternation the other
+  // names use. These two lists are the whole point of that split.
+  const SECRET = "correct-horse-battery";
+
+  for (const key of ["pin", "card_pin", "pinCode", "user.pin", "PIN"]) {
+    it(`treats ${key} as sensitive`, () => {
+      const out = redactFrame({ [key]: SECRET }) as Record<string, string>;
+      expect(out[key]).toMatch(PLACEHOLDER);
+    });
+  }
+
+  for (const key of ["shipping", "mapping", "spinner", "pinnacle", "pinned"]) {
+    it(`leaves ${key} alone — it only contains "pin"`, () => {
+      const out = redactFrame({ [key]: SECRET }) as Record<string, string>;
+      expect(out[key]).toBe(SECRET);
+    });
+  }
+});
+
+describe("numeric secrets under a sensitive key", () => {
+  const PIN = 123456789;
+
+  it("redacts a number the same way it redacts the equivalent string", () => {
+    const fromNumber = redactFrame({ pin: PIN }) as Record<string, string>;
+    const fromString = redactFrame({ pin: String(PIN) }) as Record<string, string>;
+    expect(fromNumber.pin).toMatch(PLACEHOLDER);
+    // Hashed from the decimal text, so a server that quotes the value and one
+    // that does not collapse to the same placeholder — which is what keeps
+    // replay matching (see replay.test.ts).
+    expect(fromNumber.pin).toBe(fromString.pin);
+  });
+
+  it("hashes the value, so two pins do not collide", () => {
+    const a = redactFrame({ pin: 123456789 }) as Record<string, string>;
+    const b = redactFrame({ pin: 987654321 }) as Record<string, string>;
+    expect(a.pin).not.toBe(b.pin);
+  });
+
+  it("leaves numbers short enough to be counters, budgets or flags alone", () => {
+    const out = redactFrame({
+      password_attempts: 3,
+      token_budget: 4096,
+      secret_ttl: 3600,
+    }) as Record<string, number>;
+    expect(out).toEqual({ password_attempts: 3, token_budget: 4096, secret_ttl: 3600 });
+  });
+
+  it("leaves a long number alone when the key is not sensitive", () => {
+    expect(redactFrame({ timestamp: 1767225600000 })).toEqual({ timestamp: 1767225600000 });
+  });
+
+  it("ignores values that are numbers but never credentials", () => {
+    const out = redactFrame({ pin: 1.5, secret: NaN, token: Infinity }) as Record<string, number>;
+    expect(out.pin).toBe(1.5);
+    expect(out.secret).toBeNaN();
+    expect(out.token).toBe(Infinity);
+  });
+
+  it("does not depend on JavaScript's exponential formatting", () => {
+    // String(1e21) is "1e+21"; hashing that would key the placeholder on the
+    // display form rather than the digits.
+    const out = redactFrame({ secret: 1e21 }) as Record<string, string>;
+    expect(out.secret).toMatch(PLACEHOLDER);
+    expect(out.secret).toBe(
+      `[REDACTED:keyctx:${createHash("sha256").update("1000000000000000000000").digest("hex").slice(0, 8)}]`
+    );
+  });
+
+  it("reports the hit without printing the digits", () => {
+    const hits = scanFrame({ params: { arguments: { pin: PIN } } });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ rule: "keyctx", path: "params.arguments.pin" });
+    expect(hits[0]!.excerpt).toBe("********* (9 chars)");
+    expect(hits[0]!.excerpt).not.toContain("123");
+  });
+
+  it("redacts a numeric secret in a raw line and leaves valid JSON behind", () => {
+    const line = JSON.stringify({ level: "debug", params: { arguments: { pin: PIN } } });
+    const out = redactRawLine(line);
+    expect(out).not.toContain("123456789");
+    const parsed = JSON.parse(out) as { level: string; params: { arguments: { pin: string } } };
+    expect(parsed.level).toBe("debug");
+    expect(parsed.params.arguments.pin).toMatch(PLACEHOLDER);
+  });
+
+  it("handles a raw line carrying a numeric and a string secret at once", () => {
+    const line = JSON.stringify({ pin: PIN, password: "correct-horse-battery" });
+    const out = redactRawLine(line);
+    expect(out).not.toContain("123456789");
+    expect(out).not.toContain("correct-horse-battery");
+    const parsed = JSON.parse(out) as Record<string, string>;
+    expect(parsed.pin).toMatch(PLACEHOLDER);
+    expect(parsed.password).toMatch(PLACEHOLDER);
+    expect(parsed.pin).not.toBe(parsed.password);
+  });
+
+  it("does not corrupt a line where the same digits appear elsewhere", () => {
+    // A literal substring swap would quote the digits inside `note` too and
+    // produce a line that no longer parses.
+    const line = JSON.stringify({ note: "ref 123456789 ok", pin: PIN, other: 91234567890 });
+    const parsed = JSON.parse(redactRawLine(line)) as Record<string, unknown>;
+    expect(parsed.note).toBe("ref 123456789 ok");
+    expect(parsed.other).toBe(91234567890);
+    expect(parsed.pin).toMatch(PLACEHOLDER);
+  });
+
+  it("reports the numeric hit from a raw line by path", () => {
+    const line = JSON.stringify({ params: { arguments: { pin: PIN } } });
+    const hits = scanRawLine(line);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ rule: "keyctx", path: "params.arguments.pin" });
+  });
+
+  it("is idempotent — redacting an already-redacted value changes nothing", () => {
+    const once = redactFrame({ pin: PIN });
+    expect(redactFrame(once)).toEqual(once);
+    const line = JSON.stringify({ pin: PIN });
+    expect(redactRawLine(redactRawLine(line))).toBe(redactRawLine(line));
+  });
+
+  it("finds nothing left in a cassette after redaction", () => {
+    const cassette = cassetteWith(SECRETS.github);
+    cassette.entries.push({
+      type: "frame",
+      t: 2,
+      dir: "c2s",
+      frame: {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "pay", arguments: { pin: PIN } },
+      },
+    });
+    expect(scanCassette(cassette).some((h) => h.path.endsWith("pin"))).toBe(true);
+    expect(scanCassette(redactCassette(cassette))).toEqual([]);
+  });
+});
+
 describe("redactCassette", () => {
   it("marks the header, redacts frames, raw lines and the command", () => {
     const out = redactCassette(cassetteWith(SECRETS.github));
