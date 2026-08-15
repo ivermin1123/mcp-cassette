@@ -10,6 +10,7 @@
  */
 
 import { spawn, ChildProcess } from "node:child_process";
+import { Era } from "./cassette.js";
 import {
   isResponse,
   JsonRpcFrame,
@@ -20,6 +21,20 @@ import {
   serializeFrame,
 } from "./jsonrpc.js";
 
+/**
+ * A non-2xx HTTP answer. The body is kept because era detection turns on it:
+ * a 400 carrying a modern JSON-RPC error means "modern server, correct the
+ * request", while a 400 carrying anything else means "fall back to legacy".
+ */
+export class HttpStatusError extends Error {
+  constructor(
+    readonly status: number,
+    readonly frame?: JsonRpcResponse
+  ) {
+    super(`HTTP ${status} from server`);
+  }
+}
+
 export interface Transport {
   /** Send a request and resolve with its response, or reject on timeout. */
   request(frame: JsonRpcRequest, timeoutMs: number): Promise<JsonRpcResponse>;
@@ -27,8 +42,33 @@ export interface Transport {
   notify(frame: JsonRpcFrame, timeoutMs: number): Promise<void>;
   /** The negotiated protocol version, once the handshake has one. stdio ignores it. */
   setProtocolVersion(version: string): void;
+  /** The era the wire speaks. Only HTTP changes shape between eras. */
+  setEra(era: Era): void;
   close(): Promise<void>;
 }
+
+// A header value may hold visible ASCII, space, and tab, but not lead or trail
+// with whitespace (RFC 9110 § field values). Anything else — and any value that
+// would be mistaken for the sentinel — travels Base64.
+const HEADER_SAFE = /^[\x21-\x7e](?:[\x20\x09\x21-\x7e]*[\x21-\x7e])?$/;
+const SENTINEL = /^=\?base64\?.*\?=$/;
+
+/** Modern-era header values, per the spec's `=?base64?…?=` sentinel encoding. */
+export function encodeHeaderValue(value: string): string {
+  return HEADER_SAFE.test(value) && !SENTINEL.test(value)
+    ? value
+    : `=?base64?${Buffer.from(value, "utf8").toString("base64")}?=`;
+}
+
+/** Session teardown is a courtesy, not a result — it gets a short leash. */
+const CLOSE_TIMEOUT_MS = 2000;
+
+/** Methods whose `Mcp-Name` header mirrors a body field, and which field it is. */
+const NAMED_METHODS: Record<string, "name" | "uri"> = {
+  "tools/call": "name",
+  "resources/read": "uri",
+  "prompts/get": "name",
+};
 
 interface Pending {
   resolve: (res: JsonRpcResponse) => void;
@@ -41,12 +81,15 @@ export class StdioTransport implements Transport {
   private child: ChildProcess;
   private pending = new Map<string, Pending>();
   private buf = new LineBuffer();
+  /** Set once the process has failed: later requests fail now rather than wait out a timeout. */
+  private dead?: Error;
 
   constructor(command: string[]) {
     const [cmd, ...args] = command;
     if (!cmd) throw new Error("stdio target: empty command");
     this.child = spawn(cmd, args, { stdio: ["pipe", "pipe", "inherit"] });
     this.child.on("error", (err) => {
+      this.dead = new Error(`server process error: ${err.message}`);
       for (const p of this.pending.values()) {
         // Clear the timer too, or it keeps the event loop alive for the full
         // timeout after the process has already failed.
@@ -74,6 +117,7 @@ export class StdioTransport implements Transport {
   }
 
   request(frame: JsonRpcRequest, timeoutMs: number): Promise<JsonRpcResponse> {
+    if (this.dead) return Promise.reject(this.dead);
     return new Promise<JsonRpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(String(frame.id));
@@ -90,6 +134,10 @@ export class StdioTransport implements Transport {
 
   setProtocolVersion(): void {
     // stdio carries the negotiated version in the handshake, not per message.
+  }
+
+  setEra(): void {
+    // stdio frames are identical in both eras; only the lifecycle differs.
   }
 
   async close(): Promise<void> {
@@ -120,6 +168,7 @@ export class StdioTransport implements Transport {
 export class HttpTransport implements Transport {
   private sessionId?: string;
   private protocolVersion?: string;
+  private era: Era = "legacy";
 
   constructor(
     private url: string,
@@ -140,13 +189,33 @@ export class HttpTransport implements Transport {
     this.protocolVersion = version;
   }
 
+  setEra(era: Era): void {
+    this.era = era;
+  }
+
+  /**
+   * The modern era mirrors body fields into headers so intermediaries can route
+   * without parsing the body; a server rejects any mismatch with -32020, so
+   * these are derived from the frame rather than passed in alongside it.
+   */
+  private metadataHeaders(frame: JsonRpcFrame): Record<string, string> {
+    if (this.era !== "modern" || isResponse(frame)) return {};
+    const headers: Record<string, string> = { "mcp-method": frame.method };
+    const field = NAMED_METHODS[frame.method];
+    const value = field ? (frame.params as Record<string, unknown> | undefined)?.[field] : undefined;
+    if (typeof value === "string") headers["mcp-name"] = encodeHeaderValue(value);
+    return headers;
+  }
+
   private async send(frame: JsonRpcFrame, timeoutMs: number): Promise<JsonRpcResponse | null> {
     const headers: Record<string, string> = {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      ...this.metadataHeaders(frame),
       ...this.extraHeaders,
     };
-    if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
+    // Sessions exist in the legacy era only; the modern era removed them.
+    if (this.sessionId && this.era === "legacy") headers["mcp-session-id"] = this.sessionId;
     if (this.protocolVersion) headers["mcp-protocol-version"] = this.protocolVersion;
 
     const ctrl = new AbortController();
@@ -161,9 +230,12 @@ export class HttpTransport implements Transport {
       const sid = res.headers.get("mcp-session-id");
       if (sid) this.sessionId = sid;
       if (res.status === 202) return null;
-      if (!res.ok) throw new Error(`HTTP ${res.status} from server`);
       const ct = res.headers.get("content-type") ?? "";
       const text = await res.text();
+      if (!res.ok) {
+        const parsed = parseFrame(text);
+        throw new HttpStatusError(res.status, parsed && isResponse(parsed) ? parsed : undefined);
+      }
       if (ct.includes("application/json")) {
         return JSON.parse(text) as JsonRpcResponse;
       }
@@ -185,9 +257,18 @@ export class HttpTransport implements Transport {
 
   async close(): Promise<void> {
     if (!this.sessionId) return;
-    await fetch(this.url, {
-      method: "DELETE",
-      headers: { "mcp-session-id": this.sessionId },
-    }).catch(() => undefined);
+    // Best-effort courtesy to the server, bounded: a hung DELETE must not hold
+    // the process open after the work is done.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), CLOSE_TIMEOUT_MS);
+    try {
+      await fetch(this.url, {
+        method: "DELETE",
+        headers: { "mcp-session-id": this.sessionId },
+        signal: ctrl.signal,
+      }).catch(() => undefined);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

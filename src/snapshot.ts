@@ -30,7 +30,7 @@
  */
 
 import fs from "node:fs";
-import { MiniClient, Target, Tool } from "./client.js";
+import { EraOption, MiniClient, Target, Tool } from "./client.js";
 import { stableStringify } from "./jsonrpc.js";
 
 export interface ContractSnapshot {
@@ -111,8 +111,8 @@ export function shouldFail(changes: readonly ContractChange[], failOn: FailOn = 
   );
 }
 
-export async function captureContract(target: Target): Promise<ContractSnapshot> {
-  const { client, init } = await MiniClient.connect(target);
+export async function captureContract(target: Target, era: EraOption = "auto"): Promise<ContractSnapshot> {
+  const { client, init } = await MiniClient.connect(target, undefined, era);
   try {
     const tools = await client.listAll<Tool>("tools/list", "tools");
     return {

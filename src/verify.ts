@@ -17,7 +17,7 @@
 
 import { Cassette } from "./cassette.js";
 import { DiffEntry, diffValues, formatValue, splitPointer } from "./diff.js";
-import { MiniClient, Target } from "./client.js";
+import { EraOption, MiniClient, Target } from "./client.js";
 import { isRequest, isResponse, JsonRpcRequest, JsonRpcResponse } from "./jsonrpc.js";
 
 export type VerifyStatus = "MATCH" | "CHANGED" | "ERROR-SHAPE-CHANGED" | "MISSING";
@@ -46,6 +46,8 @@ export interface VerifyOptions {
   /** Explicit waive-everything switch: every CHANGED pair passes. */
   allowAllChanges?: boolean;
   timeoutMs?: number;
+  /** Which lifecycle the live server speaks; "auto" probes. */
+  era?: EraOption;
 }
 
 // Timestamp-like strings: full ISO-8601 dates ("2026-08-15", optionally with a
@@ -207,7 +209,7 @@ export async function verifyAgainstServer(
   const pairs = collectVerifyPairs(cassette);
   const results: VerifyResult[] = [];
   const target: Target = Array.isArray(server) ? { kind: "stdio", command: server } : server;
-  const { client } = await MiniClient.connect(target, opts.timeoutMs);
+  const { client } = await MiniClient.connect(target, opts.timeoutMs, opts.era ?? "auto");
   try {
     for (const pair of pairs) {
       const label = pairLabel(pair.request);

@@ -30,7 +30,7 @@ function isDraft7(schema: unknown): boolean {
   const id = (schema as Record<string, unknown>).$schema;
   return typeof id === "string" && id.includes("draft-07");
 }
-import { MiniClient, Target, Tool } from "./client.js";
+import { EraOption, MiniClient, Target, Tool } from "./client.js";
 import { lintTool, LintFinding } from "./lint.js";
 
 export type FindingLevel = "error" | "warn" | "info";
@@ -56,9 +56,9 @@ export interface CheckReport {
 
 const TOOL_NAME_RE = /^[a-zA-Z0-9_.-]{1,128}$/;
 
-export async function runCheck(target: Target, targetLabel: string): Promise<CheckReport> {
+export async function runCheck(target: Target, targetLabel: string, era: EraOption = "auto"): Promise<CheckReport> {
   const findings: CheckFinding[] = [];
-  const { client, init } = await MiniClient.connect(target);
+  const { client, init } = await MiniClient.connect(target, undefined, era);
 
   try {
     const tools = await client.listAll<Tool>("tools/list", "tools");
