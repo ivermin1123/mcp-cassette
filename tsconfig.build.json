@@ -1,4 +1,11 @@
+// The emitting config. `rootDir` lives here rather than in the base config
+// because it is a statement about the shape of `dist/`, and the base config is
+// also what typechecks `tests/**` — files that are legitimately outside `src`
+// and made every `tsc -p tsconfig.json --noEmit` run print TS6059.
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src"
+  },
   "include": ["src/**/*.ts"]
 }
