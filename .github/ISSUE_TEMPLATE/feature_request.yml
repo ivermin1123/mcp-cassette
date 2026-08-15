@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest a capability or change to mcp-cassette
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please open an issue like this one **before** sending a PR for anything
+        large — a new command, a cassette format change, or a new dependency.
+        Check the Roadmap in the README first; it may already be planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation you're in, not the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+      description: If you have a command or flag shape in mind, sketch it here.
+      placeholder: mcp-cassette record --redact 'Authorization' -o session.cassette.jsonl -- npx -y my-server
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried instead?
+      description: Workarounds, other tools, or why the existing commands don't cover it.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This would need a change to the cassette format
+          required: false
+        - label: I'd be willing to work on this
+          required: false
