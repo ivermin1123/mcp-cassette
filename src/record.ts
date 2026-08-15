@@ -13,7 +13,7 @@
 
 import fs from "node:fs";
 import { spawn } from "node:child_process";
-import { CassetteWriter } from "./cassette.js";
+import { cassetteExists, CassetteWriter } from "./cassette.js";
 import { LineBuffer, parseFrame } from "./jsonrpc.js";
 import { redactCommand, redactFrame, redactRawLine } from "./redact.js";
 import type { JsonRpcFrame } from "./jsonrpc.js";
@@ -29,6 +29,22 @@ export interface RecordOptions {
   mode?: RecordMode;
 }
 
+/**
+ * `--mode once` protects a cassette you already have. It does not protect a
+ * zero-byte leftover from a crashed run: that file holds nothing to replay,
+ * and refusing to overwrite it would strand the user with a path they have to
+ * delete by hand.
+ */
+export function ensureWritable(out: string, mode: RecordMode): void {
+  if (mode !== "once" || !fs.existsSync(out)) return;
+  if (cassetteExists(out)) {
+    throw new Error(`record: ${out} already exists — replay it, or pass --mode all to re-record over it`);
+  }
+  process.stderr.write(
+    `mcp-cassette: ${out} exists but holds no cassette header (a recording that never flushed) — re-recording over it\n`
+  );
+}
+
 export function runRecord(opts: RecordOptions): Promise<number> {
   return new Promise((resolve, reject) => {
     const [cmd, ...args] = opts.command;
@@ -36,12 +52,10 @@ export function runRecord(opts: RecordOptions): Promise<number> {
       reject(new Error("record: missing server command after --"));
       return;
     }
-    if ((opts.mode ?? "once") === "once" && fs.existsSync(opts.out)) {
-      reject(
-        new Error(
-          `record: ${opts.out} already exists — replay it, or pass --mode all to re-record over it`
-        )
-      );
+    try {
+      ensureWritable(opts.out, opts.mode ?? "once");
+    } catch (err) {
+      reject(err as Error);
       return;
     }
 

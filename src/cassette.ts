@@ -136,6 +136,14 @@ export class CassetteWriter {
     if (this.pending === null) this.stream.write(JSON.stringify(this.header) + "\n");
   }
 
+  /**
+   * The upstream minted a session id. Only the fact is recorded, never the
+   * value; once the header is on disk there is nothing left to amend.
+   */
+  markSessioned(): void {
+    if (this.pending !== null) this.header.sessioned = true;
+  }
+
   /** Deferred-header mode only: record the decided era and flush header + buffered entries. */
   setEra(era: Era): void {
     if (this.pending === null) {
@@ -158,8 +166,8 @@ export class CassetteWriter {
     else this.stream.write(line);
   }
 
-  frame(dir: Direction, frame: JsonRpcFrame): void {
-    this.emit({ type: "frame", t: Date.now() - this.start, dir, frame });
+  frame(dir: Direction, frame: JsonRpcFrame, http?: { status: number }): void {
+    this.emit({ type: "frame", t: Date.now() - this.start, dir, frame, ...(http ? { http } : {}) });
   }
 
   raw(dir: Direction, data: string): void {
@@ -169,6 +177,36 @@ export class CassetteWriter {
   close(): Promise<void> {
     this.flushPending();
     return new Promise((resolve) => this.stream.end(() => resolve()));
+  }
+}
+
+/**
+ * Is there a cassette at this path? An empty file, or one whose first line is
+ * not a header, is a recording that died before its header reached disk — not
+ * a cassette worth protecting. Anything we cannot prove broken counts as real.
+ */
+export function cassetteExists(path: string): boolean {
+  let size: number;
+  try {
+    size = fs.statSync(path).size;
+  } catch {
+    return false;
+  }
+  if (size === 0) return false;
+  const fd = fs.openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(Math.min(size, 64 * 1024));
+    const read = fs.readSync(fd, buf, 0, buf.length, 0);
+    const text = buf.subarray(0, read).toString("utf8");
+    const newline = text.indexOf("\n");
+    if (newline === -1 && read < size) return true; // a header longer than we looked
+    try {
+      return (JSON.parse(newline === -1 ? text : text.slice(0, newline)) as { type?: string }).type === "header";
+    } catch {
+      return false;
+    }
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
