@@ -238,7 +238,8 @@ result: PASS (0 error(s), 0 warning(s))</code></pre>
 <h3>record</h3>
 <p>A transparent stdio proxy. Put it between your client and the server; it captures every
 JSON-RPC frame in both directions into an open JSONL cassette. Bytes are forwarded verbatim, so
-recording is invisible to both sides.</p>
+recording is invisible to both sides — and <a href="#secrets-redaction">secrets are redacted</a>
+before they hit the file.</p>
 
 <pre><code># wherever your client config points at the server command, wrap it:
 mcp-cassette record -o session.cassette.jsonl -- npx -y @modelcontextprotocol/server-github</code></pre>
@@ -284,11 +285,30 @@ millisecond offset. Non-JSON-RPC output from chatty servers is preserved too, so
 a faithful transcript even of a misbehaving server. The format is open, versioned, and documented
 so other tools can consume it.</p>
 
+<h2 id="secrets-redaction">Secrets redaction</h2>
+
+<p>A cassette is only useful if you can commit it, and you can only commit it if it has no
+credentials in it. <strong><code>record</code> redacts by default</strong> — every string in every
+captured frame, plus the server command in the header where tokens often arrive as CLI flags, is
+scanned on the way to disk. The bytes forwarded to your client and to the real server are
+untouched, so the live session behaves exactly as if the proxy weren't there.</p>
+
+<p>Each hit becomes a deterministic placeholder, and that determinism is what keeps replay
+working: when your test sends the live token, <code>replay</code> redacts the incoming request the
+same way before matching, so it collapses to the same placeholder that was recorded and hits the
+same response.</p>
+
+<pre><code>[REDACTED:&lt;rule&gt;:&lt;hash8&gt;]        e.g. [REDACTED:github:3f9a1c07]</code></pre>
+
+<p>Rules cover bearer tokens, JWTs, URL credentials in connection strings, GitHub / OpenAI /
+Anthropic / Slack / AWS / Google key shapes, and any JSON value under a key that looks like a
+credential. There is also a <code>redact</code> command to clean or audit a cassette you already
+recorded — <code>--scan</code> writes nothing and exits non-zero if it finds anything.</p>
+
 <div class="note">
-  <p><strong>Landing in the first release: secret redaction.</strong> A cassette is a verbatim
-  transcript, so today it captures whatever the session carried — tokens included. Redaction is
-  built and under review, but it is not on <code>main</code> yet. Until it ships, treat a
-  recorded cassette as sensitive and review one before committing it.</p>
+  <p>Redaction is pattern-based, so treat it as a strong default rather than a guarantee: a
+  credential in a shape no rule knows can still reach the file. Review a cassette before you
+  commit it.</p>
 </div>
 
 <h2>Links</h2>
