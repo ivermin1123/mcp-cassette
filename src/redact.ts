@@ -35,6 +35,16 @@ export interface RedactRule {
  */
 export const REDACT_RULES: readonly RedactRule[] = Object.freeze([
   { id: "bearer", pattern: /\bBearer\s+([A-Za-z0-9._~+/=-]{8,})/g, group: 1 },
+  // Any scheme, not just http(s): the common case is a connection string —
+  // postgres://, redis://, mongodb://, mysql://, amqp:// — which an MCP server
+  // wrapping a database carries in its env or its tool arguments. Only the
+  // password is replaced; scheme, username, host and path are identifying rather
+  // than secret, and keeping them keeps the cassette debuggable. Runs early so a
+  // password that also looks like a token is redacted once, as a URL credential.
+  // The scheme length is capped: unbounded, `[a-z0-9+.-]*` happily consumes a
+  // long dash-separated run before failing on `://`, and a `\b` at every dash
+  // makes that quadratic. Real schemes are under a dozen characters.
+  { id: "urlcreds", pattern: /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]+:([^\s/@]+)@/gi, group: 1 },
   // Segment lengths are capped. `-` is both a class member and a word boundary,
   // so `eyJ-eyJ-…` offers one candidate start per 4 characters; an unbounded
   // first segment makes each of them rescan the rest of the line, which is
@@ -205,7 +215,7 @@ export interface CassetteSecretHit extends SecretHit {
  * Revealing the first characters of a `keyctx` value means printing the start of
  * someone's password into a CI log, so these are masked whole.
  */
-const OPAQUE_RULES = new Set([KEYCTX_RULE, "bearer"]);
+const OPAQUE_RULES = new Set([KEYCTX_RULE, "bearer", "urlcreds"]);
 
 /** Show enough to locate the value, never enough to use it. */
 export function maskSecret(secret: string, rule?: string): string {
