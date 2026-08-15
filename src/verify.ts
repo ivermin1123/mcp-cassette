@@ -17,7 +17,7 @@
 
 import { Cassette } from "./cassette.js";
 import { DiffEntry, diffValues, formatValue, splitPointer } from "./diff.js";
-import { MiniClient } from "./client.js";
+import { MiniClient, Target } from "./client.js";
 import { isRequest, isResponse, JsonRpcRequest, JsonRpcResponse } from "./jsonrpc.js";
 
 export type VerifyStatus = "MATCH" | "CHANGED" | "ERROR-SHAPE-CHANGED" | "MISSING";
@@ -188,7 +188,8 @@ export function pairLabel(request: JsonRpcRequest): string {
 
 export async function verifyAgainstServer(
   cassette: Cassette,
-  serverCommand: string[],
+  /** A stdio server command, or any target MiniClient can dial (an HTTP URL included). */
+  server: string[] | Target,
   opts: VerifyOptions = {}
 ): Promise<VerifyResult[]> {
   // "" would waive every change — an unset shell variable must not silently
@@ -205,7 +206,8 @@ export async function verifyAgainstServer(
   }
   const pairs = collectVerifyPairs(cassette);
   const results: VerifyResult[] = [];
-  const { client } = await MiniClient.connect({ kind: "stdio", command: serverCommand }, opts.timeoutMs);
+  const target: Target = Array.isArray(server) ? { kind: "stdio", command: server } : server;
+  const { client } = await MiniClient.connect(target, opts.timeoutMs);
   try {
     for (const pair of pairs) {
       const label = pairLabel(pair.request);
