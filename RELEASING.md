@@ -8,35 +8,91 @@ provenance, and creates the GitHub Release with generated notes.
 Nothing is published from a laptop. If you find yourself running `npm publish`
 locally, something has gone wrong — fix the workflow instead.
 
-## One-time setup
+## How the publish authenticates
 
-### `NPM_TOKEN` repository secret
+There is **no npm token**. Since v0.1.1 the workflow publishes through npm
+[trusted publishing](https://docs.npmjs.com/trusted-publishers): GitHub Actions
+mints a short-lived OIDC token for the run, npm checks it against the publisher
+registered for this package, and issues publish rights for that run only.
+Nothing long-lived exists to expire, leak, or rotate.
 
-The publish step authenticates with an npm **Automation** token. A Publish or
-Classic token will fail if the npm account has 2FA enforced, because only
-Automation tokens bypass the 2FA prompt in CI.
+Three details in `release.yml` make it work, and each one breaks the publish if
+it is undone:
 
-1. On [npmjs.com](https://www.npmjs.com/), go to your avatar → **Access Tokens**
-   → **Generate New Token** → **Classic Token** → **Automation**.
-2. Copy the token.
-3. In the GitHub repo: **Settings → Secrets and variables → Actions → New
-   repository secret**.
-   - Name: `NPM_TOKEN`
-   - Value: the token
-4. Rotate it if it's ever exposed in a log; the workflow never echoes it.
+- **`permissions: id-token: write`** on the job. Without it there is no OIDC
+  token to exchange.
+- **No `registry-url` in `actions/setup-node`.** The option looks harmless and
+  is not: it makes setup-node write
+  `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into `~/.npmrc`
+  unconditionally. With no token in the environment that expands to an empty
+  string, npm reads it as "auth is already configured", skips the OIDC exchange
+  entirely, and fails with `ENEEDAUTH` or `E404`
+  ([npm/cli#8513](https://github.com/npm/cli/issues/8513), open at time of
+  writing). Omitting the option writes no `.npmrc`, and npm's default registry
+  is registry.npmjs.org anyway.
+- **The `npm install -g npm@11.19.0` step.** Trusted publishing needs npm
+  ≥ 11.5.1. The Node 22 runner bundles npm 10.9.x, which has no OIDC support at
+  all. The version is pinned rather than `@latest` so a new npm major cannot
+  land in the release path unannounced.
+
+### One-time setup: the trusted publisher
+
+Already done for `mcp-cassette`. To re-create it, or to set it up for another
+package:
+
+1. On [npmjs.com](https://www.npmjs.com/), open the package →
+   **Settings** (`https://www.npmjs.com/package/<name>/access`).
+2. Find **Trusted Publisher** → select **GitHub Actions**.
+3. Fill in: organization or user `ivermin1123`, repository `mcp-cassette`
+   (bare name), workflow filename `release.yml` (filename only, no path),
+   environment blank, allowed actions **`npm publish`**.
+4. Save and reload to confirm it is listed.
+
+The package must already exist on npm — trusted publishing cannot create a
+package from nothing, so the very first version of any new package still needs a
+manual or token-based publish.
 
 ### Requirements for provenance
 
-`npm publish --provenance` needs all of the following, or the publish fails:
+Provenance needs all of the following, or the publish fails:
 
 - The workflow grants `id-token: write` (already set in `release.yml`).
 - The repository is **public**.
 - The publish runs from a GitHub-hosted runner.
 - The `repository` field in `package.json` points at the actual repo.
 
-Provenance is what lets users verify on npm that the tarball was built from this
-repo at this commit, so don't drop the flag to work around an error — fix the
-cause.
+Trusted publishing attaches provenance on its own, so `--provenance` is
+technically redundant. It stays in the command on purpose: it turns a missing
+OIDC context into a loud failure instead of a quietly unattested tarball. Don't
+drop the flag to work around an error — fix the cause.
+
+### Rollback: going back to a token
+
+If an OIDC publish fails and a release has to go out *now*, the token path can
+be restored without reverting the workflow. Add a token secret back and
+reattach it to the publish step:
+
+1. Create an npm **Automation** token (avatar → **Access Tokens** → **Generate
+   New Token** → **Classic Token** → **Automation**; only Automation tokens
+   bypass the 2FA prompt in CI) and store it as the `NPM_TOKEN` repository
+   secret under **Settings → Secrets and variables → Actions**.
+2. In `release.yml`, add back the env block on the publish step:
+
+   ```yaml
+   - name: Publish to npm with provenance
+     run: npm publish --provenance --access public
+     env:
+       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+   ```
+
+Leave the rest alone. In particular **do not re-add `registry-url`** — with a
+real token present npm reads `NODE_AUTH_TOKEN` from the environment on its own,
+and re-adding the option only re-arms the empty-`.npmrc` trap for whoever
+removes the token later.
+
+This is a break-glass path, not a resting state: a long-lived token is the thing
+trusted publishing exists to delete. Once the real cause is fixed, drop the env
+block again and revoke the token.
 
 ## Cutting a release
 
@@ -60,9 +116,10 @@ cause.
    version by hand instead, tag it yourself with the exact same string — the
    workflow fails the release if the tag and `package.json` disagree.
 
-   > `src/cli.ts` and `src/cassette.ts` carry the version string too (the
-   > `.version()` call and the cassette `recorder` field). Update them in the
-   > same commit so recorded cassettes report the right recorder.
+   > `package.json` is the only place the version is written. The CLI's
+   > `--version` and the cassette `recorder` field both read it at runtime
+   > through `src/version.ts`, and `tests/version.test.ts` fails if any of them
+   > drifts back to a literal.
 
 4. **Verify the tarball before pushing.**
 
@@ -109,8 +166,25 @@ where it stopped tells you what to do.
   hand (`gh release create v0.1.1 --generate-notes`) if that was the step that
   failed, or ship a patch release if the published artifact is actually broken.
 
-- **`npm publish` rejected the token.** Confirm the secret is named exactly
-  `NPM_TOKEN` and is an Automation token that hasn't expired.
+- **`npm publish` failed with `ENEEDAUTH`, `E404`, or an OIDC exchange error.**
+  Authentication, not the package. Check in this order:
+
+  1. **The trusted publisher fields on npm.** Repository must be the bare name
+     (`mcp-cassette`, not `ivermin1123/mcp-cassette`), workflow must be the bare
+     filename (`release.yml`, not `.github/workflows/release.yml`), environment
+     blank, allowed actions including `npm publish`. A near-miss in any field
+     produces exactly this error.
+  2. **A stray `.npmrc`.** Did `registry-url` come back to the `setup-node`
+     step, or did some other step write an `_authToken` line? An empty token
+     value stops npm from ever trying OIDC. `cat ~/.npmrc` in a debug step —
+     for a working OIDC run the file should not exist.
+  3. **The npm version on the runner.** The `npm --version` line in the install
+     step must print ≥ 11.5.1. If the pinned version ever disappears from the
+     registry, the step fails silently early and the publish fails later with
+     this error instead.
+
+  E404 in particular reads like "no such package" but here means "npm did not
+  recognize you, so it will not admit the package exists."
 
 - **Provenance error.** Re-read the requirements above — a private repo is the
   usual cause.
