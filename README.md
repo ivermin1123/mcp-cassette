@@ -136,7 +136,7 @@ Each hit becomes a placeholder:
 [REDACTED:<rule>:<hash8>]        e.g. [REDACTED:github:3f9a1c07]
 ```
 
-`hash8` is the first 8 hex characters of the SHA-256 of the secret. It's one-way — the placeholder reveals nothing — but it *is* deterministic, and that's what keeps replay working: when your test sends the live token, `replay` redacts the incoming request the same way before matching, so it collapses to the same placeholder that was recorded and hits the same response. Two different secrets stay distinguishable; the same secret is recognizable across recordings.
+`hash8` is the first 8 hex characters of the SHA-256 of the secret. It is deterministic, and that's what keeps replay working: when your test sends the live token, `replay` redacts the incoming request the same way before matching, so it collapses to the same placeholder that was recorded and hits the same response. Two different secrets stay distinguishable; the same secret is recognizable across recordings.
 
 | Rule | Catches |
 |---|---|
@@ -149,6 +149,14 @@ Each hit becomes a placeholder:
 | `aws` | `AKIA…` access key ids |
 | `google` | `AIza…` API keys |
 | `keyctx` | any JSON string value (≥ 8 chars) under a key matching `token`, `secret`, `password`, `passwd`, `api_key`/`apiKey`, `authorization`, `credential` — whatever its shape |
+
+Lines the recorder cannot parse as a JSON-RPC frame — a batch array, a frame missing `"jsonrpc":"2.0"`, a server that logs to stdout — are stored as `raw` entries and redacted too. If such a line is itself JSON it gets the full key-context walk, with only the secret substrings replaced so the rest of the line keeps its exact bytes. If it is not JSON at all, only the shape rules apply: there are no keys, so there is no key context to use.
+
+### What gets over-redacted, and why we err this way
+
+The key list is matched as a substring and deliberately not anchored, so it still catches `accessToken` and `apiToken` alongside `access_token`. The cost is collateral: a field like `password_policy` or `secretariat` is redacted because its name contains a sensitive word, even though its value is harmless. That is the trade we want — anchoring the match would swap a visible false positive for a silent missed secret, and a redaction placeholder where you expected prose is obvious, while a leaked credential is not.
+
+The one exception is OAuth/OIDC discovery metadata (RFC 8414), where `token_endpoint` and `authorization_endpoint` hold public URLs that servers legitimately return. Those keep their value when it is a plain absolute `http(s)` URL with no query string and no `user:password`. A discovery field holding anything else — a token, a URL with a query string, a URL with credentials in it — is still redacted.
 
 ### Working with existing cassettes
 
@@ -176,6 +184,8 @@ mcp-cassette record --no-redact -o session.cassette.jsonl -- npx -y my-server
 The header records which way it went (`"redaction":{"applied":false}`), and `replay` reads that flag to decide whether to redact incoming requests. Don't commit an unredacted cassette.
 
 ### The caveat
+
+The hash is not a security boundary. It is an unsalted, truncated SHA-256 of the plaintext, sitting in a file you are about to commit — for a high-entropy API token that reveals nothing useful, but for a short or human-chosen value it is a verification oracle: anyone with a candidate guess can confirm it offline. Redaction removes the secret; it does not make a weak secret safe to have referenced. Rotate anything a cassette ever touched.
 
 **This is pattern matching, and pattern matching cannot catch every secret.** A credential with no recognizable prefix, under a field name nobody would call a token — a session cookie in `params.state`, a signed URL, a customer record, a private key pasted into a prompt — goes through untouched. Redaction lowers the odds of an accident; it is not a guarantee, and it is not a substitute for reviewing a cassette before you commit it or for running a real secret scanner over your repo. Treat `--scan` as a tripwire, not a clearance.
 
