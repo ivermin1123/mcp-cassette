@@ -38,6 +38,27 @@ Watch mode while working:
 npm run test:watch
 ```
 
+### Property tests
+
+`tests/properties/` states laws instead of examples, checked with
+[fast-check](https://fast-check.dev) over generated input: the cassette codec
+round-trips any JSON, the replay fingerprint ignores key order and `_meta`,
+redaction is idempotent and shape-preserving, `diff(s, s)` is empty, and the
+line parsers never throw on hostile input. They found a real defect on their
+first run — `urlcreds` re-redacting its own placeholder under a second hash —
+which is the kind of thing example tests do not go looking for.
+
+The seed is fixed (`tests/properties/fast-check-seed.ts`) so a red build
+reproduces exactly. Widen the search locally before a risky change:
+
+```bash
+FAST_CHECK_SEED=$RANDOM npm test
+```
+
+If a random seed finds something, add the counterexample as a plain example
+test next to the property — the property proves the law, the example documents
+the bug.
+
 ## Smoke test
 
 The smoke test dogfoods the CLI end-to-end against the official MCP reference

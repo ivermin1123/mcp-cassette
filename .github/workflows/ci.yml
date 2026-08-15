@@ -37,7 +37,11 @@ jobs:
       - run: npm ci
 
       # `pretest` builds, so this also verifies the TypeScript build.
+      # The seed is pinned here as well as in the source: a property failure in
+      # CI has to be reproducible from the log, and the seed is the whole input.
       - run: npm test
+        env:
+          FAST_CHECK_SEED: '20260815'
 
   smoke:
     name: smoke (dogfood the CLI end-to-end)
