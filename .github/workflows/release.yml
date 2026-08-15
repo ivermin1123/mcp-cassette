@@ -18,11 +18,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # No `registry-url`: it makes setup-node write
+      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into ~/.npmrc
+      # unconditionally. With no token set — the intended state for trusted
+      # publishing — that expands to an empty string, npm reads it as "auth is
+      # already configured", never performs the OIDC exchange, and the publish
+      # dies with ENEEDAUTH or E404 (npm/cli#8513, still open). Without the
+      # option no .npmrc is written and npm falls back to its default registry,
+      # which is registry.npmjs.org anyway.
       - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
           cache: npm
-          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1; Node 22.x bundles npm 10.9.x,
+      # which has no OIDC support at all. Pinned rather than `@latest` so a new
+      # npm major cannot land in the release path unannounced.
+      - name: Install an npm that speaks OIDC
+        run: |
+          npm install -g npm@11.19.0
+          npm --version
 
       - run: npm ci
 
@@ -39,11 +54,16 @@ jobs:
 
       - run: npm test
 
-      # `prepublishOnly` rebuilds and re-tests before the tarball is created.
+      # Authentication is the OIDC exchange against the trusted publisher
+      # configured for this package on npm — no token, no secret, nothing to
+      # rotate or leak. `prepublishOnly` rebuilds and re-tests before the
+      # tarball is created.
+      #
+      # Trusted publishing attaches provenance on its own, but the flag stays:
+      # it turns a missing OIDC context into a loud failure instead of a
+      # quietly unattested tarball.
       - name: Publish to npm with provenance
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
