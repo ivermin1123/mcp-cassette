@@ -522,13 +522,19 @@ export function redactCassette(cassette: Cassette): Cassette {
     header: {
       ...cassette.header,
       ...(command ? { command } : {}),
+      ...(cassette.header.url ? { url: redactString(cassette.header.url) } : {}),
       redaction: { applied: true },
     },
-    entries: cassette.entries.map((entry) =>
-      entry.type === "frame"
-        ? { ...entry, frame: redactFrame(entry.frame) as JsonRpcFrame }
-        : { ...entry, data: redactRawLine(entry.data) }
-    ),
+    entries: cassette.entries.map((entry) => {
+      if (entry.type === "frame") return { ...entry, frame: redactFrame(entry.frame) as JsonRpcFrame };
+      if (entry.type === "chunks") {
+        return {
+          ...entry,
+          chunks: entry.chunks.map((chunk) => ({ ...chunk, frame: redactFrame(chunk.frame) as JsonRpcFrame })),
+        };
+      }
+      return { ...entry, data: redactRawLine(entry.data) };
+    }),
   };
 }
 
@@ -546,6 +552,9 @@ export function scanCassette(cassette: Cassette): CassetteSecretHit[] {
       });
     }
   });
+  for (const hit of scanString(cassette.header.url ?? "")) {
+    hits.push({ rule: hit.rule, dir: "header", path: "url", excerpt: maskSecret(hit.secret, hit.rule) });
+  }
 
   // A response carries no method of its own; report the one it answers.
   //
@@ -576,6 +585,10 @@ export function scanCassette(cassette: Cassette): CassetteSecretHit[] {
           : undefined);
       for (const hit of scanFrame(entry.frame)) {
         hits.push({ ...hit, dir: entry.dir, ...(method ? { method } : {}) });
+      }
+    } else if (entry.type === "chunks") {
+      for (const chunk of entry.chunks) {
+        for (const hit of scanFrame(chunk.frame)) hits.push({ ...hit, dir: entry.dir });
       }
     } else {
       for (const hit of scanRawLine(entry.data)) hits.push({ ...hit, dir: entry.dir });

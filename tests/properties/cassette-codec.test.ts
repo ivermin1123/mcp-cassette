@@ -22,16 +22,31 @@ import { readCassette, writeCassette, CASSETTE_VERSION, type Cassette } from "..
 
 const direction = fc.constantFrom("c2s" as const, "s2c" as const);
 
+const jsonRpcFrame = fc.record({
+  jsonrpc: fc.constant("2.0" as const),
+  id: fc.oneof(fc.integer(), fc.string()),
+  method: fc.string(),
+  params: fc.jsonValue(),
+});
+
 const frameEntry = fc.record({
   type: fc.constant("frame" as const),
   t: fc.nat({ max: 10_000_000 }),
   dir: direction,
-  frame: fc.record({
-    jsonrpc: fc.constant("2.0" as const),
-    id: fc.oneof(fc.integer(), fc.string()),
-    method: fc.string(),
-    params: fc.jsonValue(),
-  }),
+  frame: jsonRpcFrame,
+  // v2: present only when the HTTP status deviates from the derivable default.
+  http: fc.option(fc.record({ status: fc.integer({ min: 100, max: 599 }) }), { nil: undefined }),
+});
+
+// v2: a streamed (SSE) response — id-less + via:"get" for a legacy standalone
+// GET stream, id-bearing for a stream that answers a request.
+const chunksEntry = fc.record({
+  type: fc.constant("chunks" as const),
+  t: fc.nat({ max: 10_000_000 }),
+  dir: direction,
+  id: fc.option(fc.oneof(fc.integer(), fc.string()), { nil: undefined }),
+  via: fc.option(fc.constantFrom("post" as const, "get" as const), { nil: undefined }),
+  chunks: fc.array(fc.record({ t: fc.nat({ max: 10_000_000 }), frame: jsonRpcFrame }), { maxLength: 4 }),
 });
 
 const rawEntry = fc.record({
@@ -50,11 +65,14 @@ const cassette = fc
       cassetteVersion: fc.constant(CASSETTE_VERSION),
       recorder: fc.string(),
       startedAt: fc.string(),
-      transport: fc.constant("stdio" as const),
+      transport: fc.constantFrom("stdio" as const, "http" as const),
       command: fc.option(fc.array(fc.string(), { maxLength: 4 }), { nil: undefined }),
+      url: fc.option(fc.webUrl(), { nil: undefined }),
+      era: fc.option(fc.constantFrom("legacy" as const, "modern" as const), { nil: undefined }),
+      sessioned: fc.option(fc.boolean(), { nil: undefined }),
       redaction: fc.record({ applied: fc.boolean() }),
     }),
-    entries: fc.array(fc.oneof(frameEntry, rawEntry), { maxLength: 12 }),
+    entries: fc.array(fc.oneof(frameEntry, rawEntry, chunksEntry), { maxLength: 12 }),
   })
   .map((value) => JSON.parse(JSON.stringify(value)) as Cassette);
 
