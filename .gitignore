@@ -5,3 +5,4 @@ dist/
 demo/*.cassette.jsonl
 worktrees/
 *.tar.gz
+_to_delete/
