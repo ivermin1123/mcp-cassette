@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { afterAll } from "vitest";
 import { diffValues, splitPointer } from "../src/diff.js";
 import {
@@ -85,12 +86,36 @@ describe("normalizeForDiff", () => {
 });
 
 describe("removePointer", () => {
-  it("removes object members and array elements; missing paths are a no-op", () => {
+  it("deletes object members and blanks array elements in place; missing paths are a no-op", () => {
     const value: Record<string, unknown> = { a: { b: [10, 20, 30] }, keep: 1 };
     removePointer(value, "/a/b/1");
-    expect(value).toEqual({ a: { b: [10, 30] }, keep: 1 });
+    // Blanked, not spliced: later indexes must stay aligned across payloads.
+    expect(value).toEqual({ a: { b: [10, "[ignored]", 30] }, keep: 1 });
     removePointer(value, "/does/not/exist");
-    expect(value).toEqual({ a: { b: [10, 30] }, keep: 1 });
+    expect(value).toEqual({ a: { b: [10, "[ignored]", 30] }, keep: 1 });
+    removePointer(value, "/keep");
+    expect(value).toEqual({ a: { b: [10, "[ignored]", 30] } });
+  });
+
+  it("treats a non-numeric segment under an array as a typo, not index 0", () => {
+    const value = { content: [{ text: "real" }, { text: "also real" }] };
+    removePointer(value, "/content/txt");
+    expect(value).toEqual({ content: [{ text: "real" }, { text: "also real" }] });
+    removePointer(value, "/content/9");
+    expect(value).toEqual({ content: [{ text: "real" }, { text: "also real" }] });
+  });
+
+  it("a typo'd --ignore under an array cannot turn real drift into a MATCH", () => {
+    const recorded = res(1, { content: [{ text: "echo:TOTALLY-DIFFERENT" }] });
+    const live = res(2, { content: [{ text: "echo:hi" }] });
+    const { status } = classifyPair(recorded, live, { ignore: ["/content/txt"] });
+    expect(status).toBe("CHANGED");
+  });
+
+  it("ignoring one array element keeps the rest of the tail aligned", () => {
+    const recorded = res(1, { content: [{ text: "volatile-a" }, { text: "same" }] });
+    const live = res(2, { content: [{ text: "volatile-b" }, { text: "same" }] });
+    expect(classifyPair(recorded, live, { ignore: ["/content/0"] }).status).toBe("MATCH");
   });
 });
 
@@ -273,5 +298,104 @@ describe("verify against a live server (e2e)", () => {
     expect(results[0]!.detail).toContain("-32601");
     expect(results[1]!.status).toBe("MISSING");
     expect(verifyFailed(results)).toBe(true);
+  }, 20_000);
+});
+
+describe("verify hardening", () => {
+  it("still flags a real change sitting next to volatile fields", () => {
+    const recorded = res(1, { at: "2026-01-01T00:00:00Z", id: "123e4567-e89b-12d3-a456-426614174000", text: "v1" });
+    const live = res(2, { at: "2026-08-15T00:00:00Z", id: "ffffffff-ffff-4fff-8fff-ffffffffffff", text: "v2" });
+    const { status, changes } = classifyPair(recorded, live);
+    expect(status).toBe("CHANGED");
+    expect(changes.map((c) => c.path)).toEqual(["/text"]);
+  });
+
+  it("rejects a malformed pointer before any request is fired", async () => {
+    const cassette: Cassette = {
+      header: {
+        type: "header",
+        cassetteVersion: 1,
+        recorder: "test",
+        startedAt: "2026-01-01T00:00:00Z",
+        transport: "stdio",
+      },
+      entries: [
+        { type: "frame", t: 0, dir: "c2s", frame: req(1, "tools/list", {}) },
+        { type: "frame", t: 1, dir: "s2c", frame: res(1, { tools: [] }) },
+      ],
+    };
+    // The server command is a binary that does not exist: if validation ran
+    // after connect, the error would be a spawn failure, not a pointer error.
+    await expect(
+      verifyAgainstServer(cassette, ["no-such-binary-xyz"], { ignore: ["content"] })
+    ).rejects.toThrow(/invalid JSON Pointer/);
+  });
+});
+
+describe("verify CLI (e2e)", () => {
+  const ROOT = path.resolve(__dirname, "..");
+  const TINY = path.join(ROOT, "tests/fixtures/tiny-server.mjs");
+  const CLI = path.join(ROOT, "dist/cli.js");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-cassette-verify-cli-"));
+
+  afterAll(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const cassettePath = path.join(tmpDir, "cli.cassette.jsonl");
+  const writeFixtureCassette = () => {
+    const header = {
+      type: "header",
+      cassetteVersion: 1,
+      recorder: "test",
+      startedAt: "2026-01-01T00:00:00Z",
+      transport: "stdio",
+    };
+    const entries = [
+      { type: "frame", t: 0, dir: "c2s", frame: req(1, "tools/call", { name: "echo", arguments: { message: "hi" } }) },
+      { type: "frame", t: 1, dir: "s2c", frame: res(1, { content: [{ type: "text", text: "echo:hi #1" }] }) },
+    ];
+    fs.writeFileSync(cassettePath, [header, ...entries].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  };
+
+  it("exits 0 on MATCH and delivers the full report through a pipe", () => {
+    writeFixtureCassette();
+    const out = spawnSync("sh", ["-c", `node ${CLI} verify ${cassettePath} -- node ${TINY} | cat`], {
+      encoding: "utf8",
+    });
+    expect(out.status).toBe(0);
+    expect(out.stdout).toContain("✓ MATCH    tools/call echo");
+    expect(out.stdout).toContain("verify: 1 match, 0 changed, 0 error-shape-changed, 0 missing");
+  }, 20_000);
+
+  it("exits 1 on drift, and --allow-changed-paths waives it", () => {
+    writeFixtureCassette();
+    // Same server, but the recorded text is wrong on purpose.
+    const raw = fs.readFileSync(cassettePath, "utf8").replace("echo:hi #1", "echo:hi #999");
+    fs.writeFileSync(cassettePath, raw);
+
+    const drift = spawnSync("node", [CLI, "verify", cassettePath, "--", "node", TINY], { encoding: "utf8" });
+    expect(drift.status).toBe(1);
+    expect(drift.stdout).toContain("✗ CHANGED  tools/call echo");
+    expect(drift.stdout).toContain("/content/0/text");
+
+    const waived = spawnSync(
+      "node",
+      [CLI, "verify", cassettePath, "--allow-changed-paths", "/content", "--", "node", TINY],
+      { encoding: "utf8" }
+    );
+    expect(waived.status).toBe(0);
+    expect(waived.stdout).toContain("○ CHANGED (allowed) tools/call echo");
+  }, 20_000);
+
+  it("exits 2 on a malformed --ignore pointer without running anything", () => {
+    writeFixtureCassette();
+    const out = spawnSync(
+      "node",
+      [CLI, "verify", cassettePath, "--ignore", "content", "--", "node", TINY],
+      { encoding: "utf8" }
+    );
+    expect(out.status).toBe(2);
+    expect(out.stderr).toContain("invalid JSON Pointer");
   }, 20_000);
 });
