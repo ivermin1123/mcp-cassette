@@ -4,6 +4,7 @@
  *
  *   record    transparent stdio proxy that captures a session into a cassette
  *   replay    serve a cassette as a deterministic mock MCP server
+ *   verify    re-fire recorded requests at a live server, diff the responses
  *   check     health + safety check of a live server (CI exit codes)
  *   snapshot  contract snapshot & breaking-change detection
  *   redact    redact (or audit) secrets in an existing cassette
@@ -11,8 +12,9 @@
 
 import { Command } from "commander";
 import fs from "node:fs";
-import { runRecord } from "./record.js";
-import { runReplay } from "./replay.js";
+import { runRecord, type RecordMode } from "./record.js";
+import { runReplay, type OnMissMode } from "./replay.js";
+import { printVerifyReport, verifyAgainstServer, verifyFailed } from "./verify.js";
 import { runCheck, printReport } from "./check.js";
 import { readCassette, writeCassette } from "./cassette.js";
 import { redactCassette, scanCassette } from "./redact.js";
@@ -78,10 +80,14 @@ program
   .description("Record a session: run as a transparent stdio proxy in front of a server command")
   .requiredOption("-o, --out <file>", "cassette output path (.cassette.jsonl)")
   .option("--no-redact", "record secrets verbatim instead of redacting them")
+  .option("--mode <mode>", "once: refuse to overwrite an existing cassette; all: always re-record", "once")
   .argument("<command...>", "server command (prefix with -- )")
-  .action(async (command: string[], opts: { out: string; redact: boolean }) => {
+  .action(async (command: string[], opts: { out: string; redact: boolean; mode: string }) => {
     try {
-      const code = await runRecord({ out: opts.out, command, redact: opts.redact });
+      if (opts.mode !== "once" && opts.mode !== "all") {
+        throw new Error(`record: unknown --mode "${opts.mode}" (expected once or all)`);
+      }
+      const code = await runRecord({ out: opts.out, command, redact: opts.redact, mode: opts.mode as RecordMode });
       process.exit(code);
     } catch (err) {
       process.stderr.write(`${(err as Error).message}\n`);
@@ -93,12 +99,52 @@ program
   .command("replay")
   .description("Serve a recorded cassette as a deterministic stdio MCP server")
   .argument("<cassette>", "path to a .cassette.jsonl file")
-  .action((cassette: string) => {
+  .option(
+    "--on-miss <mode>",
+    "on fingerprint miss: error (fail the session), warn (answer with an error, exit 0), or passthrough (forward to the real server after -- and append the interaction)",
+    "error"
+  )
+  .argument("[command...]", "real server command for --on-miss passthrough (prefix with -- )")
+  .action(async (cassette: string, command: string[], opts: { onMiss: string }) => {
     try {
-      runReplay(cassette);
+      if (opts.onMiss !== "error" && opts.onMiss !== "warn" && opts.onMiss !== "passthrough") {
+        throw new Error(`replay: unknown --on-miss "${opts.onMiss}" (expected error, warn, or passthrough)`);
+      }
+      await runReplay(cassette, { onMiss: opts.onMiss as OnMissMode, serverCommand: command });
     } catch (err) {
       process.stderr.write(`${(err as Error).message}\n`);
       process.exit(1);
+    }
+  });
+
+/** Repeatable-option accumulator for commander. */
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+program
+  .command("verify")
+  .description("Re-fire the recorded requests at a live server and diff its responses against the cassette")
+  .argument("<cassette>", "path to a .cassette.jsonl file")
+  .option("--ignore <json-pointer>", "also ignore this JSON Pointer in every response payload (repeatable)", collect, [])
+  .option(
+    "--allow-changed-paths <json-pointer>",
+    "let a CHANGED pair pass when every changed path is at or under one of these pointers (repeatable)",
+    collect,
+    []
+  )
+  .argument("<command...>", "server command (prefix with -- )")
+  .action(async (cassette: string, command: string[], opts: { ignore: string[]; allowChangedPaths: string[] }) => {
+    try {
+      const results = await verifyAgainstServer(readCassette(cassette), command, {
+        ignore: opts.ignore,
+        allowChangedPaths: opts.allowChangedPaths,
+      });
+      printVerifyReport(results);
+      process.exit(verifyFailed(results) ? 1 : 0);
+    } catch (err) {
+      process.stderr.write(`verify failed: ${(err as Error).message}\n`);
+      process.exit(2);
     }
   });
 
