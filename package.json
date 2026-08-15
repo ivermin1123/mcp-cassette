@@ -14,6 +14,15 @@
     "ci"
   ],
   "license": "Apache-2.0",
+  "author": "Hoang Le <ivermin1123@gmail.com>",
+  "homepage": "https://mcpcassette.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ivermin1123/mcp-cassette.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ivermin1123/mcp-cassette/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"
