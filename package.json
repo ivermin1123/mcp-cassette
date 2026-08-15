@@ -1,6 +1,6 @@
 {
   "name": "mcp-cassette",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Record a real MCP session once — replay it forever. VCR-style record/replay, contract snapshots, and safety checks for Model Context Protocol servers.",
   "keywords": [
     "mcp",
