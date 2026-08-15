@@ -385,6 +385,46 @@ describe("scanning", () => {
     const hit = scanCassette(cassette).find((h) => h.rule === "aws");
     expect(hit).toMatchObject({ dir: "s2c", method: "tools/call", path: "result.content[0].text" });
   });
+
+  // Each direction numbers its own requests, so a client `tools/call` and a
+  // server-initiated `sampling/createMessage` can both be id 1 without either
+  // being wrong. An id-only map lets the later one relabel the other's response.
+  it("does not confuse a client request id with a server-initiated one", () => {
+    const cassette = cassetteWith(SECRETS.github);
+    cassette.entries.push(
+      // The server asks the client something, reusing id 1 in its own space.
+      {
+        type: "frame",
+        t: 2,
+        dir: "s2c",
+        frame: { jsonrpc: "2.0", id: 1, method: "sampling/createMessage", params: {} },
+      },
+      // The client answers it — c2s response to an s2c request.
+      {
+        type: "frame",
+        t: 3,
+        dir: "c2s",
+        frame: { jsonrpc: "2.0", id: 1, result: { model: SECRETS.aws } },
+      },
+      // The server answers the client's original tools/call — s2c response to c2s.
+      {
+        type: "frame",
+        t: 4,
+        dir: "s2c",
+        frame: { jsonrpc: "2.0", id: 1, result: { content: [{ text: SECRETS.google }] } },
+      }
+    );
+
+    const hits = scanCassette(cassette);
+    expect(hits.find((h) => h.rule === "aws")).toMatchObject({
+      dir: "c2s",
+      method: "sampling/createMessage",
+    });
+    expect(hits.find((h) => h.rule === "google")).toMatchObject({
+      dir: "s2c",
+      method: "tools/call",
+    });
+  });
 });
 
 describe("redactCassette", () => {

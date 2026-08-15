@@ -382,17 +382,32 @@ export function scanCassette(cassette: Cassette): CassetteSecretHit[] {
   });
 
   // A response carries no method of its own; report the one it answers.
-  const methodById = new Map<string, string>();
+  //
+  // Keyed by direction as well as id, because the two directions number their
+  // requests independently: a client `tools/call` with id 1 and a server-initiated
+  // `sampling/createMessage` with id 1 are different requests that happen to
+  // share a label. A single id→method map lets whichever came last claim both,
+  // and the audit output then names the wrong method for a leaked secret.
+  const methodByRequest = new Map<string, string>();
   for (const entry of cassette.entries) {
     if (entry.type !== "frame") continue;
     const { id, method } = entry.frame as { id?: unknown; method?: string };
-    if (method !== undefined && id !== undefined) methodById.set(String(id), method);
+    if (method !== undefined && id !== undefined) {
+      methodByRequest.set(`${entry.dir}:${String(id)}`, method);
+    }
   }
 
   for (const entry of cassette.entries) {
     if (entry.type === "frame") {
       const { id, method: own } = entry.frame as { id?: unknown; method?: string };
-      const method = own ?? (id !== undefined ? methodById.get(String(id)) : undefined);
+      // A response travels back the way its request came, so look it up in the
+      // opposite direction: an s2c response answers a c2s request, and a c2s
+      // response answers a server-initiated s2c one.
+      const method =
+        own ??
+        (id !== undefined
+          ? methodByRequest.get(`${entry.dir === "c2s" ? "s2c" : "c2s"}:${String(id)}`)
+          : undefined);
       for (const hit of scanFrame(entry.frame)) {
         hits.push({ ...hit, dir: entry.dir, ...(method ? { method } : {}) });
       }
