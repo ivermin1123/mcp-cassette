@@ -14,7 +14,7 @@
 import { spawn } from "node:child_process";
 import { CassetteWriter } from "./cassette.js";
 import { LineBuffer, parseFrame } from "./jsonrpc.js";
-import { redactCommand, redactFrame, redactString } from "./redact.js";
+import { redactCommand, redactFrame, redactRawLine } from "./redact.js";
 import type { JsonRpcFrame } from "./jsonrpc.js";
 
 export interface RecordOptions {
@@ -48,7 +48,7 @@ export function runRecord(opts: RecordOptions): Promise<number> {
         if (line.trim() === "") continue;
         const frame = parseFrame(line);
         if (frame) writer.frame(dir, redact ? (redactFrame(frame) as JsonRpcFrame) : frame);
-        else writer.raw(dir, redact ? redactString(line) : line);
+        else writer.raw(dir, redact ? redactRawLine(line) : line);
       }
     };
 
