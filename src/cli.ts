@@ -164,34 +164,42 @@ program
   .option("--scan", "report detected secrets and exit 1 if any were found (no file is written)")
   .action((cassettePath: string, opts: { out?: string; scan?: boolean }) => {
     try {
+      if (opts.scan && opts.out) {
+        process.stderr.write("redact: --scan writes nothing — drop -o, or drop --scan\n");
+        process.exitCode = 2;
+        return;
+      }
       const cassette = readCassette(cassettePath);
 
       if (opts.scan) {
         const hits = scanCassette(cassette);
-        for (const hit of hits) {
+        // One write: process.exit() would truncate an unbounded report on a pipe.
+        const lines = hits.map((hit) => {
           const where = hit.method ? `${hit.dir} ${hit.method}` : hit.dir;
-          process.stdout.write(`[${hit.rule}] ${where} ${hit.path}: ${hit.excerpt}\n`);
-        }
-        process.stdout.write(
+          return `[${hit.rule}] ${where} ${hit.path}: ${hit.excerpt}\n`;
+        });
+        lines.push(
           hits.length === 0
             ? "result: CLEAN (0 secrets detected)\n"
             : `result: FOUND (${hits.length} secret(s) detected)\n`
         );
-        process.exit(hits.length === 0 ? 0 : 1);
+        process.stdout.write(lines.join(""));
+        process.exitCode = hits.length === 0 ? 0 : 1;
+        return;
       }
 
       if (!opts.out) {
         process.stderr.write("redact: pass -o <file> to write a redacted cassette, or --scan to audit\n");
-        process.exit(2);
+        process.exitCode = 2;
+        return;
       }
 
       const found = scanCassette(cassette).length;
       writeCassette(opts.out, redactCassette(cassette));
       process.stdout.write(`wrote ${opts.out} (${found} secret(s) redacted)\n`);
-      process.exit(0);
     } catch (err) {
       process.stderr.write(`redact failed: ${(err as Error).message}\n`);
-      process.exit(2);
+      process.exitCode = 2;
     }
   });
 
