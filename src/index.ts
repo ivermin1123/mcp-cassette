@@ -45,7 +45,15 @@ export {
   type RedactRule,
   type SecretHit,
 } from "./redact.js";
-export { MiniClient, type Target, type Tool, type InitializeResult } from "./client.js";
+export {
+  MiniClient,
+  InputRequiredError,
+  ModernServerError,
+  type Target,
+  type Tool,
+  type InitializeResult,
+} from "./client.js";
+export { HttpStatusError } from "./transport.js";
 export { lintTool, LINT_RULES, type LintFinding } from "./lint.js";
 export { runCheck, printReport, type CheckReport, type CheckFinding } from "./check.js";
 export {
