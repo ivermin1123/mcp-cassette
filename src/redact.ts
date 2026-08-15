@@ -64,12 +64,32 @@ export const SENSITIVE_KEY =
   /(token|secret|password|passwd|api[_-]?key|authorization|credential)/i;
 
 /**
- * Sensitive names that are only safe to match as a whole segment.
+ * Sensitive names that are only safe to match as a whole key segment.
  *
- * `pin` cannot join `SENSITIVE_KEY`'s unanchored alternation: it is a substring
- * of `shipping`, `mapping` and `spinner`, and redacting a shipping address is a
- * worse failure than the leak it prevents. Matching per segment gives `pin`,
- * `card_pin` and `pinCode` without touching any of those.
+ * **Adding a new sensitive name? Pick the list by collision risk, not by taste.**
+ *
+ * Ask whether the name appears *inside* ordinary English words or common field
+ * names that carry no secret:
+ *
+ * - **No** — `token`, `password`, `credential`. Put it in `SENSITIVE_KEY`. That
+ *   alternation is unanchored on purpose, which is what lets it catch
+ *   `accessToken`, `refresh_token` and `X-Api-Key` without enumerating every
+ *   spelling. A false positive there is cheap; a missed credential is not.
+ * - **Yes** — short names, three or four letters, that are substrings of real
+ *   words. Put it here. `pin` is the founding case: unanchored it also matches
+ *   `shipping`, `mapping`, `spinner` and `pinned`, and redacting a shipping
+ *   address is a worse failure than the leak it prevents. Segment matching gives
+ *   `pin`, `card_pin`, `pinCode` and `user.pin` and none of the others.
+ *
+ * The tiebreaker when a name could go either way: unanchored matching over-
+ * redacts and segment matching under-redacts, so weigh how visible each failure
+ * is. Over-redaction shows up as a placeholder where a test expected data —
+ * annoying, immediate, obvious. Under-redaction shows up as a credential
+ * committed to a repository, and nothing tells you.
+ *
+ * Whichever list you choose, add both a hit case and a near-miss case to
+ * `tests/redact.test.ts`. The near-miss is the one that matters; it is what
+ * stops the next person from "simplifying" this back into one regex.
  */
 export const SEGMENTED_SENSITIVE_KEYS: ReadonlySet<string> = new Set(["pin"]);
 
