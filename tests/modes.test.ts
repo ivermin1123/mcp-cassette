@@ -211,5 +211,105 @@ describe("replay --on-miss", () => {
     expect(hit.error).toBeUndefined();
     expect(JSON.stringify(hit.result)).toContain("echo:never-recorded");
     expect(replayAgain.code).toBe(0);
+
+    // A second passthrough session must continue the live-N sequence, not
+    // reuse live-1 — duplicate ids would cross-wire request/response pairing.
+    const missCall2: JsonRpcFrame = {
+      jsonrpc: "2.0",
+      id: 9,
+      method: "tools/call",
+      params: { name: "echo", arguments: { message: "second-session" } },
+    };
+    // burner + missCall drain the two recorded echo responses, so missCall2
+    // is again a true miss.
+    const second = await replaySession(
+      [cassettePath, "--on-miss", "passthrough", "--", "node", TINY],
+      [initFrame, initializedNote, burnerCall, missCall, missCall2]
+    );
+    expect(second.code).toBe(0);
+    const liveIds = readCassette(cassettePath)
+      .entries.filter((e) => e.type === "frame" && e.origin === "live" && e.dir === "c2s")
+      .map((e) => ((e as { frame: { id?: unknown } }).frame.id));
+    expect(liveIds).toEqual(["live-1", "live-2"]);
+
+    // …and the grown cassette still pairs each request with its own response.
+    const third = await replaySession([cassettePath], [initFrame, initializedNote, missCall, missCall2]);
+    const first = third.out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
+    const secondHit = third.out.find((f) => "id" in f && f.id === 9) as JsonRpcResponse;
+    expect(JSON.stringify(first.result)).toContain("echo:never-recorded");
+    expect(JSON.stringify(secondHit.result)).toContain("echo:second-session");
+  }, 30_000);
+
+  it("passthrough exits 1 when the live server cannot be reached, and appends nothing", async () => {
+    const cassettePath = path.join(tmpDir, "spy-broken.cassette.jsonl");
+    await recordEchoSession(cassettePath);
+    const entriesBefore = readCassette(cassettePath).entries.length;
+
+    const { code, out, stderr } = await replaySession(
+      [cassettePath, "--on-miss", "passthrough", "--", "no-such-binary-xyz"],
+      [initFrame, initializedNote, burnerCall, missCall]
+    );
+    const miss = out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
+    expect(miss.error?.code).toBe(-32603);
+    expect(miss.error?.message).toContain("passthrough to live server failed");
+    expect(stderr).toContain("FAILED");
+    expect(code).toBe(1);
+    expect(readCassette(cassettePath).entries.length).toBe(entriesBefore);
+  }, 30_000);
+
+  it("passthrough keeps a redacted cassette redacted when appending live interactions", async () => {
+    /** Shaped like GitHub PATs, valid nowhere. */
+    const TOKEN_RECORDED = "ghp_NOTAREALTOKENUSEDINTESTSONLY000000";
+    const TOKEN_LIVE = "ghp_NOTAREALTOKENUSEDINTESTSONLY111111";
+    const secretsServer = [
+      process.execPath,
+      "-e",
+      `process.env.TINY_SECRETS="1";import(${JSON.stringify(TINY)})`,
+    ];
+
+    // Record (redaction on by default) one leak call.
+    const cassettePath = path.join(tmpDir, "spy-redacted.cassette.jsonl");
+    const { client } = await MiniClient.connect({
+      kind: "stdio",
+      command: ["node", CLI, "record", "-o", cassettePath, "--", ...secretsServer],
+    });
+    await client.request("tools/call", { name: "leak", arguments: { token: TOKEN_RECORDED } });
+    await client.close();
+    await new Promise((r) => setTimeout(r, 400));
+
+    // Burner exhausts the recorded leak response; the second call is a true
+    // miss carrying a live token, forwarded to the real secrets server.
+    const leakBurner: JsonRpcFrame = {
+      jsonrpc: "2.0",
+      id: 6,
+      method: "tools/call",
+      params: { name: "leak", arguments: { token: "not-the-recorded-one" } },
+    };
+    const leakMiss: JsonRpcFrame = {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: { name: "leak", arguments: { token: TOKEN_LIVE } },
+    };
+    const { code, out } = await replaySession(
+      [cassettePath, "--on-miss", "passthrough", "--", ...secretsServer],
+      [initFrame, initializedNote, leakBurner, leakMiss]
+    );
+    expect(code).toBe(0);
+
+    // The wire answer to the client carries the live server's real reply…
+    const forwarded = out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
+    expect(JSON.stringify(forwarded.result)).toContain(`received:${TOKEN_LIVE}`);
+
+    // …but the file gained only placeholders: passthrough must not be the
+    // door through which raw secrets enter a redacted cassette.
+    const onDisk = fs.readFileSync(cassettePath, "utf8");
+    expect(onDisk).not.toContain(TOKEN_LIVE);
+    expect(onDisk).not.toContain(TOKEN_RECORDED);
+    const appended = readCassette(cassettePath).entries.filter(
+      (e) => e.type === "frame" && e.origin === "live"
+    );
+    expect(appended).toHaveLength(2);
+    expect(JSON.stringify(appended)).toContain("[REDACTED:");
   }, 30_000);
 });

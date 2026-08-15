@@ -78,8 +78,14 @@ export class MiniClient {
   static async connect(target: Target, timeoutMs?: number): Promise<{ client: MiniClient; init: InitializeResult }> {
     const client = new MiniClient(target, timeoutMs);
     if (target.kind === "stdio") client.spawnChild(target);
-    const init = await client.initialize();
-    return { client, init };
+    try {
+      const init = await client.initialize();
+      return { client, init };
+    } catch (err) {
+      // A failed handshake must not leave the spawned server process behind.
+      await client.close();
+      throw err;
+    }
   }
 
   private spawnChild(target: StdioTarget): void {
@@ -87,7 +93,12 @@ export class MiniClient {
     if (!cmd) throw new Error("stdio target: empty command");
     this.child = spawn(cmd, args, { stdio: ["pipe", "pipe", "inherit"] });
     this.child.on("error", (err) => {
-      for (const p of this.pending.values()) p.reject(new Error(`server process error: ${err.message}`));
+      for (const p of this.pending.values()) {
+        // Clear the timer too, or it keeps the event loop alive for the full
+        // timeout after the process has already failed.
+        clearTimeout(p.timer);
+        p.reject(new Error(`server process error: ${err.message}`));
+      }
       this.pending.clear();
     });
     this.child.stdout!.on("data", (chunk: Buffer) => {
