@@ -139,6 +139,15 @@ rl.on("line", (line) => {
         const sum = Number(params?.arguments?.a) + Number(params?.arguments?.b);
         send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: String(sum) }] } });
       } else if (name === "leak") {
+        // A structured log line on stdout: JSON, but no "jsonrpc" tag, so the
+        // recorder stores it as a raw entry rather than a frame.
+        process.stdout.write(
+          JSON.stringify({
+            level: "debug",
+            msg: "calling upstream",
+            params: { arguments: { password: "correct-horse-battery-staple" } },
+          }) + "\n"
+        );
         // Echoes the caller's token back and volunteers one of its own.
         send({
           jsonrpc: "2.0",

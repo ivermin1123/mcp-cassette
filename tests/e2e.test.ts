@@ -165,6 +165,62 @@ describe("secrets redaction end to end", () => {
     expect(text).not.toContain(FAKE_GITHUB_TOKEN);
   }, 30_000);
 
+  it("forwards bytes verbatim to both sides while the cassette holds only placeholders", async () => {
+    // The invariant redaction must never break: the real server has to receive
+    // the real credential, or every recording against an authenticated server
+    // would fail. Redaction is a property of the file, not of the wire.
+    const cassettePath = path.join(tmpDir, "verbatim.cassette.jsonl");
+    const { client } = await MiniClient.connect({
+      kind: "stdio",
+      command: ["node", CLI, "record", "-o", cassettePath, "--", ...secretServer],
+    });
+    const call = await client.request("tools/call", {
+      name: "leak",
+      arguments: { token: FAKE_GITHUB_TOKEN },
+    });
+    await client.close();
+    await new Promise((r) => setTimeout(r, 400));
+
+    // The server echoes back what it actually parsed — proof it got the original.
+    const text = JSON.stringify(call.result);
+    expect(text).toContain(`received:${FAKE_GITHUB_TOKEN}`);
+    // …and the client got the server's own token through the proxy untouched.
+    expect(text).toContain(`server token: ${FAKE_GITHUB_TOKEN}`);
+    // Only the file is redacted.
+    expect(fs.readFileSync(cassettePath, "utf8")).not.toContain(FAKE_GITHUB_TOKEN);
+  }, 30_000);
+
+  it("redacts a raw non-JSON-RPC line by key context, keeping its other bytes", async () => {
+    // The server logs a JSON line with no "jsonrpc" tag: stored as a raw entry,
+    // so the shape rules alone would never see arguments.password.
+    const cassettePath = path.join(tmpDir, "rawline.cassette.jsonl");
+    await recordSession(cassettePath);
+
+    const raw = readCassette(cassettePath).entries.find(
+      (e): e is Extract<typeof e, { type: "raw" }> => e.type === "raw"
+    );
+    expect(raw).toBeDefined();
+
+    // (a) the secret is gone, (c) every other byte of the line is untouched
+    expect(raw!.data).not.toContain("correct-horse-battery-staple");
+    expect(raw!.data).toContain("[REDACTED:keyctx:");
+    expect(raw!.data).toContain('"level":"debug"');
+    expect(raw!.data).toContain('"msg":"calling upstream"');
+    expect(raw!.data.startsWith('{"level":"debug","msg":"calling upstream","params":')).toBe(true);
+    expect(raw!.data.endsWith("}}}")).toBe(true);
+    expect(fs.readFileSync(cassettePath, "utf8")).not.toContain("correct-horse-battery-staple");
+
+    // (b) an unredacted recording of the same session fails the audit and names it
+    const rawPath = path.join(tmpDir, "rawline-unredacted.cassette.jsonl");
+    await recordSession(rawPath, ["--no-redact"]);
+    expect(fs.readFileSync(rawPath, "utf8")).toContain("correct-horse-battery-staple");
+
+    const scan = spawnSync("node", [CLI, "redact", rawPath, "--scan"], { encoding: "utf8" });
+    expect(scan.status).toBe(1);
+    expect(scan.stdout).toContain("[keyctx] s2c params.arguments.password");
+    expect(scan.stdout).not.toContain("correct-horse-battery-staple");
+  }, 30_000);
+
   it("--no-redact records verbatim, and `redact` audits and cleans it afterwards", async () => {
     const rawPath = path.join(tmpDir, "raw.cassette.jsonl");
     await recordSession(rawPath, ["--no-redact"]);
@@ -190,6 +246,64 @@ describe("secrets redaction end to end", () => {
     const rescan = spawnSync("node", [CLI, "redact", cleanPath, "--scan"], { encoding: "utf8" });
     expect(rescan.status).toBe(0);
     expect(rescan.stdout).toContain("CLEAN");
+  }, 30_000);
+
+  it("refuses redact invocations that would silently do nothing", async () => {
+    const cassettePath = path.join(tmpDir, "guards.cassette.jsonl");
+    await recordSession(cassettePath);
+
+    const neither = spawnSync("node", [CLI, "redact", cassettePath], { encoding: "utf8" });
+    expect(neither.status).toBe(2);
+    expect(neither.stderr).toContain("--scan");
+
+    // -o with --scan reads as "clean this file"; it would write nothing.
+    const both = spawnSync(
+      "node",
+      [CLI, "redact", cassettePath, "--scan", "-o", path.join(tmpDir, "never.jsonl")],
+      { encoding: "utf8" }
+    );
+    expect(both.status).toBe(2);
+    expect(fs.existsSync(path.join(tmpDir, "never.jsonl"))).toBe(false);
+  }, 30_000);
+
+  it("emits the complete --scan report through a pipe", async () => {
+    // The report is unbounded, so `--scan` finishes by setting process.exitCode
+    // and letting stdout drain rather than calling process.exit(), which can drop
+    // queued output on platforms where a piped stdout is asynchronous. That
+    // truncation does not reproduce on macOS/node 24 at any size tried, so this
+    // pins the contract — a complete report — rather than the platform bug.
+    const many = path.join(tmpDir, "many.cassette.jsonl");
+    const header = {
+      type: "header",
+      cassetteVersion: 1,
+      recorder: "test",
+      startedAt: "2026-01-01T00:00:00Z",
+      transport: "stdio",
+    };
+    const lines = [JSON.stringify(header)];
+    for (let i = 0; i < 4000; i++) {
+      lines.push(
+        JSON.stringify({
+          type: "frame",
+          t: i,
+          dir: "c2s",
+          frame: {
+            jsonrpc: "2.0",
+            id: i,
+            method: "tools/call",
+            params: { name: "leak", arguments: { token: `${FAKE_GITHUB_TOKEN}${i}` } },
+          },
+        })
+      );
+    }
+    fs.writeFileSync(many, lines.join("\n") + "\n");
+
+    const piped = spawnSync("sh", ["-c", `node ${CLI} redact ${many} --scan | cat`], {
+      encoding: "utf8",
+    });
+    const reported = piped.stdout.split("\n").filter((l) => l.startsWith("[keyctx]")).length;
+    expect(reported).toBe(4000);
+    expect(piped.stdout).toContain("result: FOUND (4000 secret(s) detected)");
   }, 30_000);
 });
 

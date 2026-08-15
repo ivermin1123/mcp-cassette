@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import {
+  maskSecret,
   redactCassette,
   redactCommand,
   redactFrame,
+  redactRawLine,
   redactString,
   scanCassette,
   scanFrame,
+  scanRawLine,
 } from "../src/redact.js";
 import type { Cassette } from "../src/cassette.js";
 
@@ -71,6 +75,14 @@ describe("redactString rules", () => {
 });
 
 describe("placeholder determinism", () => {
+  it("uses the first 8 hex characters of the secret's sha256", () => {
+    // Pinned: changing the digest or the truncation would silently break
+    // matching between a cassette and any client that redacts differently.
+    const expected = createHash("sha256").update(SECRETS.aws, "utf8").digest("hex").slice(0, 8);
+    expect(redactString(SECRETS.aws)).toBe(`[REDACTED:aws:${expected}]`);
+    expect(expected).toMatch(/^[0-9a-f]{8}$/);
+  });
+
   it("maps the same secret to the same placeholder every time", () => {
     expect(redactString(SECRETS.github)).toBe(redactString(SECRETS.github));
     expect(redactString(`a ${SECRETS.github}`)).toContain(redactString(SECRETS.github));
@@ -131,11 +143,33 @@ describe("redactFrame", () => {
     expect(out.secret).toBe("off");
   });
 
-  it("never mutates its input", () => {
-    const input = { params: { arguments: { token: SECRETS.github } } };
+  it("never mutates its input, including its prototype", () => {
+    const input = JSON.parse(
+      `{"params":{"arguments":{"__proto__":{"a":1},"token":${JSON.stringify(SECRETS.github)}}}}`
+    );
     const snapshot = JSON.stringify(input);
+    const inputProto = Object.getPrototypeOf(input.params.arguments);
     redactFrame(input);
     expect(JSON.stringify(input)).toBe(snapshot);
+    expect(Object.getPrototypeOf(input.params.arguments)).toBe(inputProto);
+  });
+
+  it("keeps a __proto__ key as an own property and redacts through it", () => {
+    // Assigning with out[key] would invoke the prototype setter: the field would
+    // vanish from the cassette and replay would serve a payload the server never
+    // sent, with attacker-supplied data on the result's prototype.
+    const input = JSON.parse(
+      `{"params":{"arguments":{"__proto__":{"token":${JSON.stringify(SECRETS.github)}},"keep":"x"}}}`
+    );
+    const out = redactFrame(input) as any;
+    const args = out.params.arguments;
+
+    expect(Object.prototype.hasOwnProperty.call(args, "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(args)).toBe(Object.prototype);
+    expect(args["__proto__"].token).toMatch(PLACEHOLDER);
+    expect(args.keep).toBe("x");
+    expect(JSON.parse(JSON.stringify(out)).params.arguments["__proto__"].token).toMatch(PLACEHOLDER);
+    expect(({} as any).token).toBeUndefined(); // Object.prototype untouched
   });
 
   it("preserves non-string values", () => {
@@ -144,11 +178,119 @@ describe("redactFrame", () => {
   });
 });
 
+describe("key context vs. discovery metadata", () => {
+  const meta = () =>
+    redactFrame({
+      token_endpoint: "https://auth.example.com/oauth/token",
+      authorization_endpoint: "https://auth.example.com/oauth/authorize",
+      revocation_endpoint: "https://auth.example.com/oauth/revoke",
+      jwks_uri: "https://auth.example.com/.well-known/jwks.json",
+    }) as Record<string, string>;
+
+  it("keeps public OAuth endpoint URLs intact", () => {
+    expect(meta()).toEqual({
+      token_endpoint: "https://auth.example.com/oauth/token",
+      authorization_endpoint: "https://auth.example.com/oauth/authorize",
+      revocation_endpoint: "https://auth.example.com/oauth/revoke",
+      jwks_uri: "https://auth.example.com/.well-known/jwks.json",
+    });
+  });
+
+  // Only `token_endpoint` and `authorization_endpoint` contain a SENSITIVE_KEY
+  // term at all; the rest of the discovery set is listed for completeness and is
+  // never a redaction candidate in the first place.
+  const notPlainUrls: Array<[string, string, string]> = [
+    ["token_endpoint", SECRETS.jwt, "not a URL at all"],
+    ["token_endpoint", "https://user:pa55word@evil.test/token", "userinfo component"],
+    ["token_endpoint", "ftp://auth.example.com/token", "not http(s)"],
+    ["authorization_endpoint", "https://evil.test/?secret=abcdefghij", "query string"],
+  ];
+
+  for (const [key, value, why] of notPlainUrls) {
+    it(`still redacts ${key} when the value has a ${why}`, () => {
+      const out = redactFrame({ [key]: value }) as Record<string, string>;
+      expect(out[key]).toMatch(PLACEHOLDER);
+    });
+  }
+
+  it("does not exempt a URL under an ordinary sensitive key", () => {
+    const out = redactFrame({ token: "https://auth.example.com/oauth/token" }) as Record<
+      string,
+      string
+    >;
+    expect(out.token).toMatch(PLACEHOLDER);
+  });
+});
+
+describe("raw lines", () => {
+  // A JSON line with no "jsonrpc" tag — a batch, or a server's structured log —
+  // is stored as a raw entry, so keyctx has to reach it too.
+  const line = JSON.stringify({
+    level: "debug",
+    params: { arguments: { password: "correct-horse-battery" } },
+  });
+
+  it("redacts by key context and leaves every other byte alone", () => {
+    const out = redactRawLine(line);
+    expect(out).not.toContain("correct-horse-battery");
+    expect(out).toContain("[REDACTED:keyctx:");
+    expect(out).toBe(line.replace(/"correct-horse-battery"/, `"${out.match(/\[REDACTED[^\]]+\]/)![0]}"`));
+  });
+
+  it("reports the path of a key-context secret in a raw line", () => {
+    const hits = scanRawLine(line);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ rule: "keyctx", path: "params.arguments.password" });
+    expect(hits[0]!.excerpt).not.toContain("correct");
+  });
+
+  it("falls back to shape rules on a line that is not JSON", () => {
+    const log = `warn: authenticating with ${SECRETS.github}`;
+    expect(redactRawLine(log)).toMatch(/^warn: authenticating with \[REDACTED:github:[0-9a-f]{8}\]$/);
+    // No object to walk, so a bare key=value pair has no key context to use.
+    expect(redactRawLine("password=correct-horse-battery")).toBe("password=correct-horse-battery");
+  });
+
+  it("redacts a secret that needs JSON escaping in the raw text", () => {
+    const escaped = JSON.stringify({ token: 'quote"and\\slash-secret' });
+    const out = redactRawLine(escaped);
+    expect(out).not.toContain("and\\\\slash");
+    expect(out).toContain("[REDACTED:keyctx:");
+  });
+});
+
 describe("redactCommand", () => {
   it("redacts tokens passed as CLI arguments", () => {
     const out = redactCommand(["npx", "-y", "server", `--token=${SECRETS.github}`]);
     expect(out.slice(0, 3)).toEqual(["npx", "-y", "server"]);
     expect(out[3]).toMatch(/^--token=\[REDACTED:github:[0-9a-f]{8}\]$/);
+  });
+});
+
+describe("maskSecret", () => {
+  it("keeps a literal prefix for shape rules, which is all it can reveal", () => {
+    expect(maskSecret(SECRETS.aws, "aws")).toMatch(/^AKIA\*+ \(\d+ chars\)$/);
+  });
+
+  it("masks opaque secrets whole — a leak detector must not print a password", () => {
+    expect(maskSecret("hunter22", "keyctx")).toBe("******** (8 chars)");
+    expect(maskSecret("abcd1234efgh", "bearer")).toBe("************ (12 chars)");
+  });
+});
+
+describe("redactString scope", () => {
+  it("applies shape rules only — key context needs an object to walk", () => {
+    // Pins the boundary that made raw lines leak: this is why record.ts routes
+    // unparsed lines through redactRawLine, not redactString.
+    const json = '{"password":"correct-horse-battery"}';
+    expect(redactString(json)).toBe(json);
+    expect(redactRawLine(json)).toContain("[REDACTED:keyctx:");
+  });
+
+  it("keeps the text around a captured group", () => {
+    expect(redactString("Bearer abcdefgh12345678, then more")).toMatch(
+      /^Bearer \[REDACTED:bearer:[0-9a-f]{8}\], then more$/
+    );
   });
 });
 
@@ -203,6 +345,23 @@ describe("redactCassette", () => {
     const snapshot = JSON.stringify(input);
     redactCassette(input);
     expect(JSON.stringify(input)).toBe(snapshot);
+  });
+});
+
+describe("adversarial input", () => {
+  // `-` is both a base64url character and a word boundary, so this offers a
+  // candidate JWT start every four characters. With unbounded segments each one
+  // rescanned the rest of the line: 6.1s on 128KB, inside the proxy's
+  // synchronous data handler, stalling forwarding in both directions.
+  it("stays linear on input engineered to backtrack", () => {
+    const timeFor = (n: number) => {
+      const started = performance.now();
+      redactString("eyJ-".repeat(n));
+      return performance.now() - started;
+    };
+    timeFor(1000); // warm up
+    expect(timeFor(32_000)).toBeLessThan(1000); // 128KB — was ~6100ms
+    expect(redactString(`x ${SECRETS.jwt} y`)).toContain("[REDACTED:jwt:"); // still catches real ones
   });
 });
 
