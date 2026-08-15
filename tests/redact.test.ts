@@ -175,6 +175,18 @@ describe("scanning", () => {
     const frameHit = hits.find((h) => h.dir === "c2s");
     expect(frameHit?.method).toBe("tools/call");
   });
+
+  it("labels a response hit with the method it answers", () => {
+    const cassette = cassetteWith(SECRETS.github);
+    cassette.entries.push({
+      type: "frame",
+      t: 2,
+      dir: "s2c",
+      frame: { jsonrpc: "2.0", id: 1, result: { content: [{ text: SECRETS.aws }] } },
+    });
+    const hit = scanCassette(cassette).find((h) => h.rule === "aws");
+    expect(hit).toMatchObject({ dir: "s2c", method: "tools/call", path: "result.content[0].text" });
+  });
 });
 
 describe("redactCassette", () => {

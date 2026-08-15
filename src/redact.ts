@@ -215,9 +215,18 @@ export function scanCassette(cassette: Cassette): CassetteSecretHit[] {
     }
   });
 
+  // A response carries no method of its own; report the one it answers.
+  const methodById = new Map<string, string>();
+  for (const entry of cassette.entries) {
+    if (entry.type !== "frame") continue;
+    const { id, method } = entry.frame as { id?: unknown; method?: string };
+    if (method !== undefined && id !== undefined) methodById.set(String(id), method);
+  }
+
   for (const entry of cassette.entries) {
     if (entry.type === "frame") {
-      const method = (entry.frame as { method?: string }).method;
+      const { id, method: own } = entry.frame as { id?: unknown; method?: string };
+      const method = own ?? (id !== undefined ? methodById.get(String(id)) : undefined);
       for (const hit of scanFrame(entry.frame)) {
         hits.push({ ...hit, dir: entry.dir, ...(method ? { method } : {}) });
       }
