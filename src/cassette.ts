@@ -178,6 +178,19 @@ export class CassetteWriter {
     this.flushPending();
     return new Promise((resolve) => this.stream.end(() => resolve()));
   }
+
+  /**
+   * Abandon the recording: drop whatever is buffered and close without writing
+   * a header. A session that never started must not leave a valid-looking
+   * cassette behind — the next run would refuse to overwrite it. In deferred
+   * mode nothing has reached disk yet, so the file is left at zero bytes, which
+   * `cassetteExists` reads as "no cassette here". Anything already written
+   * stays written; this cannot unwrite it.
+   */
+  discard(): Promise<void> {
+    this.pending = null;
+    return new Promise((resolve) => this.stream.end(() => resolve()));
+  }
 }
 
 /**

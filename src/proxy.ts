@@ -38,6 +38,14 @@ const HOP_BY_HOP = new Set([
   "content-length",
 ]);
 
+/**
+ * Response direction only: fetch has already decoded the body, so forwarding
+ * the upstream's `content-encoding` would claim gzip over plaintext and a
+ * strict client would fail to decode it. The request direction keeps its
+ * encoding headers — that body is forwarded byte for byte.
+ */
+const RESPONSE_STRIP = new Set([...HOP_BY_HOP, "content-encoding"]);
+
 export interface HttpRecordOptions {
   out: string;
   /** Upstream MCP endpoint. */
@@ -100,6 +108,7 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
   });
 
   let eraDecided = false;
+  let streamWarned = false;
   const capture = (dir: "c2s" | "s2c", frame: JsonRpcFrame, status?: number) => {
     writer.frame(dir, redact ? (redactFrame(frame) as JsonRpcFrame) : frame, status ? { status } : undefined);
   };
@@ -150,7 +159,7 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
 
       const out: Record<string, string> = {};
       upstream.headers.forEach((value, name) => {
-        if (!HOP_BY_HOP.has(name)) out[name] = value;
+        if (!RESPONSE_STRIP.has(name)) out[name] = value;
       });
       // The session id flows back to the client untouched; only its existence
       // is recorded, and only while the header line can still take it.
@@ -159,7 +168,15 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
       const type = upstream.headers.get("content-type") ?? "";
       res.writeHead(upstream.status, out);
       if (type.includes("text/event-stream") || !upstream.body) {
-        // Streamed answers are relayed now and captured in a later PR.
+        // Streamed answers are relayed now and captured in a later PR. Say so
+        // once per session: a cassette missing a streamed answer should not be
+        // a silent surprise, and a warning per stream would be noise.
+        if (type.includes("text/event-stream") && !streamWarned) {
+          streamWarned = true;
+          process.stderr.write(
+            "mcp-cassette: streamed answer relayed, not captured (SSE capture lands in PR 5)\n"
+          );
+        }
         if (upstream.body) await new Promise((done) => Readable.fromWeb(upstream.body!).pipe(res).on("finish", done));
         else res.end();
         return;
@@ -177,12 +194,15 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
     }
 
     server.on("error", (err: NodeJS.ErrnoException) => {
-      void writer.close();
-      reject(
+      const failure =
         err.code === "EADDRINUSE"
           ? new Error(`record: ${host}:${port} is already in use by ${portHolder(port)} — stop it or pass --listen`)
-          : new Error(`record: could not listen on ${host}:${port}: ${err.message}`)
-      );
+          : new Error(`record: could not listen on ${host}:${port}: ${err.message}`);
+      // Discard rather than close: a startup that never happened must not leave
+      // a header behind for the next `--mode once` run to trip over. Reject only
+      // once the file has settled, so a caller that retries immediately sees the
+      // final state and not a half-written one.
+      void writer.discard().then(() => reject(failure));
     });
 
     server.listen(port, host, () => {
