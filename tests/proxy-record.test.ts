@@ -169,32 +169,24 @@ describe("relaying what the proxy does not record", () => {
     expect(entries[1]!.frame).toEqual(payload); // recorded decompressed, like any other frame
   });
 
-  it("warns once per session that a streamed answer was relayed but not captured", async () => {
+  it("relays a streamed answer verbatim and records it as chunks, not as a frame", async () => {
     const file = out("sse.cassette.jsonl");
+    const answer = (id: unknown) => ({ jsonrpc: "2.0", id, result: {} });
     const up = await upstream((body, res) => {
-      if (body.method === "initialize") return reply(res, { jsonrpc: "2.0", id: body.id, result: {} });
+      if (body.method === "initialize") return reply(res, answer(body.id));
       res.writeHead(200, { "content-type": "text/event-stream" });
-      res.end(`data: ${JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} })}\n\n`);
+      res.end(`data: ${JSON.stringify(answer(body.id))}\n\n`);
     });
+    const proxy = await startHttpRecord({ out: file, url: up.url, listen: "127.0.0.1:0" });
 
-    const stderr: string[] = [];
-    const write = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string) => (stderr.push(String(chunk)), true)) as typeof process.stderr.write;
-    let proxy;
-    try {
-      proxy = await startHttpRecord({ out: file, url: up.url, listen: "127.0.0.1:0" });
-      await post(proxy.url, initFrame);
-      const first = await post(proxy.url, { jsonrpc: "2.0", id: 2, method: "tools/list" });
-      const second = await post(proxy.url, { jsonrpc: "2.0", id: 3, method: "tools/list" });
-      expect(await first.text()).toContain("data:"); // relayed verbatim
-      expect(await second.text()).toContain("data:");
-    } finally {
-      process.stderr.write = write;
-    }
-    await proxy!.close();
+    await post(proxy.url, initFrame);
+    const streamed = await post(proxy.url, { jsonrpc: "2.0", id: 2, method: "tools/list" });
+    expect(await streamed.text()).toBe(`data: ${JSON.stringify(answer(2))}\n\n`); // byte for byte
+    await proxy.close();
 
-    const warnings = stderr.join("").split("\n").filter((l) => l.includes("streamed answer relayed"));
-    expect(warnings).toHaveLength(1); // two streams, one warning
+    const { entries } = readCassette(file);
+    expect(entries.map((e) => e.type)).toEqual(["frame", "frame", "frame", "chunks"]);
+    expect(entries[3]).toMatchObject({ dir: "s2c", id: 2, chunks: [{ frame: answer(2) }] });
   });
 });
 

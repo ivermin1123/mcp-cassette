@@ -17,10 +17,11 @@
 import http from "node:http";
 import { execFileSync } from "node:child_process";
 import { Readable } from "node:stream";
-import { CassetteWriter, type Era } from "./cassette.js";
-import { isRequest, isResponse, parseFrame, type JsonRpcFrame } from "./jsonrpc.js";
+import { CassetteWriter, type Era, type StreamChunk } from "./cassette.js";
+import { isRequest, isResponse, parseFrame, type JsonRpcFrame, type JsonRpcId } from "./jsonrpc.js";
 import { ensureWritable, type RecordMode } from "./record.js";
 import { redactFrame, redactString } from "./redact.js";
+import { SseParser } from "./sse.js";
 
 export const DEFAULT_LISTEN = "127.0.0.1:6402";
 
@@ -108,7 +109,8 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
   });
 
   let eraDecided = false;
-  let streamWarned = false;
+  /** Streams still open. The session may end before they do; then they are flushed as-is (§2.5). */
+  const live = new Set<{ flush(): void; close(): void }>();
   const capture = (dir: "c2s" | "s2c", frame: JsonRpcFrame, status?: number) => {
     writer.frame(dir, redact ? (redactFrame(frame) as JsonRpcFrame) : frame, status ? { status } : undefined);
   };
@@ -167,16 +169,20 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
 
       const type = upstream.headers.get("content-type") ?? "";
       res.writeHead(upstream.status, out);
-      if (type.includes("text/event-stream") || !upstream.body) {
-        // Streamed answers are relayed now and captured in a later PR. Say so
-        // once per session: a cassette missing a streamed answer should not be
-        // a silent surprise, and a warning per stream would be noise.
-        if (type.includes("text/event-stream") && !streamWarned) {
-          streamWarned = true;
-          process.stderr.write(
-            "mcp-cassette: streamed answer relayed, not captured (SSE capture lands in PR 5)\n"
-          );
-        }
+      // A POST stream answers the request that opened it; a GET stream is the
+      // legacy standalone one and answers nothing (§1.3). Anything else — a
+      // DELETE teardown — is relayed and never captured.
+      const streamed = type.includes("text/event-stream") && upstream.body;
+      if (streamed && (req.method === "POST" || req.method === "GET")) {
+        const asked = sent && isRequest(sent) ? sent : null;
+        await relayStream(upstream.body!, res, {
+          id: asked?.id,
+          method: asked?.method,
+          via: req.method === "GET" ? "get" : "post",
+        });
+        return;
+      }
+      if (streamed || !upstream.body) {
         if (upstream.body) await new Promise((done) => Readable.fromWeb(upstream.body!).pipe(res).on("finish", done));
         else res.end();
         return;
@@ -191,6 +197,69 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
       const expected = sent && isRequest(sent) ? 200 : 202;
       capture("s2c", answered, upstream.status === expected ? undefined : upstream.status);
       decideEra(sent && isRequest(sent) ? sent.method : undefined, answered);
+    }
+
+    /**
+     * §2.5: relay the stream byte for byte as it arrives — the client sees the
+     * upstream's own framing and pacing, `X-Accel-Buffering: no` included —
+     * while an incremental parser splits events on the side. One `chunks` entry
+     * lands when the stream ends, even if it carried no JSON-RPC at all: a
+     * stream that happened is part of the transcript whether or not we
+     * understood it.
+     */
+    async function relayStream(
+      body: ReadableStream<Uint8Array>,
+      res: http.ServerResponse,
+      meta: { id?: JsonRpcId; method?: string; via: "post" | "get" }
+    ): Promise<void> {
+      const parser = new SseParser();
+      const decoder = new TextDecoder();
+      const seen: StreamChunk[] = [];
+      const openedAt = writer.elapsed();
+      const source = Readable.fromWeb(body);
+      // SSE event ids, `retry`, and comment lines are parsed and dropped: §1.3
+      // records frames and nothing else.
+      const absorb = (events: { data: string }[]) => {
+        for (const event of events) {
+          const frame = parseFrame(event.data);
+          if (frame) seen.push({ t: writer.elapsed(), frame: redact ? (redactFrame(frame) as JsonRpcFrame) : frame });
+        }
+      };
+      let flushed = false;
+      const entry = {
+        /** The session is over: take what the stream showed, then let both ends go. */
+        close() {
+          entry.flush();
+          if (!res.writableEnded) res.end();
+          source.destroy();
+        },
+        flush() {
+          if (flushed) return;
+          flushed = true;
+          live.delete(entry);
+          absorb(parser.end());
+          writer.chunks("s2c", seen, { t: openedAt, id: meta.id, via: meta.via });
+          // §4.1 over SSE: a final response that arrives streamed is successful
+          // evidence like any other. `decideEra` ignores everything that is not
+          // a successful response, so offering it every frame is the same as
+          // offering it the last one — and survives a trailing notification.
+          if (meta.method) for (const chunk of seen) decideEra(meta.method, chunk.frame);
+        },
+      };
+      live.add(entry);
+
+      source.on("data", (buf: Buffer) => {
+        if (!res.writableEnded) res.write(buf);
+        absorb(parser.feed(decoder.decode(buf, { stream: true })));
+      });
+      // "close" covers the stream we destroy at shutdown as well as the one that
+      // simply ended; either way this settles and the entry is written once.
+      await new Promise<void>((settle) => {
+        const done = () => settle();
+        source.on("end", done).on("close", done).on("error", done);
+      });
+      entry.flush();
+      if (!res.writableEnded) res.end();
     }
 
     server.on("error", (err: NodeJS.ErrnoException) => {
@@ -215,6 +284,11 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
         url: bound,
         close: () =>
           new Promise<void>((done) => {
+            // A stream still open when the session ends is flushed with the
+            // chunks it showed (§2.5), then closed at both ends — otherwise
+            // `server.close` would wait forever for a connection that was
+            // designed to last, and the upstream would hold one too.
+            for (const stream of live) stream.close();
             server.close(() => void writer.close().then(done));
           }),
       });

@@ -80,7 +80,7 @@ Two optional fields join them:
 }
 ```
 
-### `chunks[]` — reserved for streamed results
+### `chunks[]` — streamed results
 
 When a response arrives as a stream, the single `frame` field cannot hold it
 without inventing a merged payload that never existed on the wire. v2 reserves
@@ -100,10 +100,19 @@ a `chunks` entry type for this:
 }
 ```
 
-Design intent, to be firmed up when the SEP is concrete:
+The HTTP recorder writes these today: an SSE answer becomes one `chunks` entry
+when its stream ends, with two fields the sketch did not name —
+`id` (absent on the legacy standalone GET stream, which answers no request) and
+`via` (`"post"` by default and then omitted, `"get"` for that GET stream).
+`docs/design/http-record-replay.md` §1.3 is the authority on both.
 
-- Each chunk stores the frame **as it appeared on the wire** — the cassette
-  stays a transcript, not an interpretation.
+Design intent, firmed up in §1.3 of that document:
+
+- Each chunk stores the frame **as it appeared on the wire** (after redaction)
+  — the cassette stays a transcript, not an interpretation. SSE event ids,
+  `retry` fields, and keep-alive comment lines are parsed and dropped: the
+  modern era deleted resumability, and comment lines are data-free by
+  definition.
 - Replay of a `chunks` entry emits every chunk in order (optionally honoring
   the recorded timing offsets), so streaming clients exercise their real code
   path.
