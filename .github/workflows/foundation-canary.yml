@@ -1,0 +1,248 @@
+# Early warning about drift in the MCP foundations this project sits on: the
+# official SDK, and the official conformance suite.
+#
+# This is a radar, not a gate. Every job is `continue-on-error: true` and a red
+# signal here means "go look upstream", never "this repository is broken" — the
+# things it watches are outside our control and change on someone else's
+# schedule. Do NOT add any job in this file to the required status checks in
+# branch protection.
+#
+# It lives apart from ci.yml on purpose. ci.yml answers "is this commit good?"
+# and runs per push and pull request; this file answers "did the ground move?"
+# and runs on a clock with nothing to do with our commits. Mixing the two makes
+# the weekly noise look like PR noise.
+#
+# Wednesday rather than Monday: ci.yml already runs its smoke-canary against
+# the unpinned reference server on Monday, and two upstream alarms on the same
+# morning is one morning of upstream news a week too concentrated to act on.
+#
+# Not covered here on purpose: @modelcontextprotocol/server-everything@latest.
+# The weekly smoke-canary job in ci.yml already runs the full product loop
+# against it, and a second copy would be two jobs reporting one fact.
+name: Foundation canary
+
+on:
+  schedule:
+    # Wednesdays, 06:00 UTC.
+    - cron: '0 6 * * 3'
+  # So a maintainer can ask the question on demand instead of waiting a week —
+  # after an upstream release, say.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-canary
+  cancel-in-progress: false
+
+jobs:
+  # mcp-cassette implements the MCP wire protocol itself and depends on no SDK.
+  # That is deliberate — a recorder that shares a client implementation with the
+  # thing it records cannot notice that implementation drifting — but it means
+  # nothing in the test suite reacts when the official SDK changes how a client
+  # behaves on the wire. This job is that missing sensor.
+  sdk-next:
+    name: sdk-next (latest official SDK against the fixture server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+
+      # The SDK is installed in a throwaway directory, never added to this
+      # project: it is the subject of the experiment, not a dependency. The
+      # client script is copied in beside it because ESM resolves bare
+      # specifiers relative to the importing file, so a script left in
+      # scripts/ could not import an SDK installed elsewhere.
+      - name: Drive the fixture server through @modelcontextprotocol/sdk@latest
+        id: sdk
+        run: |
+          set -uo pipefail
+          WORK="$(mktemp -d)"
+          cd "$WORK"
+          npm init -y > /dev/null
+
+          # An install that fails is its own signal (a yanked or unpublishable
+          # latest), so it reports a distinct status instead of falling through
+          # to a `node` invocation that would fail for an unrelated reason.
+          if ! npm install @modelcontextprotocol/sdk@latest 2>&1 | tail -3; then
+            echo "could not install @modelcontextprotocol/sdk@latest" \
+              | tee "$RUNNER_TEMP/sdk-next.log"
+            echo "status=91" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          cp "$GITHUB_WORKSPACE/scripts/sdk-next-client.mjs" .
+          node sdk-next-client.mjs "$GITHUB_WORKSPACE/tests/fixtures/tiny-server.mjs" \
+            2>&1 | tee "$RUNNER_TEMP/sdk-next.log"
+          STATUS="${PIPESTATUS[0]}"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+      # A job that cannot fail the workflow is only as useful as what a human
+      # can see at a glance, so the outcome goes in the run summary rather than
+      # only in the log.
+      - name: Summarize
+        if: always()
+        env:
+          STATUS: ${{ steps.sdk.outputs.status }}
+        run: |
+          set -uo pipefail
+          {
+            echo "### sdk-next"
+            if [ "${STATUS:-1}" = "0" ]; then
+              echo "The latest official SDK still drives a classic-lifecycle stdio server the way mcp-cassette expects."
+            else
+              echo "**Signal:** the latest official SDK did not complete the classic lifecycle against the fixture server."
+              echo "This is upstream news, not a defect here — read the log before changing anything."
+            fi
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/sdk-next.log" 2>/dev/null || echo "(no log captured)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "${STATUS:-1}"
+
+  # How far the official conformance suite has grown, and how much of it our
+  # replay server can satisfy.
+  #
+  # Today it can only answer the first half. `conformance server` accepts
+  # `--url` and nothing else: there is no way to point the suite at a stdio
+  # server, which is exactly the open request in
+  # modelcontextprotocol/conformance#258. So the probe records the scenario
+  # inventory (new scenarios appearing is itself the signal to read), checks
+  # whether stdio support has landed, and runs the suite against our replay the
+  # moment it does — no edit to this file required on the day it ships.
+  #
+  # The golden cassette it replays is a committed recording of the fixture
+  # server's classic lifecycle. Regenerate it with:
+  #
+  #   npm run build
+  #   node dist/cli.js check --stdio "node dist/cli.js record \
+  #     -o tests/fixtures/tiny-server.golden.cassette.jsonl \
+  #     -- node tests/fixtures/tiny-server.mjs"
+  #
+  # That driver is `check`, so the recording stops at the handshake and
+  # tools/list — enough to prove replay serves a lifecycle, and all the
+  # scenarios reachable today can ask for anyway.
+  #
+  # TODO: when upstream ships stdio support, replace it with a committed
+  # generator script and record a fuller golden cassette — tools/call over each
+  # fixture tool, plus an error case — so the suite meets a replay that can
+  # answer more than two methods. The pass/fail count is only worth reading
+  # once the cassette is deeper than the questions being asked.
+  conformance-probe:
+    name: conformance-probe (official suite vs. our replay)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - run: npm ci
+
+      # replay is the subject under test, so it has to be built from this commit.
+      - run: npm run build
+
+      - name: Probe the conformance suite
+        id: probe
+        run: |
+          set -uo pipefail
+
+          CONFORMANCE="npx -y @modelcontextprotocol/conformance@latest"
+          # --on-miss warn: answer an unrecorded request with a JSON-RPC error
+          # and keep the session alive with exit 0. Under the default `error`
+          # the first scenario outside the cassette would kill the server and
+          # the run would report one failure instead of a count.
+          REPLAY="node dist/cli.js replay tests/fixtures/tiny-server.golden.cassette.jsonl --on-miss warn"
+
+          VERSION="$($CONFORMANCE --version 2>/dev/null | tail -1)"
+          echo "conformance version: ${VERSION:-unknown}"
+          echo "version=${VERSION:-unknown}" >> "$GITHUB_OUTPUT"
+
+          echo
+          echo "=== server scenarios in the active suite ==="
+          $CONFORMANCE list --server 2>&1 | tee "$RUNNER_TEMP/scenarios.txt"
+          SCENARIOS="$(grep -cE '^[[:space:]]*-[[:space:]]' "$RUNNER_TEMP/scenarios.txt" || true)"
+          echo "scenario count: ${SCENARIOS:-0}"
+          echo "scenarios=${SCENARIOS:-0}" >> "$GITHUB_OUTPUT"
+
+          echo
+          echo "=== does 'conformance server' speak stdio yet? ==="
+          $CONFORMANCE server --help > "$RUNNER_TEMP/server-help.txt" 2>&1 || true
+          if grep -qiE -- '--stdio|--command' "$RUNNER_TEMP/server-help.txt"; then
+            echo "stdio=yes" >> "$GITHUB_OUTPUT"
+            echo "stdio support is present — running the suite against our replay"
+            # The flag name follows the request in #258. If upstream shipped a
+            # different spelling this run fails loudly here, which is the
+            # correct outcome for a probe: the log then says what to change.
+            $CONFORMANCE server --stdio "$REPLAY" --suite active \
+              --output-dir "$RUNNER_TEMP/conformance-results" 2>&1 | tee "$RUNNER_TEMP/run.log"
+            echo "run_status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "stdio=no" >> "$GITHUB_OUTPUT"
+            echo "no stdio option yet — 'conformance server' still takes --url only"
+            echo "tracking: https://github.com/modelcontextprotocol/conformance/issues/258"
+          fi
+
+      # Counting from checks.json rather than scraping the pretty output: the
+      # human-readable format is not a contract and will change under us.
+      - name: Count checks
+        if: always() && steps.probe.outputs.stdio == 'yes'
+        id: counts
+        run: |
+          set -uo pipefail
+          node -e '
+            const fs = require("node:fs"), path = require("node:path");
+            const root = process.argv[1];
+            let pass = 0, fail = 0;
+            const walk = (dir) => {
+              for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                const p = path.join(dir, e.name);
+                if (e.isDirectory()) walk(p);
+                else if (e.name === "checks.json") {
+                  for (const c of JSON.parse(fs.readFileSync(p, "utf8"))) {
+                    // Tolerate either shape: a boolean field, or a status string.
+                    const ok = c.passed ?? c.success ?? (c.status === "pass" || c.status === "passed");
+                    ok ? pass++ : fail++;
+                  }
+                }
+              }
+            };
+            try { walk(root); } catch (err) { console.log("could not read results: " + err.message); }
+            console.log(`pass=${pass} fail=${fail}`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `pass=${pass}\nfail=${fail}\n`);
+          ' "$RUNNER_TEMP/conformance-results"
+
+      - name: Summarize
+        if: always()
+        env:
+          VERSION: ${{ steps.probe.outputs.version }}
+          SCENARIOS: ${{ steps.probe.outputs.scenarios }}
+          STDIO: ${{ steps.probe.outputs.stdio }}
+          PASS: ${{ steps.counts.outputs.pass }}
+          FAIL: ${{ steps.counts.outputs.fail }}
+        run: |
+          set -uo pipefail
+          {
+            echo "### conformance-probe"
+            echo "- suite version: \`${VERSION:-unknown}\`"
+            echo "- server scenarios published: ${SCENARIOS:-0}"
+            if [ "${STDIO:-no}" = "yes" ]; then
+              echo "- stdio support: **present**"
+              echo "- our replay against the active suite: **${PASS:-?} passed, ${FAIL:-?} failed**"
+            else
+              echo "- stdio support: not yet — \`conformance server\` still takes \`--url\` only"
+              echo "- the suite cannot be pointed at \`replay\` until it does:"
+              echo "  <https://github.com/modelcontextprotocol/conformance/issues/258>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
