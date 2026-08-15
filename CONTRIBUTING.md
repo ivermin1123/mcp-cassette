@@ -53,6 +53,19 @@ It needs network access (`npx` downloads `@modelcontextprotocol/server-everythin
 CI runs the same script, so running it locally before pushing catches anything
 the unit tests miss.
 
+The reference server is pinned to a specific version inside the script, because
+the MCP spec is still moving and an upstream release can break the run while our
+code is unchanged. Override the pin with `SERVER_PKG` to test against another
+version:
+
+```bash
+SERVER_PKG='@modelcontextprotocol/server-everything@latest' ./scripts/smoke.sh
+```
+
+CI does exactly that in a separate weekly `smoke-canary` job, which is
+non-blocking — it warns about upstream drift without failing anyone's PR. If you
+bump the pin, do it as its own commit so the reason stays visible in history.
+
 ## Commits
 
 Use [Conventional Commits](https://www.conventionalcommits.org/):

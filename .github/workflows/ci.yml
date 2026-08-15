@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Weekly, so the non-blocking smoke-canary job below reports upstream
+    # reference-server drift even in a quiet week. Mondays, 06:00 UTC.
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -51,7 +55,35 @@ jobs:
 
       - run: npm run build
 
-      # record -> replay -> snapshot against the official MCP reference server.
-      # Any non-zero exit inside the script fails the job (set -euo pipefail).
+      # record -> replay -> snapshot against the official MCP reference server,
+      # at the version pinned in the script. Any non-zero exit inside the
+      # script fails the job (set -euo pipefail).
       - name: End-to-end smoke against the MCP reference server
+        run: bash scripts/smoke.sh
+
+  smoke-canary:
+    name: smoke-canary (unpinned reference server, non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Early warning about upstream drift, never a gate. mcp-cassette v0.1 only
+    # speaks the classic MCP lifecycle, so a stateless-only reference-server
+    # release would break this while our own code is fine. A failure here is a
+    # signal to go look, not a reason to block a PR.
+    # Do NOT add this job to the required status checks in branch protection.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Smoke against the latest reference server
+        env:
+          SERVER_PKG: '@modelcontextprotocol/server-everything@latest'
         run: bash scripts/smoke.sh

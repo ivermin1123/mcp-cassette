@@ -15,13 +15,26 @@
 # Usage:
 #   npm run build && ./scripts/smoke.sh
 #
+#   # pick a different reference-server version:
+#   SERVER_PKG='@modelcontextprotocol/server-everything@latest' ./scripts/smoke.sh
+#
 # Requires: node >= 20, network access (npx downloads the reference server).
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLI="$ROOT/dist/cli.js"
-SERVER="npx -y @modelcontextprotocol/server-everything stdio"
+
+# The reference server is pinned on purpose, not out of caution about npx.
+# MCP is still churning: the 2026-07-28 stateless lifecycle is recent, and
+# mcp-cassette v0.1 only speaks the classic lifecycle. On `@latest`, an
+# upstream release that went stateless-only would turn CI red on main with no
+# change on our side. The non-blocking weekly `smoke-canary` job in
+# .github/workflows/ci.yml runs this same script against `@latest` so we learn
+# about that drift early instead of during someone's PR.
+# Bump this pin deliberately, as its own commit.
+SERVER_PKG="${SERVER_PKG:-@modelcontextprotocol/server-everything@2026.7.4}"
+SERVER="npx -y $SERVER_PKG stdio"
 
 if [ ! -f "$CLI" ]; then
   echo "smoke: $CLI not found — run 'npm run build' first" >&2
@@ -35,6 +48,8 @@ CASSETTE="$WORK/smoke.cassette.jsonl"
 SNAPSHOT="$WORK/smoke.snapshot.json"
 
 step() { printf '\n\033[1m=== %s ===\033[0m\n' "$1"; }
+
+echo "reference server: $SERVER_PKG"
 
 # The --stdio value is tokenized by the CLI (quotes honored), so inner paths are
 # quoted to survive spaces in the checkout or temp directory.
