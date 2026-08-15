@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { buildReplayIndex, fingerprint, handleFrame } from "../src/replay.js";
+import { redactFrame } from "../src/redact.js";
 import type { Cassette } from "../src/cassette.js";
 import type { JsonRpcRequest, JsonRpcResponse } from "../src/jsonrpc.js";
 
-function cassetteWith(pairs: Array<[JsonRpcRequest, JsonRpcResponse]>): Cassette {
+function cassetteWith(
+  pairs: Array<[JsonRpcRequest, JsonRpcResponse]>,
+  redaction?: { applied: boolean }
+): Cassette {
   const entries = pairs.flatMap(([req, res], i) => [
     { type: "frame" as const, t: i * 2, dir: "c2s" as const, frame: req },
     { type: "frame" as const, t: i * 2 + 1, dir: "s2c" as const, frame: res },
@@ -15,6 +19,7 @@ function cassetteWith(pairs: Array<[JsonRpcRequest, JsonRpcResponse]>): Cassette
       recorder: "test",
       startedAt: "2026-01-01T00:00:00Z",
       transport: "stdio",
+      ...(redaction ? { redaction } : {}),
     },
     entries,
   };
@@ -96,5 +101,60 @@ describe("replay matching", () => {
     const index = buildReplayIndex(cassetteWith([]));
     expect(handleFrame(index, req(5, "ping"))).toMatchObject({ id: 5, result: {} });
     expect(handleFrame(index, { jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
+  });
+});
+
+describe("replay matching after redaction", () => {
+  // The recorded cassette only ever saw placeholders; the live client still
+  // sends the real credentials. Both must land on the same fingerprint.
+  const TOKEN_A = "ghp_Fak3T0k3nAAAA00000000000000000000000";
+  const TOKEN_B = "ghp_Fak3T0k3nBBBB11111111111111111111111";
+
+  const callWith = (id: number, token: string): JsonRpcRequest =>
+    req(id, "tools/call", { name: "deploy", arguments: { token } });
+
+  /** Two calls that differ only by the secret — so a wrong match is visible. */
+  const redactedCassette = () =>
+    cassetteWith(
+      [
+        [redactFrame(callWith(1, TOKEN_A)) as JsonRpcRequest, res(1, { content: "A" })],
+        [redactFrame(callWith(2, TOKEN_B)) as JsonRpcRequest, res(2, { content: "B" })],
+      ],
+      { applied: true }
+    );
+
+  it("matches a live secret against its redacted recording", () => {
+    const index = buildReplayIndex(redactedCassette());
+    expect(handleFrame(index, callWith(99, TOKEN_B))).toMatchObject({
+      id: 99,
+      result: { content: "B" },
+    });
+    expect(handleFrame(index, callWith(100, TOKEN_A))).toMatchObject({
+      id: 100,
+      result: { content: "A" },
+    });
+  });
+
+  it("also matches a request that is already redacted", () => {
+    const index = buildReplayIndex(redactedCassette());
+    const already = redactFrame(callWith(7, TOKEN_B)) as JsonRpcRequest;
+    expect(handleFrame(index, already)).toMatchObject({ id: 7, result: { content: "B" } });
+  });
+
+  it("would mismatch without redaction-aware matching", () => {
+    // Same cassette, header claims no redaction: the live token no longer
+    // fingerprints, so matching degrades to the recorded-order fallback.
+    const notMarked = redactedCassette();
+    delete notMarked.header.redaction;
+    const index = buildReplayIndex(notMarked);
+    expect(handleFrame(index, callWith(99, TOKEN_B))).toMatchObject({ result: { content: "A" } });
+  });
+
+  it("leaves unredacted cassettes matching on raw values", () => {
+    const index = buildReplayIndex(
+      cassetteWith([[callWith(1, TOKEN_A), res(1, { content: "raw" })]])
+    );
+    expect(index.redactRequests).toBe(false);
+    expect(handleFrame(index, callWith(50, TOKEN_A))).toMatchObject({ result: { content: "raw" } });
   });
 });

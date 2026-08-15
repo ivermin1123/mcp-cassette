@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { MiniClient, Tool } from "../src/client.js";
 import { runCheck } from "../src/check.js";
 import { captureContract, diffContracts } from "../src/snapshot.js";
@@ -101,6 +102,94 @@ describe("record → replay round trip", () => {
     const miss = await rc.request("tools/call", { name: "never-recorded", arguments: {} });
     expect(miss.error?.code).toBe(-32601);
     await rc.close();
+  }, 30_000);
+});
+
+describe("secrets redaction end to end", () => {
+  /** Must match tests/fixtures/tiny-server.mjs. */
+  const FAKE_GITHUB_TOKEN = "ghp_Fak3T0k3nF0rR3d4ct10nT3st0000000000";
+
+  /** The fixture server with its credential-echoing tool enabled. */
+  const secretServer = [
+    process.execPath,
+    "-e",
+    `process.env.TINY_SECRETS="1";import(${JSON.stringify(TINY)})`,
+    // a token passed as a CLI argument — the server ignores it, the header records it
+    "--",
+    `--token=${FAKE_GITHUB_TOKEN}`,
+  ];
+
+  const recordSession = async (cassettePath: string, extra: string[] = []) => {
+    const { client } = await MiniClient.connect({
+      kind: "stdio",
+      command: ["node", CLI, "record", "-o", cassettePath, ...extra, "--", ...secretServer],
+    });
+    const call = await client.request("tools/call", {
+      name: "leak",
+      arguments: { token: FAKE_GITHUB_TOKEN },
+    });
+    expect(JSON.stringify(call.result)).toContain(FAKE_GITHUB_TOKEN); // live session is untouched
+    await client.close();
+    await new Promise((r) => setTimeout(r, 400));
+  };
+
+  it("keeps the token out of the cassette and still replays the recorded response", async () => {
+    const cassettePath = path.join(tmpDir, "redacted.cassette.jsonl");
+    await recordSession(cassettePath);
+
+    // 1) Nothing on disk carries the credential — request, response, or header.
+    const onDisk = fs.readFileSync(cassettePath, "utf8");
+    expect(onDisk).not.toContain(FAKE_GITHUB_TOKEN);
+    expect(onDisk).toContain("[REDACTED:github:"); // the token in the server's reply
+    expect(onDisk).toContain("[REDACTED:keyctx:"); // the token under the "token" argument
+
+    const cassette = readCassette(cassettePath);
+    expect(cassette.header.redaction).toEqual({ applied: true });
+    expect(cassette.header.command?.join(" ")).toContain("--token=[REDACTED:github:");
+
+    // 2) Replay: the client still sends the live token and still gets its answer.
+    const replayTarget = {
+      kind: "stdio" as const,
+      command: ["node", CLI, "replay", cassettePath],
+    };
+    const { client: rc } = await MiniClient.connect(replayTarget);
+    const replayed = await rc.request("tools/call", {
+      name: "leak",
+      arguments: { token: FAKE_GITHUB_TOKEN },
+    });
+    await rc.close();
+
+    expect(replayed.error).toBeUndefined();
+    const text = JSON.stringify(replayed.result);
+    expect(text).toContain("[REDACTED:github:");
+    expect(text).not.toContain(FAKE_GITHUB_TOKEN);
+  }, 30_000);
+
+  it("--no-redact records verbatim, and `redact` audits and cleans it afterwards", async () => {
+    const rawPath = path.join(tmpDir, "raw.cassette.jsonl");
+    await recordSession(rawPath, ["--no-redact"]);
+
+    expect(fs.readFileSync(rawPath, "utf8")).toContain(FAKE_GITHUB_TOKEN);
+    expect(readCassette(rawPath).header.redaction).toEqual({ applied: false });
+
+    // audit mode: reports the hits, writes nothing, fails CI
+    const scan = spawnSync("node", [CLI, "redact", rawPath, "--scan"], { encoding: "utf8" });
+    expect(scan.status).toBe(1);
+    expect(scan.stdout).toContain("[github]");
+    expect(scan.stdout).toContain("[keyctx]");
+    expect(scan.stdout).not.toContain(FAKE_GITHUB_TOKEN); // excerpts stay masked
+    expect(fs.readFileSync(rawPath, "utf8")).toContain(FAKE_GITHUB_TOKEN);
+
+    // clean it up, then a re-scan passes
+    const cleanPath = path.join(tmpDir, "cleaned.cassette.jsonl");
+    const clean = spawnSync("node", [CLI, "redact", rawPath, "-o", cleanPath], { encoding: "utf8" });
+    expect(clean.status).toBe(0);
+    expect(fs.readFileSync(cleanPath, "utf8")).not.toContain(FAKE_GITHUB_TOKEN);
+    expect(readCassette(cleanPath).header.redaction).toEqual({ applied: true });
+
+    const rescan = spawnSync("node", [CLI, "redact", cleanPath, "--scan"], { encoding: "utf8" });
+    expect(rescan.status).toBe(0);
+    expect(rescan.stdout).toContain("CLEAN");
   }, 30_000);
 });
 
