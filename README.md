@@ -91,10 +91,11 @@ result: FAIL (2 breaking, 1 minor, 0 info)
 
 | Command | What it does |
 |---|---|
-| `record -o <file> -- <server cmd>` | Transparent stdio proxy; captures every JSON-RPC frame (both directions) into an open JSONL cassette. Bytes are forwarded verbatim — recording is invisible to both sides. |
+| `record -o <file> [--no-redact] -- <server cmd>` | Transparent stdio proxy; captures every JSON-RPC frame (both directions) into an open JSONL cassette. Bytes are forwarded verbatim — recording is invisible to both sides. Secrets are [redacted](#secrets-redaction) before they hit the file. |
 | `replay <file>` | Serves the cassette as a stdio MCP server. Requests are matched by method + arguments (volatile `_meta` ignored); repeated identical calls replay in recorded order; unrecorded `ping` is synthesized; anything else gets a clear JSON-RPC error. |
 | `check [--stdio "cmd" \| --url <url>] [--json]` | Lifecycle handshake, `tools/resources/prompts` listing, JSON Schema validation (ajv; draft-07 + 2020-12 by declared dialect), duplicate/name/description checks, and the safety lint below. Exit 1 on errors. |
 | `snapshot [--check] [--update] [-f file]` | Canonical contract snapshot (tools + schemas + annotations). `--check` classifies drift: **breaking** (removed tool/param, new required param, type change, enum narrowed) / **minor** (additive) / **info** (descriptions). Exit 1 on breaking. |
+| `redact <cassette> -o <out> \| --scan` | Redact an existing cassette, or audit one in place. `--scan` writes nothing and exits 1 if it finds anything. |
 
 ### Safety lint rules
 
@@ -118,12 +119,65 @@ Heuristics, not proofs — treat findings as review triggers, and pair with a de
 Append-only JSONL. Line 1 is a header; each following line is one captured frame with direction and a millisecond offset:
 
 ```jsonl
-{"type":"header","cassetteVersion":1,"recorder":"mcp-cassette@0.1.0","startedAt":"...","transport":"stdio","command":["npx","-y","..."]}
+{"type":"header","cassetteVersion":1,"recorder":"mcp-cassette@0.1.0","startedAt":"...","transport":"stdio","command":["npx","-y","..."],"redaction":{"applied":true}}
 {"type":"frame","t":12,"dir":"c2s","frame":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}}
 {"type":"frame","t":38,"dir":"s2c","frame":{"jsonrpc":"2.0","id":1,"result":{...}}}
 ```
 
 Non-JSON-RPC lines (servers that log to stdout) are preserved as `{"type":"raw",...}` — a cassette is a faithful transcript even of misbehaving servers. The format is stable and documented so other tools can consume it.
+
+## Secrets redaction
+
+A cassette is only useful if you can commit it, and you can only commit it if it has no credentials in it. **`record` redacts by default.** Every string in every captured frame — plus the server command in the header, where tokens often arrive as CLI flags — is scanned on the way to disk. The bytes forwarded to your client and to the real server are untouched, so the live session behaves exactly as if the proxy weren't there.
+
+Each hit becomes a placeholder:
+
+```
+[REDACTED:<rule>:<hash8>]        e.g. [REDACTED:github:3f9a1c07]
+```
+
+`hash8` is the first 8 hex characters of the SHA-256 of the secret. It's one-way — the placeholder reveals nothing — but it *is* deterministic, and that's what keeps replay working: when your test sends the live token, `replay` redacts the incoming request the same way before matching, so it collapses to the same placeholder that was recorded and hits the same response. Two different secrets stay distinguishable; the same secret is recognizable across recordings.
+
+| Rule | Catches |
+|---|---|
+| `bearer` | `Bearer <token>` (the word `Bearer` is kept) |
+| `jwt` | three-part `eyJ…` base64url tokens |
+| `github` | `ghp_` `gho_` `ghu_` `ghs_` `ghr_` `github_pat_` |
+| `openai` | `sk-…` |
+| `anthropic` | `sk-ant-…` |
+| `slack` | `xoxb-` `xoxa-` `xoxp-` `xoxr-` `xoxs-` |
+| `aws` | `AKIA…` access key ids |
+| `google` | `AIza…` API keys |
+| `keyctx` | any JSON string value (≥ 8 chars) under a key matching `token`, `secret`, `password`, `passwd`, `api_key`/`apiKey`, `authorization`, `credential` — whatever its shape |
+
+### Working with existing cassettes
+
+```bash
+mcp-cassette redact session.cassette.jsonl -o session.redacted.jsonl   # clean a recording
+mcp-cassette redact session.cassette.jsonl --scan                      # audit only — exit 1 if anything is found
+```
+
+`--scan` writes nothing and prints one line per hit (rule, direction, method, path, masked excerpt), so it drops straight into CI as a tripwire on committed fixtures:
+
+```
+[keyctx] c2s tools/call params.arguments.token: ghp_**************** (39 chars)
+[github] s2c tools/call result.content[0].text: ghp_**************** (39 chars)
+result: FOUND (2 secret(s) detected)
+```
+
+Redaction is idempotent — running it over an already-redacted cassette is a no-op — so re-recording and re-cleaning are both safe.
+
+### Turning it off
+
+```bash
+mcp-cassette record --no-redact -o session.cassette.jsonl -- npx -y my-server
+```
+
+The header records which way it went (`"redaction":{"applied":false}`), and `replay` reads that flag to decide whether to redact incoming requests. Don't commit an unredacted cassette.
+
+### The caveat
+
+**This is pattern matching, and pattern matching cannot catch every secret.** A credential with no recognizable prefix, under a field name nobody would call a token — a session cookie in `params.state`, a signed URL, a customer record, a private key pasted into a prompt — goes through untouched. Redaction lowers the odds of an accident; it is not a guarantee, and it is not a substitute for reviewing a cassette before you commit it or for running a real secret scanner over your repo. Treat `--scan` as a tripwire, not a clearance.
 
 ## How this relates to other tools
 
@@ -133,7 +187,7 @@ Non-JSON-RPC lines (servers that log to stdout) are preserved as `{"type":"raw",
 
 ## Roadmap
 
-Streamable HTTP record/replay · cassette secret-redaction · `vitest`/`jest` + `pytest` adapters · GitHub Action · smarter replay matching (custom matchers, volatile-field config) · server-initiated flows (tasks/MRTR) · contributed scenarios for the official conformance suite. Issues and PRs welcome.
+Streamable HTTP record/replay · configurable redaction rules · `vitest`/`jest` + `pytest` adapters · GitHub Action · smarter replay matching (custom matchers, volatile-field config) · server-initiated flows (tasks/MRTR) · contributed scenarios for the official conformance suite. Issues and PRs welcome.
 
 ## License
 
