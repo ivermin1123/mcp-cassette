@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-cassette — record a real MCP session once, replay it forever</title>
+<meta name="description" content="VCR-style record/replay, contract snapshots, and safety checks for Model Context Protocol servers. Test MCP integrations in CI: deterministic, offline, no live APIs, no tokens, no flakes.">
+<link rel="canonical" href="https://mcpcassette.dev/">
+<meta name="color-scheme" content="light dark">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mcpcassette.dev/">
+<meta property="og:title" content="mcp-cassette">
+<meta property="og:description" content="Record a real MCP session once — replay it forever. VCR-style record/replay, contract snapshots, and safety checks for Model Context Protocol servers.">
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23111'/><rect x='2.5' y='5' width='11' height='6' rx='1' fill='none' stroke='%23fff' stroke-width='1.2'/><circle cx='6' cy='8' r='1.3' fill='%23fff'/><circle cx='10' cy='8' r='1.3' fill='%23fff'/></svg>">
+
+<style>
+:root {
+  --bg:        #fdfdfc;
+  --surface:   #f4f4f1;
+  --border:    #e2e2dd;
+  --text:      #1a1a18;
+  --muted:     #5c5c56;
+  --accent:    #8a4b2a;
+  --code-bg:   #f4f4f1;
+  --code-text: #1a1a18;
+  --note-bg:   #fdf6e8;
+  --note-brd:  #d9b878;
+  --note-text: #5a4520;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:        #14140f;
+    --surface:   #1e1e19;
+    --border:    #33332c;
+    --text:      #eceae2;
+    --muted:     #a3a096;
+    --accent:    #e0a06a;
+    --code-bg:   #1a1a15;
+    --code-text: #eceae2;
+    --note-bg:   #241d10;
+    --note-brd:  #7a6032;
+    --note-text: #e3c98f;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  padding: 0 1.25rem 5rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow-wrap: break-word;
+}
+
+.wrap { max-width: 46rem; margin: 0 auto; }
+
+header { padding: 3.5rem 0 1rem; }
+
+h1 {
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 .4rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.pitch {
+  font-size: 1.3rem;
+  line-height: 1.4;
+  font-weight: 600;
+  margin: 0 0 .75rem;
+  letter-spacing: -0.01em;
+}
+
+.sub { color: var(--muted); margin: 0 0 1.5rem; }
+
+h2 {
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  margin: 3rem 0 .5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+h3 {
+  font-size: .95rem;
+  margin: 2rem 0 .35rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--accent);
+}
+
+p { margin: 0 0 1rem; }
+
+a { color: var(--accent); text-underline-offset: 2px; }
+a:hover { text-decoration: none; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .1em .35em;
+}
+
+pre {
+  background: var(--code-bg);
+  color: var(--code-text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .9rem 1rem;
+  overflow-x: auto;
+  font-size: .85rem;
+  line-height: 1.5;
+  margin: 0 0 1rem;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+ul { margin: 0 0 1rem; padding-left: 1.2rem; }
+li { margin-bottom: .5rem; }
+
+.why li strong { display: block; }
+
+.note {
+  background: var(--note-bg);
+  border: 1px solid var(--note-brd);
+  border-left-width: 3px;
+  color: var(--note-text);
+  border-radius: 4px;
+  padding: .75rem .9rem;
+  margin: 0 0 1.5rem;
+  font-size: .92rem;
+}
+
+.note :last-child { margin-bottom: 0; }
+
+.note a { color: inherit; }
+
+.diagram {
+  font-size: .72rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+footer {
+  margin-top: 3.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+.links { list-style: none; padding: 0; margin: 0 0 1.25rem; }
+.links li { margin-bottom: .4rem; }
+
+@media (max-width: 34rem) {
+  header { padding-top: 2.25rem; }
+  h1 { font-size: 1.6rem; }
+  .pitch { font-size: 1.12rem; }
+  pre { font-size: .78rem; }
+  .diagram { font-size: .55rem; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>mcp-cassette</h1>
+  <p class="pitch">Record a real MCP session once — replay it forever.</p>
+  <p class="sub">VCR-style record/replay, contract snapshots, and safety checks for
+  <a href="https://modelcontextprotocol.io">Model Context Protocol</a> servers. Test your MCP
+  integrations in CI: deterministic, offline, no live APIs, no tokens, no flakes.</p>
+
+  <div class="note">
+    <p><strong>Not yet on npm.</strong> mcp-cassette is pre-release: the code is on GitHub and
+    the CLI works from a checkout, but nothing is published to the registry yet, so the install
+    commands below will not resolve today. Watch the
+    <a href="https://github.com/ivermin1123/mcp-cassette">repository</a> for the v0.1.0 release.</p>
+  </div>
+</header>
+
+<pre class="diagram" aria-label="Architecture diagram: a client records through the mcp-cassette proxy to a real MCP server, producing a cassette file that CI later replays without the real server."><code>┌────────┐   record    ┌──────────────┐   real    ┌────────────┐
+│ client │ ──────────► │ mcp-cassette │ ────────► │ MCP server │
+└────────┘             │    (proxy)   │           └────────────┘
+                       └──────┬───────┘
+                              ▼
+                    session.cassette.jsonl
+                              │
+┌────────┐   replay           ▼
+│   CI   │ ◄────────── deterministic mock — the real server never runs
+└────────┘</code></pre>
+
+<h2>Why it exists</h2>
+
+<ul class="why">
+  <li><strong>CI without the world.</strong> Your MCP server wraps GitHub, Postgres, or Stripe.
+  Your agent tests shouldn't need live credentials, rate limits, or network. Record once against
+  the real thing, replay in every CI run.</li>
+
+  <li><strong>No more silent breaking changes.</strong> <code>snapshot --check</code> fails the PR
+  that removes a tool, adds a required parameter, or changes a type — before your users' agents
+  break at 3am.</li>
+
+  <li><strong>Catch poisoned tools.</strong> <code>check</code> lints tool descriptions for the
+  known shapes of tool-poisoning attacks — instruction overrides, concealment directives,
+  exfiltration URLs, invisible Unicode — and validates every schema (draft-07 and 2020-12).
+  Heuristics, not proofs: treat findings as review triggers, and pair with a dedicated security
+  scanner for depth.</li>
+</ul>
+
+<p>Works at the transport level — any server, any SDK, any language, any spec revision.</p>
+
+<h2>The four commands</h2>
+
+<h3>check</h3>
+<p>Health-check any live server: lifecycle handshake, tool/resource/prompt listing, JSON Schema
+validation, and the safety lint. Exits non-zero on errors.</p>
+
+<pre><code>mcp-cassette check --stdio "npx -y @modelcontextprotocol/server-everything stdio"</code></pre>
+
+<pre><code>server: mcp-servers/everything@2.0.0  protocol: 2025-06-18
+surface: 13 tools, 7 resources, 4 prompts
+[OK] no findings
+result: PASS (0 error(s), 0 warning(s))</code></pre>
+
+<h3>record</h3>
+<p>A transparent stdio proxy. Put it between your client and the server; it captures every
+JSON-RPC frame in both directions into an open JSONL cassette. Bytes are forwarded verbatim, so
+recording is invisible to both sides — and <a href="#secrets-redaction">secrets are redacted</a>
+before they hit the file.</p>
+
+<pre><code># wherever your client config points at the server command, wrap it:
+mcp-cassette record -o session.cassette.jsonl -- npx -y @modelcontextprotocol/server-github</code></pre>
+
+<h3>replay</h3>
+<p>Serves the cassette as a stdio MCP server — the cassette <em>is</em> the server now. Requests
+match on method plus arguments, repeated identical calls replay in recorded order, and anything
+unrecorded gets a clear JSON-RPC error.</p>
+
+<pre><code>mcp-cassette check --stdio "mcp-cassette replay session.cassette.jsonl"
+# → identical results, no network, no tokens, deterministic</code></pre>
+
+<h3>snapshot</h3>
+<p>Locks the contract: tools, schemas, and annotations in a canonical snapshot.
+<code>--check</code> classifies drift as breaking, minor, or info, and exits non-zero on
+breaking.</p>
+
+<pre><code>mcp-cassette snapshot --stdio "npx -y my-server"            # writes mcp-contract.snapshot.json
+mcp-cassette snapshot --check --stdio "npx -y my-server"    # CI: fails on breaking changes</code></pre>
+
+<pre><code>[BREAKING] add: parameter "precision" is now required
+[BREAKING] slugify: tool removed
+[MINOR]    add: parameter "mode" added
+result: FAIL (2 breaking, 1 minor, 0 info)</code></pre>
+
+<h2>CI recipe</h2>
+
+<p>GitHub Actions, though nothing here is Actions-specific:</p>
+
+<pre><code>- name: MCP contract &amp; safety checks
+  run: |
+    npx mcp-cassette check    --stdio "node dist/my-server.js"
+    npx mcp-cassette snapshot --check --stdio "node dist/my-server.js"
+
+- name: Agent integration tests (offline, via cassette)
+  run: npx vitest run   # your tests point the MCP client at:
+                        # mcp-cassette replay fixtures/session.cassette.jsonl</code></pre>
+
+<h2>Cassettes are plain files</h2>
+
+<p>Append-only JSONL: a header line, then one line per captured frame with direction and a
+millisecond offset. Non-JSON-RPC output from chatty servers is preserved too, so a cassette stays
+a faithful transcript even of a misbehaving server. The format is open, versioned, and documented
+so other tools can consume it.</p>
+
+<h2 id="secrets-redaction">Secrets redaction</h2>
+
+<p>A cassette is only useful if you can commit it, and you can only commit it if it has no
+credentials in it. <strong><code>record</code> redacts by default</strong> — every string in every
+captured frame, plus the server command in the header where tokens often arrive as CLI flags, is
+scanned on the way to disk. The bytes forwarded to your client and to the real server are
+untouched, so the live session behaves exactly as if the proxy weren't there.</p>
+
+<p>Each hit becomes a deterministic placeholder, and that determinism is what keeps replay
+working: when your test sends the live token, <code>replay</code> redacts the incoming request the
+same way before matching, so it collapses to the same placeholder that was recorded and hits the
+same response.</p>
+
+<pre><code>[REDACTED:&lt;rule&gt;:&lt;hash8&gt;]        e.g. [REDACTED:github:3f9a1c07]</code></pre>
+
+<p>Rules cover bearer tokens, JWTs, URL credentials in connection strings, GitHub / OpenAI /
+Anthropic / Slack / AWS / Google key shapes, and any JSON value under a key that looks like a
+credential. There is also a <code>redact</code> command to clean or audit a cassette you already
+recorded — <code>--scan</code> writes nothing and exits non-zero if it finds anything.</p>
+
+<div class="note">
+  <p>Redaction is pattern-based, so treat it as a strong default rather than a guarantee: a
+  credential in a shape no rule knows can still reach the file. Review a cassette before you
+  commit it.</p>
+</div>
+
+<h2>Links</h2>
+
+<ul class="links">
+  <li><a href="https://github.com/ivermin1123/mcp-cassette">Source, issues, and the full README on GitHub</a></li>
+  <li><a href="https://www.npmjs.com/package/mcp-cassette">npm package</a> — reserved, not published yet</li>
+  <li><a href="https://modelcontextprotocol.io">Model Context Protocol</a></li>
+</ul>
+
+<footer>
+  <p>Apache-2.0 licensed. Built by <a href="https://github.com/ivermin1123">ivermin1123</a>.</p>
+</footer>
+
+</div>
+</body>
+</html>
