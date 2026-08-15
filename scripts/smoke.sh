@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+#
+# End-to-end smoke test: dogfood the mcp-cassette CLI against the official
+# MCP reference server (@modelcontextprotocol/server-everything).
+#
+# Exercises the full product loop:
+#   1. check    a live server
+#   2. record   a session by driving the record proxy with check
+#   3. check    the replayed cassette (no network, no real server)
+#   4. snapshot the replayed contract
+#   5. snapshot --check the same replay -> must report no drift
+#
+# Every step must exit 0; `set -e` fails the run otherwise.
+#
+# Usage:
+#   npm run build && ./scripts/smoke.sh
+#
+# Requires: node >= 20, network access (npx downloads the reference server).
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CLI="$ROOT/dist/cli.js"
+SERVER="npx -y @modelcontextprotocol/server-everything stdio"
+
+if [ ! -f "$CLI" ]; then
+  echo "smoke: $CLI not found — run 'npm run build' first" >&2
+  exit 1
+fi
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+CASSETTE="$WORK/smoke.cassette.jsonl"
+SNAPSHOT="$WORK/smoke.snapshot.json"
+
+step() { printf '\n\033[1m=== %s ===\033[0m\n' "$1"; }
+
+# The --stdio value is tokenized by the CLI (quotes honored), so inner paths are
+# quoted to survive spaces in the checkout or temp directory.
+REPLAY_CMD="node \"$CLI\" replay \"$CASSETTE\""
+
+step "1/5 check the live reference server"
+node "$CLI" check --stdio "$SERVER"
+
+step "2/5 record a session by driving the record proxy with check"
+node "$CLI" check --stdio "node \"$CLI\" record -o \"$CASSETTE\" -- $SERVER"
+
+# The proxy flushes the cassette as its child shuts down; give the stream a
+# moment to settle before asserting on the file.
+sleep 1
+
+if [ ! -s "$CASSETTE" ]; then
+  echo "smoke: no cassette was written to $CASSETTE" >&2
+  exit 1
+fi
+if ! grep -q '"method":"initialize"' "$CASSETTE"; then
+  echo "smoke: cassette is missing the initialize frame" >&2
+  exit 1
+fi
+echo "cassette: $(wc -l <"$CASSETTE" | tr -d ' ') lines recorded"
+
+step "3/5 check against the replayed cassette (offline)"
+node "$CLI" check --stdio "$REPLAY_CMD"
+
+step "4/5 snapshot the replayed contract"
+node "$CLI" snapshot --stdio "$REPLAY_CMD" -f "$SNAPSHOT"
+
+step "5/5 snapshot --check the replay (must report no drift)"
+node "$CLI" snapshot --check --stdio "$REPLAY_CMD" -f "$SNAPSHOT"
+
+printf '\n\033[1;32msmoke: all 5 steps passed\033[0m\n'
