@@ -100,14 +100,16 @@ jobs:
       # TINY_V2 makes the fixture server remove a tool and add a required
       # parameter; the action must go red, and the job must go green because of
       # it.
+      # TINY_V2 rides in the server command rather than in the step's `env:`,
+      # so this does not depend on how a composite action inherits step
+      # environment — the flag reaches the fixture the same way a consumer's
+      # own wrapper command would.
       - name: Gate a drifted server (expected to fail)
         id: drift
         continue-on-error: true
-        env:
-          TINY_V2: '1'
         uses: ./
         with:
-          server-command: node tests/fixtures/tiny-server.mjs
+          server-command: env TINY_V2=1 node tests/fixtures/tiny-server.mjs
           snapshot-file: tests/fixtures/tiny-server.snapshot.json
           version: local
           comment: 'false'

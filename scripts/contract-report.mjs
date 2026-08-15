@@ -106,6 +106,10 @@ function renderDiff(status) {
   try {
     report = JSON.parse(raw);
   } catch {
+    report = null;
+  }
+  // A missing file parses to `null`, not to a throw — guard on the value too.
+  if (!report?.counts || !Array.isArray(report.changes)) {
     return [heading, "❌ could not parse the contract diff."].join("\n\n");
   }
 
