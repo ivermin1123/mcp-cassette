@@ -61,6 +61,62 @@ jobs:
       - name: End-to-end smoke against the MCP reference server
         run: bash scripts/smoke.sh
 
+  action:
+    name: action (dogfood the composite action)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The action posts one results comment. A pull request from a fork gets a
+      # read-only token whatever this says; the action warns and stays green.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - run: npm ci
+
+      # `version: local` below runs this build rather than a published release,
+      # so the action under test is the one in this commit.
+      - run: npm run build
+
+      - name: Gate a clean server against its committed snapshot
+        uses: ./
+        with:
+          server-command: node tests/fixtures/tiny-server.mjs
+          snapshot-file: tests/fixtures/tiny-server.snapshot.json
+          version: local
+          fail-on: dangerous
+
+      # A gate that has only ever been seen passing is not known to be a gate.
+      # TINY_V2 makes the fixture server remove a tool and add a required
+      # parameter; the action must go red, and the job must go green because of
+      # it.
+      - name: Gate a drifted server (expected to fail)
+        id: drift
+        continue-on-error: true
+        env:
+          TINY_V2: '1'
+        uses: ./
+        with:
+          server-command: node tests/fixtures/tiny-server.mjs
+          snapshot-file: tests/fixtures/tiny-server.snapshot.json
+          version: local
+          comment: 'false'
+
+      - name: Assert the gate fired
+        env:
+          OUTCOME: ${{ steps.drift.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::the contract gate passed a breaking diff (outcome: $OUTCOME)"
+            exit 1
+          fi
+
   smoke-canary:
     name: smoke-canary (unpinned reference server, non-blocking)
     runs-on: ubuntu-latest
