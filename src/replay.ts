@@ -209,7 +209,8 @@ function describeNearestParams(candidates: unknown[], incoming: unknown, what: s
     const changes = diffValues(candidate, incoming);
     if (!best || changes.length < best.changes.length) best = { changes };
   }
-  const changes = best!.changes;
+  if (!best) return `${what} could not be compared to any recording`;
+  const changes = best.changes;
   const shown = changes
     .slice(0, 3)
     .map((c) => `${c.path || "/"} (recorded ${formatValue(c.recorded)}, got ${formatValue(c.live)})`)
@@ -218,7 +219,7 @@ function describeNearestParams(candidates: unknown[], incoming: unknown, what: s
   return `method and tool match a recording, but ${what} differ at: ${shown}${more}`;
 }
 
-function missError(index: ReplayIndex, frame: JsonRpcRequest): JsonRpcResponse {
+function missError(frame: JsonRpcRequest, diagnosis: string): JsonRpcResponse {
   return {
     jsonrpc: "2.0",
     id: frame.id,
@@ -226,26 +227,36 @@ function missError(index: ReplayIndex, frame: JsonRpcRequest): JsonRpcResponse {
       code: -32601,
       message:
         `mcp-cassette replay: no recorded response for "${frame.method}" (fingerprint miss). ` +
-        `Nearest recording: ${diagnoseMiss(index, frame)}. Re-record the cassette or adjust the interaction.`,
+        `Nearest recording: ${diagnosis}. Re-record the cassette or adjust the interaction.`,
     },
   };
 }
 
-/** Handle a single incoming frame; returns the frame to send back, if any. */
-export function handleFrame(index: ReplayIndex, frame: JsonRpcFrame): JsonRpcFrame | null {
-  if (isNotification(frame)) return null; // notifications need no response
-  if (!isRequest(frame)) return null; // stray client-side responses: ignore
+type Resolution =
+  | { kind: "silent" } // notifications and stray responses: nothing to send
+  | { kind: "answer"; out: JsonRpcResponse } // recorded match or synthesized ping
+  | { kind: "miss"; request: JsonRpcRequest };
 
+/** The one matching path both handleFrame and the live session go through. */
+function resolveFrame(index: ReplayIndex, frame: JsonRpcFrame): Resolution {
+  if (isNotification(frame) || !isRequest(frame)) return { kind: "silent" };
   const recorded = matchResponse(index, frame);
   if (recorded) {
     // Re-key the recorded response to the incoming request id.
-    const out: JsonRpcResponse = { ...recorded, id: frame.id };
-    return out;
+    return { kind: "answer", out: { ...recorded, id: frame.id } };
   }
   if (frame.method === "ping") {
-    return { jsonrpc: "2.0", id: frame.id, result: {} };
+    return { kind: "answer", out: { jsonrpc: "2.0", id: frame.id, result: {} } };
   }
-  return missError(index, frame);
+  return { kind: "miss", request: frame };
+}
+
+/** Handle a single incoming frame; returns the frame to send back, if any. */
+export function handleFrame(index: ReplayIndex, frame: JsonRpcFrame): JsonRpcFrame | null {
+  const resolved = resolveFrame(index, frame);
+  if (resolved.kind === "silent") return null;
+  if (resolved.kind === "answer") return resolved.out;
+  return missError(resolved.request, diagnoseMiss(index, resolved.request));
 }
 
 export type OnMissMode = "error" | "warn" | "passthrough";
@@ -269,7 +280,22 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
   const sessionStart = Date.now();
   let misses = 0;
   let appended = 0;
-  let live: MiniClient | null = null;
+  let forwardFailures = 0;
+  // Connecting is memoized including failure: a broken server command fails
+  // every subsequent miss fast instead of spawning one orphan per miss.
+  let livePromise: Promise<MiniClient> | null = null;
+  const connectLive = (): Promise<MiniClient> =>
+    (livePromise ??= MiniClient.connect({ kind: "stdio", command: opts.serverCommand! }).then((r) => r.client));
+
+  // Seed the live-N sequence past any ids a previous passthrough session
+  // appended, so a re-run never reuses an id and breaks response pairing.
+  let liveSeq = 0;
+  for (const entry of cassette.entries) {
+    if (entry.type !== "frame") continue;
+    const id = (entry.frame as { id?: unknown }).id;
+    const m = typeof id === "string" ? /^live-(\d+)$/.exec(id) : null;
+    if (m) liveSeq = Math.max(liveSeq, Number(m[1]));
+  }
 
   if (index.skippedServerFrames > 0) {
     process.stderr.write(
@@ -286,58 +312,59 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
   };
 
   const forwardMiss = async (frame: JsonRpcRequest): Promise<JsonRpcResponse> => {
-    if (!live) {
-      live = (await MiniClient.connect({ kind: "stdio", command: opts.serverCommand! })).client;
-    }
-    const res = await live.request(frame.method, frame.params);
+    const client = await connectLive();
+    const res = await client.request(frame.method, frame.params);
     // Re-key the appended pair to a fresh "live-N" id: it keeps request and
-    // response paired on re-read, and can never collide with the numeric ids
-    // the original recording (or a future client) uses.
-    const liveId = `live-${++appended}`;
+    // response paired on re-read, and cannot collide with the ids the original
+    // recording, an earlier passthrough session, or a future client used.
+    const liveId = `live-${++liveSeq}`;
     appendLive("c2s", { ...frame, id: liveId });
     appendLive("s2c", { ...res, id: liveId });
+    appended++;
     return { ...res, id: frame.id };
   };
 
   const handleLine = async (line: string): Promise<void> => {
     const frame = parseFrame(line);
     if (!frame) return;
-    if (isNotification(frame) || !isRequest(frame)) return;
-
-    const recorded = matchResponse(index, frame);
-    if (recorded) {
-      process.stdout.write(serializeFrame({ ...recorded, id: frame.id }));
-      return;
-    }
-    if (frame.method === "ping") {
-      process.stdout.write(serializeFrame({ jsonrpc: "2.0", id: frame.id, result: {} }));
+    const resolved = resolveFrame(index, frame);
+    if (resolved.kind === "silent") return;
+    if (resolved.kind === "answer") {
+      process.stdout.write(serializeFrame(resolved.out));
       return;
     }
 
+    const request = resolved.request;
     misses++;
-    process.stderr.write(
-      `mcp-cassette replay: fingerprint miss for "${frame.method}" — ${diagnoseMiss(index, frame)}\n`
-    );
+    const diagnosis = diagnoseMiss(index, request);
+    process.stderr.write(`mcp-cassette replay: fingerprint miss for "${request.method}" — ${diagnosis}\n`);
     if (onMiss === "passthrough") {
-      const out = await forwardMiss(frame).catch(
-        (err: Error): JsonRpcResponse => ({
+      const out = await forwardMiss(request).catch((err: Error): JsonRpcResponse => {
+        forwardFailures++;
+        return {
           jsonrpc: "2.0",
-          id: frame.id,
+          id: request.id,
           error: { code: -32603, message: `mcp-cassette replay: passthrough to live server failed: ${err.message}` },
-        })
-      );
+        };
+      });
       process.stdout.write(serializeFrame(out));
       return;
     }
-    process.stdout.write(serializeFrame(missError(index, frame)));
+    process.stdout.write(serializeFrame(missError(request, diagnosis)));
   };
 
   const buf = new LineBuffer();
   // Frames are handled strictly in arrival order even when passthrough awaits
   // the live server — a later match must not overtake an in-flight forward.
+  // Each line carries its own error boundary: one bad frame must not poison
+  // the chain and silently drop everything after it.
   let queue: Promise<void> = Promise.resolve();
   const enqueue = (line: string) => {
-    queue = queue.then(() => handleLine(line));
+    queue = queue.then(() =>
+      handleLine(line).catch((err: Error) => {
+        process.stderr.write(`mcp-cassette replay: failed to handle a frame: ${err.message}\n`);
+      })
+    );
   };
 
   await new Promise<void>((resolve) => {
@@ -350,15 +377,21 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
     });
   });
 
-  if (live) await (live as MiniClient).close();
+  // (cast: livePromise is only assigned inside connectLive, which TS's
+  // control-flow narrowing can't see from here)
+  const liveToClose = livePromise as Promise<MiniClient> | null;
+  if (liveToClose) await liveToClose.then((c) => c.close()).catch(() => undefined);
   if (misses > 0) {
     const summary =
       onMiss === "passthrough"
-        ? `${misses} miss(es) forwarded to the live server, ${appended} interaction(s) appended to ${cassettePath} (origin:"live")`
+        ? `${misses} miss(es), ${appended} interaction(s) appended to ${cassettePath} (origin:"live")` +
+          (forwardFailures > 0 ? `, ${forwardFailures} forward(s) FAILED` : "")
         : `${misses} fingerprint miss(es) this session`;
     process.stderr.write(`mcp-cassette replay: ${summary}\n`);
   }
   // error mode is the strict one: a session that missed is a failed session.
-  // warn and passthrough answer the same way frame-by-frame but exit clean.
-  process.exitCode = onMiss === "error" && misses > 0 ? 1 : 0;
+  // warn answers the same way frame-by-frame but exits clean. passthrough is
+  // clean only when every forward actually reached the live server.
+  const failed = (onMiss === "error" && misses > 0) || (onMiss === "passthrough" && forwardFailures > 0);
+  process.exitCode = failed ? 1 : 0;
 }
