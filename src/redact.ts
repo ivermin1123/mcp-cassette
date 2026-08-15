@@ -61,6 +61,49 @@ export const KEYCTX_RULE = "keyctx";
 /** Recognizes our own output, so redacting twice is a no-op. */
 const PLACEHOLDER = /^\[REDACTED:[a-z]+:[0-9a-f]{8}\]$/;
 
+/**
+ * `SENSITIVE_KEY` is deliberately unanchored so it still catches camelCase keys
+ * like `accessToken` — weakening it would trade a visible false positive for a
+ * silent missed secret. The cost is that OAuth/OIDC discovery metadata (RFC 8414)
+ * uses field names containing "token" and "authorization" for values that are
+ * public endpoint URLs. Exempt those on the *value* side instead: the key must be
+ * a known discovery field AND the value must be a plain absolute http(s) URL.
+ * `token_endpoint: "https://evil/?secret=abc"` (query string) and
+ * `token_endpoint: "eyJ…"` (not a URL) both still redact.
+ */
+const DISCOVERY_METADATA_KEYS = new Set([
+  "token_endpoint",
+  "authorization_endpoint",
+  "revocation_endpoint",
+  "registration_endpoint",
+  "introspection_endpoint",
+  "userinfo_endpoint",
+  "jwks_uri",
+  "token_endpoint_auth_methods_supported",
+  "revocation_endpoint_auth_methods_supported",
+  "introspection_endpoint_auth_methods_supported",
+]);
+
+/** An absolute http(s) URL carrying no query string and no user:password. */
+function isPlainHttpUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  return url.search === "" && url.username === "" && url.password === "";
+}
+
+/** Does this string value, seen under this sensitive key, count as a secret? */
+function isKeyctxSecret(key: string, value: string): boolean {
+  if (value.length < KEYCTX_MIN_LENGTH) return false;
+  if (PLACEHOLDER.test(value)) return false;
+  if (DISCOVERY_METADATA_KEYS.has(key.toLowerCase()) && isPlainHttpUrl(value)) return false;
+  return true;
+}
+
 function hash8(secret: string): string {
   return createHash("sha256").update(secret, "utf8").digest("hex").slice(0, 8);
 }
@@ -78,8 +121,10 @@ function applyRule(s: string, rule: RedactRule, onHit?: (secret: string) => void
     const secret = wanted === 0 ? match : groups[wanted - 1];
     if (secret === undefined) return match;
     onHit?.(secret);
-    const kept = wanted === 0 ? "" : match.slice(0, match.lastIndexOf(secret));
-    return kept + placeholder(rule.id, secret);
+    if (wanted === 0) return placeholder(rule.id, secret);
+    // Keep whatever the rule matched around its capture group (e.g. "Bearer ").
+    const at = match.lastIndexOf(secret);
+    return match.slice(0, at) + placeholder(rule.id, secret) + match.slice(at + secret.length);
   });
 }
 
@@ -95,18 +140,35 @@ export function redactCommand(command: string[]): string[] {
   return command.map(redactString);
 }
 
-function redactValue(value: unknown, keyIsSensitive: boolean): unknown {
+/** The key a value sits under, or null when that key is not sensitive. */
+type SensitiveKey = string | null;
+
+function sensitiveKeyOf(key: string): SensitiveKey {
+  return SENSITIVE_KEY.test(key) ? key : null;
+}
+
+/**
+ * Define rather than assign: `out[key] = …` for the key `__proto__` invokes the
+ * prototype setter instead of creating an own property, which would drop the
+ * field from the cassette and move attacker-supplied data onto the result's
+ * prototype.
+ */
+function define(out: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+function redactValue(value: unknown, sensitiveKey: SensitiveKey): unknown {
   if (typeof value === "string") {
-    if (keyIsSensitive && value.length >= KEYCTX_MIN_LENGTH && !PLACEHOLDER.test(value)) {
+    if (sensitiveKey !== null && isKeyctxSecret(sensitiveKey, value)) {
       return placeholder(KEYCTX_RULE, value);
     }
     return redactString(value);
   }
-  if (Array.isArray(value)) return value.map((v) => redactValue(v, keyIsSensitive));
+  if (Array.isArray(value)) return value.map((v) => redactValue(v, sensitiveKey));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = redactValue(v, SENSITIVE_KEY.test(key));
+      define(out, key, redactValue(v, sensitiveKeyOf(key)));
     }
     return out;
   }
@@ -118,7 +180,7 @@ function redactValue(value: unknown, keyIsSensitive: boolean): unknown {
  * is never mutated.
  */
 export function redactFrame(frame: unknown): unknown {
-  return redactValue(frame, false);
+  return redactValue(frame, null);
 }
 
 // ---------------------------------------------------------------------------
@@ -138,11 +200,18 @@ export interface CassetteSecretHit extends SecretHit {
   method?: string;
 }
 
+/**
+ * Rules whose match is an arbitrary secret rather than a known literal prefix.
+ * Revealing the first characters of a `keyctx` value means printing the start of
+ * someone's password into a CI log, so these are masked whole.
+ */
+const OPAQUE_RULES = new Set([KEYCTX_RULE, "bearer"]);
+
 /** Show enough to locate the value, never enough to use it. */
-export function maskSecret(secret: string): string {
-  const visible = secret.slice(0, 4);
-  const hidden = Math.min(Math.max(secret.length - 4, 0), 16);
-  return `${visible}${"*".repeat(hidden)} (${secret.length} chars)`;
+export function maskSecret(secret: string, rule?: string): string {
+  const visible = rule !== undefined && OPAQUE_RULES.has(rule) ? "" : secret.slice(0, 4);
+  const hidden = Math.min(secret.length - visible.length, 16);
+  return `${visible}${"*".repeat(Math.max(hidden, 0))} (${secret.length} chars)`;
 }
 
 /** Run the rules in order against a string, collecting hits instead of a result. */
@@ -155,24 +224,24 @@ function scanString(s: string): Array<{ rule: string; secret: string }> {
   return hits;
 }
 
-function scanValue(value: unknown, path: string, keyIsSensitive: boolean, out: SecretHit[]): void {
+function scanValue(value: unknown, path: string, sensitiveKey: SensitiveKey, out: SecretHit[]): void {
   if (typeof value === "string") {
-    if (keyIsSensitive && value.length >= KEYCTX_MIN_LENGTH && !PLACEHOLDER.test(value)) {
-      out.push({ rule: KEYCTX_RULE, path, excerpt: maskSecret(value) });
+    if (sensitiveKey !== null && isKeyctxSecret(sensitiveKey, value)) {
+      out.push({ rule: KEYCTX_RULE, path, excerpt: maskSecret(value, KEYCTX_RULE) });
       return;
     }
     for (const hit of scanString(value)) {
-      out.push({ rule: hit.rule, path, excerpt: maskSecret(hit.secret) });
+      out.push({ rule: hit.rule, path, excerpt: maskSecret(hit.secret, hit.rule) });
     }
     return;
   }
   if (Array.isArray(value)) {
-    value.forEach((v, i) => scanValue(v, `${path}[${i}]`, keyIsSensitive, out));
+    value.forEach((v, i) => scanValue(v, `${path}[${i}]`, sensitiveKey, out));
     return;
   }
   if (value && typeof value === "object") {
     for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-      scanValue(v, path ? `${path}.${key}` : key, SENSITIVE_KEY.test(key), out);
+      scanValue(v, path ? `${path}.${key}` : key, sensitiveKeyOf(key), out);
     }
   }
 }
@@ -180,8 +249,90 @@ function scanValue(value: unknown, path: string, keyIsSensitive: boolean, out: S
 /** Report every secret a redaction pass would remove from this frame. */
 export function scanFrame(frame: unknown): SecretHit[] {
   const out: SecretHit[] = [];
-  scanValue(frame, "", false, out);
+  scanValue(frame, "", null, out);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Raw lines — anything the recorder could not parse as a JSON-RPC frame.
+// ---------------------------------------------------------------------------
+
+/**
+ * A raw line is not necessarily un-structured: `parseFrame` rejects JSON-RPC
+ * batch arrays and any frame missing `"jsonrpc":"2.0"`, and those still carry
+ * `params.arguments.password`. Scanning such a line as flat text would apply the
+ * shape rules only, silently skipping `keyctx` — a secret on disk under a header
+ * that claims redaction was applied.
+ *
+ * So: parse it, walk it for key-context secrets, and replace just those
+ * substrings in the original text. Everything around them keeps its exact bytes,
+ * which is what makes a raw entry a faithful transcript. A line that is not JSON
+ * at all gets the shape rules and nothing more — object walking has nothing to
+ * walk, and no key context exists to recover.
+ */
+function processRawLine(line: string, onHit?: (hit: SecretHit) => void): string {
+  let text = line;
+  for (const { path, secret } of collectKeyctxSecrets(line)) {
+    onHit?.({ rule: KEYCTX_RULE, path, excerpt: maskSecret(secret, KEYCTX_RULE) });
+    text = replaceLiteral(text, secret, placeholder(KEYCTX_RULE, secret));
+  }
+  let out = text;
+  for (const rule of REDACT_RULES) {
+    out = applyRule(out, rule, (secret) =>
+      onHit?.({ rule: rule.id, path: "raw", excerpt: maskSecret(secret, rule.id) })
+    );
+  }
+  return out;
+}
+
+/** Replace a secret wherever it appears, plain or JSON-escaped. */
+function replaceLiteral(text: string, secret: string, replacement: string): string {
+  let out = text.split(secret).join(replacement);
+  const escaped = JSON.stringify(secret).slice(1, -1);
+  if (escaped !== secret) out = out.split(escaped).join(replacement);
+  return out;
+}
+
+/** Key-context secrets inside a line that happens to hold JSON. */
+function collectKeyctxSecrets(line: string): Array<{ path: string; secret: string }> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return []; // not JSON — no keys, no key context
+  }
+  const found: Array<{ path: string; secret: string }> = [];
+  const walk = (value: unknown, path: string, sensitiveKey: SensitiveKey): void => {
+    if (typeof value === "string") {
+      if (sensitiveKey !== null && isKeyctxSecret(sensitiveKey, value)) {
+        found.push({ path, secret: value });
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => walk(v, `${path}[${i}]`, sensitiveKey));
+      return;
+    }
+    if (value && typeof value === "object") {
+      for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+        walk(v, path ? `${path}.${key}` : key, sensitiveKeyOf(key));
+      }
+    }
+  };
+  walk(parsed, "", null);
+  return found;
+}
+
+/** Redact a captured line that is not a JSON-RPC frame. */
+export function redactRawLine(line: string): string {
+  return processRawLine(line);
+}
+
+/** Report every secret a redaction pass would remove from a raw line. */
+export function scanRawLine(line: string): SecretHit[] {
+  const hits: SecretHit[] = [];
+  processRawLine(line, (hit) => hits.push(hit));
+  return hits;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +351,7 @@ export function redactCassette(cassette: Cassette): Cassette {
     entries: cassette.entries.map((entry) =>
       entry.type === "frame"
         ? { ...entry, frame: redactFrame(entry.frame) as JsonRpcFrame }
-        : { ...entry, data: redactString(entry.data) }
+        : { ...entry, data: redactRawLine(entry.data) }
     ),
   };
 }
@@ -215,7 +366,7 @@ export function scanCassette(cassette: Cassette): CassetteSecretHit[] {
         rule: hit.rule,
         dir: "header",
         path: `command[${i}]`,
-        excerpt: maskSecret(hit.secret),
+        excerpt: maskSecret(hit.secret, hit.rule),
       });
     }
   });
@@ -236,9 +387,7 @@ export function scanCassette(cassette: Cassette): CassetteSecretHit[] {
         hits.push({ ...hit, dir: entry.dir, ...(method ? { method } : {}) });
       }
     } else {
-      for (const hit of scanString(entry.data)) {
-        hits.push({ rule: hit.rule, dir: entry.dir, path: "raw", excerpt: maskSecret(hit.secret) });
-      }
+      for (const hit of scanRawLine(entry.data)) hits.push({ ...hit, dir: entry.dir });
     }
   }
 
