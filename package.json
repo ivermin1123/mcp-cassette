@@ -1,0 +1,48 @@
+{
+  "name": "mcp-cassette",
+  "version": "0.1.0",
+  "description": "Record a real MCP session once — replay it forever. VCR-style record/replay, contract snapshots, and safety checks for Model Context Protocol servers.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "testing",
+    "mock",
+    "record",
+    "replay",
+    "cassette",
+    "contract-testing",
+    "ci"
+  ],
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "mcp-cassette": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "ajv": "^8.17.0",
+    "ajv-formats": "^3.0.1",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
