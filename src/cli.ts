@@ -133,21 +133,29 @@ program
     collect,
     []
   )
+  .option("--allow-all-changes", "let every CHANGED pair pass — the explicit waive-everything switch")
   .argument("<command...>", "server command (prefix with -- )")
-  .action(async (cassette: string, command: string[], opts: { ignore: string[]; allowChangedPaths: string[] }) => {
+  .action(async (
+    cassette: string,
+    command: string[],
+    opts: { ignore: string[]; allowChangedPaths: string[]; allowAllChanges?: boolean }
+  ) => {
     try {
       const parsed = readCassette(cassette);
       // verify re-executes the recorded calls for real. A redacted cassette
       // re-fires placeholder credentials, so auth-bearing calls will drift.
+      // This heads the report so it's read next to the drift it explains.
       if (parsed.header.redaction?.applied) {
-        process.stderr.write(
-          "verify: cassette was recorded with redaction — recorded request params contain placeholders, " +
-            "so credential-bearing calls may fail against the live server\n"
+        process.stdout.write(
+          "⚠ cassette was recorded with redaction — recorded request params contain placeholders,\n" +
+            "  so credential-bearing calls may drift against the live server. Consider --ignore for\n" +
+            "  the affected paths, or keep a separate --no-redact recording just for verify.\n"
         );
       }
       const results = await verifyAgainstServer(parsed, command, {
         ignore: opts.ignore,
         allowChangedPaths: opts.allowChangedPaths,
+        allowAllChanges: opts.allowAllChanges === true,
       });
       printVerifyReport(results);
       // exitCode, not exit(): exit() can truncate a long report on a piped stdout.

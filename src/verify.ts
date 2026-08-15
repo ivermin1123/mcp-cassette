@@ -43,6 +43,8 @@ export interface VerifyOptions {
   ignore?: string[];
   /** Changed paths under these pointers do not fail the run. */
   allowChangedPaths?: string[];
+  /** Explicit waive-everything switch: every CHANGED pair passes. */
+  allowAllChanges?: boolean;
   timeoutMs?: number;
 }
 
@@ -127,7 +129,8 @@ function prepare(payload: unknown, ignore: string[]): unknown {
 
 /** A changed path passes when it equals an allowed pointer or nests under one. */
 export function isAllowedChange(path: string, allowed: string[]): boolean {
-  return allowed.some((a) => a === "" || path === a || path.startsWith(`${a}/`));
+  // "" never matches: waiving everything is --allow-all-changes, on purpose.
+  return allowed.some((a) => a !== "" && (path === a || path.startsWith(`${a}/`)));
 }
 
 export function classifyPair(
@@ -188,6 +191,13 @@ export async function verifyAgainstServer(
   serverCommand: string[],
   opts: VerifyOptions = {}
 ): Promise<VerifyResult[]> {
+  // "" would waive every change — an unset shell variable must not silently
+  // open that valve. The explicit switch for it is --allow-all-changes.
+  if ((opts.allowChangedPaths ?? []).includes("")) {
+    throw new Error(
+      "empty --allow-changed-paths would waive every change — pass --allow-all-changes if that is what you mean"
+    );
+  }
   // A malformed pointer must fail here, before any recorded request is
   // re-executed against the live server (they can have real side effects).
   for (const pointer of [...(opts.ignore ?? []), ...(opts.allowChangedPaths ?? [])]) {
@@ -215,7 +225,8 @@ export async function verifyAgainstServer(
       const { status, changes, detail } = classifyPair(pair.response, live, opts);
       const allowed =
         status === "CHANGED" &&
-        changes.every((c) => isAllowedChange(c.path, opts.allowChangedPaths ?? []));
+        (opts.allowAllChanges === true ||
+          changes.every((c) => isAllowedChange(c.path, opts.allowChangedPaths ?? [])));
       results.push({ label, status, changes, allowed, detail });
     }
   } finally {

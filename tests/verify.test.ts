@@ -157,7 +157,9 @@ describe("isAllowedChange", () => {
     expect(isAllowedChange("/tools/0/description", ["/tools"])).toBe(true);
     expect(isAllowedChange("/tools", ["/tools"])).toBe(true);
     expect(isAllowedChange("/toolsExtra", ["/tools"])).toBe(false);
-    expect(isAllowedChange("/anything", [""])).toBe(true);
+    // "" is rejected upstream by verifyAgainstServer; it must not act as a
+    // silent allow-everything here either (an unset shell variable, say).
+    expect(isAllowedChange("/anything", [""])).toBe(false);
     expect(isAllowedChange("/anything", [])).toBe(false);
   });
 });
@@ -397,5 +399,44 @@ describe("verify CLI (e2e)", () => {
     );
     expect(out.status).toBe(2);
     expect(out.stderr).toContain("invalid JSON Pointer");
+  }, 20_000);
+
+  it("rejects an empty --allow-changed-paths and points at --allow-all-changes", () => {
+    writeFixtureCassette();
+    // The accident this guards: --allow-changed-paths "$UNSET_VAR".
+    const out = spawnSync(
+      "node",
+      [CLI, "verify", cassettePath, "--allow-changed-paths", "", "--", "node", TINY],
+      { encoding: "utf8" }
+    );
+    expect(out.status).toBe(2);
+    expect(out.stderr).toContain("--allow-all-changes");
+  }, 20_000);
+
+  it("--allow-all-changes waives every CHANGED pair explicitly", () => {
+    writeFixtureCassette();
+    const raw = fs.readFileSync(cassettePath, "utf8").replace("echo:hi #1", "echo:hi #999");
+    fs.writeFileSync(cassettePath, raw);
+
+    const out = spawnSync(
+      "node",
+      [CLI, "verify", cassettePath, "--allow-all-changes", "--", "node", TINY],
+      { encoding: "utf8" }
+    );
+    expect(out.status).toBe(0);
+    expect(out.stdout).toContain("○ CHANGED (allowed) tools/call echo");
+  }, 20_000);
+
+  it("heads the report with a redaction warning and hints when the cassette was redacted", () => {
+    writeFixtureCassette();
+    const raw = fs.readFileSync(cassettePath, "utf8");
+    const withRedaction = raw.replace('"transport":"stdio"', '"transport":"stdio","redaction":{"applied":true}');
+    fs.writeFileSync(cassettePath, withRedaction);
+
+    const out = spawnSync("node", [CLI, "verify", cassettePath, "--", "node", TINY], { encoding: "utf8" });
+    expect(out.status).toBe(0);
+    expect(out.stdout.startsWith("⚠ cassette was recorded with redaction")).toBe(true);
+    expect(out.stdout).toContain("--ignore");
+    expect(out.stdout).toContain("--no-redact");
   }, 20_000);
 });
