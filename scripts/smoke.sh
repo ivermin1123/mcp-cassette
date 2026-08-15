@@ -61,18 +61,30 @@ node "$CLI" check --stdio "$SERVER"
 step "2/5 record a session by driving the record proxy with check"
 node "$CLI" check --stdio "node \"$CLI\" record -o \"$CASSETTE\" -- $SERVER"
 
-# The proxy flushes the cassette as its child shuts down; give the stream a
-# moment to settle before asserting on the file.
-sleep 1
+# The proxy flushes the cassette as its child shuts down, so the file can lag
+# the `check` above. Poll for the finished state instead of sleeping a fixed
+# interval: a fixed wait is a race that a slow or loaded runner loses, and a
+# flaky suite is a bad look for a tool that sells deterministic testing.
+WAIT_SECONDS=15
+POLL_INTERVAL=0.25
+deadline=$(( SECONDS + WAIT_SECONDS ))
 
-if [ ! -s "$CASSETTE" ]; then
-  echo "smoke: no cassette was written to $CASSETTE" >&2
-  exit 1
-fi
-if ! grep -q '"method":"initialize"' "$CASSETTE"; then
-  echo "smoke: cassette is missing the initialize frame" >&2
-  exit 1
-fi
+while :; do
+  if [ -s "$CASSETTE" ] && grep -q '"method":"initialize"' "$CASSETTE"; then
+    break
+  fi
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    if [ ! -s "$CASSETTE" ]; then
+      echo "smoke: no cassette was written to $CASSETTE within ${WAIT_SECONDS}s" >&2
+    else
+      echo "smoke: cassette at $CASSETTE still has no initialize frame after ${WAIT_SECONDS}s" >&2
+      echo "smoke: $(wc -l <"$CASSETTE" | tr -d ' ') line(s) present when the wait expired" >&2
+    fi
+    exit 1
+  fi
+  sleep "$POLL_INTERVAL"
+done
+
 echo "cassette: $(wc -l <"$CASSETTE" | tr -d ' ') lines recorded"
 
 step "3/5 check against the replayed cassette (offline)"
