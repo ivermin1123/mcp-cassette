@@ -13,6 +13,7 @@
 import { Command } from "commander";
 import fs from "node:fs";
 import { runRecord, type RecordMode } from "./record.js";
+import { DEFAULT_LISTEN, runHttpRecord } from "./proxy.js";
 import { runReplay, type OnMissMode } from "./replay.js";
 import { printVerifyReport, verifyAgainstServer, verifyFailed } from "./verify.js";
 import { runCheck, printReport } from "./check.js";
@@ -84,17 +85,28 @@ program
 
 program
   .command("record")
-  .description("Record a session: run as a transparent stdio proxy in front of a server command")
+  .description("Record a session: a transparent proxy in front of a stdio command or an HTTP server")
   .requiredOption("-o, --out <file>", "cassette output path (.cassette.jsonl)")
   .option("--no-redact", "record secrets verbatim instead of redacting them")
   .option("--mode <mode>", "once: refuse to overwrite an existing cassette; all: always re-record", "once")
-  .argument("<command...>", "server command (prefix with -- )")
-  .action(async (command: string[], opts: { out: string; redact: boolean; mode: string }) => {
+  .option("--http <url>", "record a Streamable HTTP server: reverse-proxy this upstream URL")
+  .option("--listen <host:port>", "address the HTTP recording proxy binds", DEFAULT_LISTEN)
+  .argument("[command...]", "server command (prefix with -- ); omit when using --http")
+  .action(async (command: string[], opts: { out: string; redact: boolean; mode: string; http?: string; listen: string }) => {
     try {
       if (opts.mode !== "once" && opts.mode !== "all") {
         throw new Error(`record: unknown --mode "${opts.mode}" (expected once or all)`);
       }
-      const code = await runRecord({ out: opts.out, command, redact: opts.redact, mode: opts.mode as RecordMode });
+      const mode = opts.mode as RecordMode;
+      if (opts.http && command.length > 0) throw new Error("record: use either --http or a server command, not both");
+      if (opts.http) {
+        const httpCode = await runHttpRecord({ out: opts.out, url: opts.http, listen: opts.listen, redact: opts.redact, mode });
+        process.exit(httpCode);
+      }
+      if (command.length === 0) {
+        throw new Error("record: missing target — pass a server command after -- , or --http <url>");
+      }
+      const code = await runRecord({ out: opts.out, command, redact: opts.redact, mode });
       process.exit(code);
     } catch (err) {
       process.stderr.write(`${(err as Error).message}\n`);
