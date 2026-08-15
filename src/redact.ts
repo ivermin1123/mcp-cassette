@@ -21,7 +21,7 @@ import type { JsonRpcFrame } from "./jsonrpc.js";
 
 export interface RedactRule {
   id: string;
-  /** Must be a global regex — matching is done with String.replace/matchAll. */
+  /** Must be a global regex — matching goes through String.replace, which resets lastIndex. */
   pattern: RegExp;
   /** Capture group holding the secret; omit to redact the whole match. */
   group?: number;
@@ -33,16 +33,21 @@ export interface RedactRule {
  * `anthropic` runs before `openai` because `sk-ant-…` also satisfies the
  * generic `sk-…` shape.
  */
-export const REDACT_RULES: RedactRule[] = [
+export const REDACT_RULES: readonly RedactRule[] = Object.freeze([
   { id: "bearer", pattern: /\bBearer\s+([A-Za-z0-9._~+/=-]{8,})/g, group: 1 },
-  { id: "jwt", pattern: /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*/g },
+  // Segment lengths are capped. `-` is both a class member and a word boundary,
+  // so `eyJ-eyJ-…` offers one candidate start per 4 characters; an unbounded
+  // first segment makes each of them rescan the rest of the line, which is
+  // quadratic — 6s on 128KB, stalling the proxy's synchronous data handler.
+  // Real JWT segments are far below these caps.
+  { id: "jwt", pattern: /\beyJ[A-Za-z0-9_-]{4,1024}\.[A-Za-z0-9_-]{4,8192}\.[A-Za-z0-9_-]{0,1024}/g },
   { id: "github", pattern: /\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,})/g },
   { id: "anthropic", pattern: /\bsk-ant-[A-Za-z0-9_-]{8,}/g },
   { id: "openai", pattern: /\bsk-[A-Za-z0-9_-]{16,}/g },
   { id: "slack", pattern: /\bxox[baprs]-[A-Za-z0-9-]{10,}/g },
   { id: "aws", pattern: /\bAKIA[0-9A-Z]{16}\b/g },
   { id: "google", pattern: /\bAIza[0-9A-Za-z_-]{35}/g },
-];
+]);
 
 /** A JSON key whose string value is treated as a secret regardless of shape. */
 export const SENSITIVE_KEY =
