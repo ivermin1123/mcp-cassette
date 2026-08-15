@@ -107,8 +107,8 @@ describe("replay matching", () => {
 describe("replay matching after redaction", () => {
   // The recorded cassette only ever saw placeholders; the live client still
   // sends the real credentials. Both must land on the same fingerprint.
-  const TOKEN_A = "ghp_Fak3T0k3nAAAA00000000000000000000000";
-  const TOKEN_B = "ghp_Fak3T0k3nBBBB11111111111111111111111";
+  const TOKEN_A = "ghp_NOTAREALTOKENAAAAAAAAAAAAAAAAAAAA";
+  const TOKEN_B = "ghp_NOTAREALTOKENBBBBBBBBBBBBBBBBBBBB";
 
   const callWith = (id: number, token: string): JsonRpcRequest =>
     req(id, "tools/call", { name: "deploy", arguments: { token } });

@@ -107,7 +107,7 @@ describe("record → replay round trip", () => {
 
 describe("secrets redaction end to end", () => {
   /** Must match tests/fixtures/tiny-server.mjs. */
-  const FAKE_GITHUB_TOKEN = "ghp_Fak3T0k3nF0rR3d4ct10nT3st0000000000";
+  const FAKE_GITHUB_TOKEN = "ghp_NOTAREALTOKENUSEDINTESTSONLY000000";
 
   /** The fixture server with its credential-echoing tool enabled. */
   const secretServer = [

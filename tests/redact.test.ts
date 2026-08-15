@@ -16,21 +16,23 @@ import type { Cassette } from "../src/cassette.js";
 /**
  * Fake credentials — shaped like the real thing, valid nowhere.
  *
- * The Slack one is deliberately *not* structurally accurate. A fixture with real
- * `xoxb-<digits>-<digits>-<alnum>` shape trips GitHub push protection, which
- * blocks the push for a token that never existed. The rules only key on the
- * prefix, so an obviously synthetic value exercises them identically — please
- * don't "fix" this one to look realistic.
+ * None of these are structurally accurate, on purpose. A fixture with a real
+ * token's shape trips GitHub push protection, which blocks the push over a
+ * credential that never existed — that already happened once here, with a
+ * convincing `xoxb-<digits>-<digits>-<alnum>` Slack fixture. Every rule keys on
+ * a prefix and a length, so an obviously synthetic value exercises it
+ * identically. Please don't "fix" these to look realistic.
  */
 const SECRETS = {
-  jwt: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSIsIm5hbWUiOiJ0ZXN0In0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
-  github: "ghp_Fak3T0k3nN0tR34l0000000000000000000",
-  githubPat: "github_pat_11ABCDEFG0abcdefghijkl_0123456789ABCDEFGHIJKLMNOP",
-  openai: "sk-Fak30p3nAIk3y0000000000000000000000000000000000",
-  anthropic: "sk-ant-api03-Fak3Anthr0p1cK3y00000000000000",
+  // {"alg":"none"} . {"note":"NOT-A-REAL-JWT"} . a signature that is not one
+  jwt: "eyJhbGciOiJub25lIn0.eyJub3RlIjoiTk9ULUEtUkVBTC1KV1QifQ.NOT-A-REAL-SIGNATURE",
+  github: "ghp_NOTAREALTOKENFORTESTSONLY0000000000",
+  githubPat: "github_pat_NOT_A_REAL_PAT_FOR_TESTS_ONLY_0000000000",
+  openai: "sk-NOT-A-REAL-OPENAI-KEY-000000",
+  anthropic: "sk-ant-NOT-A-REAL-ANTHROPIC-KEY-0000",
   slack: "xoxb-NOT-A-REAL-SLACK-TOKEN-FIXTURE",
-  aws: "AKIAIOSFODNN7EXAMPLE",
-  google: "AIzaSyFak3G00gl3AP1K3y00000000000000000",
+  aws: "AKIANOTAREALKEYXXX00",
+  google: "AIzaNOT-A-REAL-GOOGLE-API-KEY-000000000",
 };
 
 const PLACEHOLDER = /^\[REDACTED:[a-z]+:[0-9a-f]{8}\]$/;
