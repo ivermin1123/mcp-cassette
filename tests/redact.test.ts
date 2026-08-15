@@ -137,6 +137,17 @@ describe("placeholder determinism", () => {
     const once = redactFrame({ params: { token: SECRETS.github, note: SECRETS.aws } });
     expect(redactFrame(once)).toEqual(once);
   });
+
+  it("does not re-redact a placeholder sitting in a delimited field", () => {
+    // A placeholder is ordinary text to a pattern that reads a *slot* rather
+    // than a shape: the password position of a connection string still looks
+    // like a password once it holds `[REDACTED:urlcreds:…]`. Redacting it again
+    // would hash the placeholder and produce a second, different one — the
+    // failure that breaks replay matching on a twice-redacted cassette.
+    const once = redactString("postgres://user:hunter2hunter2@db.internal:5432/app");
+    expect(once).toMatch(/^postgres:\/\/user:\[REDACTED:urlcreds:[0-9a-f]{8}\]@db\.internal:5432\/app$/);
+    expect(redactString(once)).toBe(once);
+  });
 });
 
 describe("redactFrame", () => {
