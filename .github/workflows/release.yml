@@ -69,3 +69,27 @@ jobs:
         run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+      # `uses: ivermin1123/mcp-cassette@v0` resolves a *tag*, not a range, so
+      # without this step the action freezes at whatever v0 pointed to when it
+      # was first cut and no consumer ever sees an update. Moving a floating
+      # major tag onto each release is how GitHub's own actions are
+      # distributed, and it is what makes the short `@v0` form in the README
+      # honest.
+      #
+      # Last on purpose: it runs only once npm and the GitHub Release have both
+      # succeeded, so `@v0` can never point at a version that failed to ship.
+      - name: Move the floating major tag
+        run: |
+          set -euo pipefail
+          # v0.1.2 -> v0 ; keeps working unchanged at v1 and beyond.
+          MAJOR="${GITHUB_REF_NAME%%.*}"
+          # A prerelease must not become what `@v0` resolves to.
+          case "$GITHUB_REF_NAME" in
+            *-*) echo "prerelease $GITHUB_REF_NAME — leaving $MAJOR where it is"; exit 0 ;;
+          esac
+          # Lightweight on purpose: no committer identity needed, and the tag
+          # this points at carries the real release metadata.
+          git tag -f "$MAJOR" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$MAJOR"
+          echo "$MAJOR now points at $GITHUB_REF_NAME ($GITHUB_SHA)"

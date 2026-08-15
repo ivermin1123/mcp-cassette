@@ -3,7 +3,8 @@
 Releases are cut by pushing a `v*` tag. The
 [`release.yml`](.github/workflows/release.yml) workflow does the rest: it
 verifies the tag matches `package.json`, runs the tests, publishes to npm with
-provenance, and creates the GitHub Release with generated notes.
+provenance, creates the GitHub Release with generated notes, and moves the
+floating `v0` tag onto the new release.
 
 Nothing is published from a laptop. If you find yourself running `npm publish`
 locally, something has gone wrong — fix the workflow instead.
@@ -34,6 +35,40 @@ it is undone:
   ≥ 11.5.1. The Node 22 runner bundles npm 10.9.x, which has no OIDC support at
   all. The version is pinned rather than `@latest` so a new npm major cannot
   land in the release path unannounced.
+
+## The floating `v0` tag
+
+The repository ships a GitHub Action as well as an npm package, and the two are
+distributed on completely different mechanisms. npm resolves `mcp-cassette@0.1.2`
+from the registry. `uses: ivermin1123/mcp-cassette@v0` resolves a **git ref** —
+a tag, not a range. Nothing about `@v0` means "the latest 0.x"; it means
+"whatever commit the tag `v0` currently names".
+
+So the last step of `release.yml` force-moves `v0` onto the commit just
+released:
+
+```bash
+git tag -f v0 "$GITHUB_SHA"
+git push -f origin refs/tags/v0
+```
+
+Three properties of that step are deliberate:
+
+- **It runs last.** npm and the GitHub Release both have to succeed first, so
+  `@v0` can never resolve to a version that failed to ship.
+- **The major is derived from the tag** (`v0.1.2` → `v0`), so nothing needs
+  editing at v1. The step keeps working across the major bump.
+- **Prereleases are skipped.** A `v0.2.0-rc.1` tag leaves `v0` where it is —
+  a release candidate must not become what every consumer's `@v0` points at.
+
+Without this step the action is not broken in any way CI would catch: `v0`
+simply stays frozen at the first release it was cut from, consumers pin to it
+happily, and no one ever receives an update. That failure is silent, which is
+why the mechanism is written down here rather than left to whoever cut the tag.
+
+A floating tag is mutable by design, which is the trade GitHub's own actions
+make. Anyone who wants immutability pins a full version (`@v0.1.2`) or a commit
+SHA, and both keep working — moving `v0` never rewrites the tag it moved from.
 
 ### One-time setup: the trusted publisher
 
@@ -148,6 +183,17 @@ block again and revoke the token.
    npx mcp-cassette@latest check --stdio "npx -y @modelcontextprotocol/server-everything stdio"
    ```
 
+8. **Confirm `v0` moved**, so the action consumers pin actually updated:
+
+   ```bash
+   git fetch --tags --force
+   git rev-parse v0 v0.1.2      # both must print the same SHA
+   ```
+
+   They will disagree if the release run stopped before its last step. Fix it
+   by moving the tag by hand — `git tag -f v0 v0.1.2 && git push -f origin
+   refs/tags/v0` — rather than by cutting another release.
+
 ## If a release fails
 
 The workflow steps run in order — tag check, tests, publish, GitHub Release — so
@@ -165,6 +211,8 @@ where it stopped tells you what to do.
   reused. Do not try to republish the same number. Create the GitHub Release by
   hand (`gh release create v0.1.1 --generate-notes`) if that was the step that
   failed, or ship a patch release if the published artifact is actually broken.
+  Either way check `v0` afterwards — it is the last step, so anything that
+  stopped the run left it behind. See step 8 above.
 
 - **`npm publish` failed with `ENEEDAUTH`, `E404`, or an OIDC exchange error.**
   Authentication, not the package. Check in this order:
