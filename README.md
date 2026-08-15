@@ -189,17 +189,17 @@ Heuristics distilled from tool-poisoning research and the MCP security literatur
 
 Heuristics, not proofs — treat findings as review triggers, and pair with a dedicated security scanner for depth.
 
-## Cassette format (open, v1)
+## Cassette format (open, v2)
 
 Append-only JSONL. Line 1 is a header; each following line is one captured frame with direction and a millisecond offset:
 
 ```jsonl
-{"type":"header","cassetteVersion":1,"recorder":"mcp-cassette@0.1.0","startedAt":"...","transport":"stdio","command":["npx","-y","..."],"redaction":{"applied":true}}
+{"type":"header","cassetteVersion":2,"recorder":"mcp-cassette@0.3.0","startedAt":"...","transport":"stdio","command":["npx","-y","..."],"redaction":{"applied":true}}
 {"type":"frame","t":12,"dir":"c2s","frame":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}}
 {"type":"frame","t":38,"dir":"s2c","frame":{"jsonrpc":"2.0","id":1,"result":{...}}}
 ```
 
-Non-JSON-RPC lines (servers that log to stdout) are preserved as `{"type":"raw",...}` — a cassette is a faithful transcript even of misbehaving servers. Interactions appended later by `replay --on-miss passthrough` carry `"origin":"live"`. The format is stable and documented so other tools can consume it; the v2 direction (streamed results, lifecycle eras, scenario states) is sketched in [docs/cassette-format-v2.md](docs/cassette-format-v2.md).
+Non-JSON-RPC lines (servers that log to stdout) are preserved as `{"type":"raw",...}` — a cassette is a faithful transcript even of misbehaving servers. Interactions appended later by `replay --on-miss passthrough` carry `"origin":"live"`. The format is stable and documented so other tools can consume it. v1 cassettes read forever; v2 adds optional fields for lifecycle eras, HTTP transport, and streamed (SSE) responses — see [docs/cassette-format-v2.md](docs/cassette-format-v2.md). Files from a newer format version are refused with a clear error rather than half-read.
 
 ## Secrets redaction
 
