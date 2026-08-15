@@ -6,12 +6,17 @@
  * Env flags:
  *   TINY_EVIL=1     add a poisoned tool + a broken-schema tool (for lint/check tests)
  *   TINY_V2=1       serve a modified tool surface (for snapshot-diff tests)
+ *   TINY_SECRETS=1  add a tool that takes and echoes a credential (for redaction tests)
  */
 
 import readline from "node:readline";
 
 const evil = process.env.TINY_EVIL === "1";
 const v2 = process.env.TINY_V2 === "1";
+const secrets = process.env.TINY_SECRETS === "1";
+
+/** Shaped like a GitHub PAT, valid nowhere. Mirrored in tests/e2e.test.ts. */
+const FAKE_GITHUB_TOKEN = "ghp_Fak3T0k3nF0rR3d4ct10nT3st0000000000";
 
 const tools = [
   {
@@ -53,6 +58,18 @@ if (v2) {
     name: "slugify",
     description: "Turn a title into a URL slug.",
     inputSchema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
+  });
+}
+
+if (secrets) {
+  tools.push({
+    name: "leak",
+    description: "Take a credential and hand it straight back — exercises secret redaction.",
+    inputSchema: {
+      type: "object",
+      properties: { token: { type: "string", description: "An API token" } },
+      required: ["token"],
+    },
   });
 }
 
@@ -121,6 +138,18 @@ rl.on("line", (line) => {
       } else if (name === "add") {
         const sum = Number(params?.arguments?.a) + Number(params?.arguments?.b);
         send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: String(sum) }] } });
+      } else if (name === "leak") {
+        // Echoes the caller's token back and volunteers one of its own.
+        send({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [
+              { type: "text", text: `received:${params?.arguments?.token}` },
+              { type: "text", text: `server token: ${FAKE_GITHUB_TOKEN}` },
+            ],
+          },
+        });
       } else if (name === "slugify") {
         const slug = String(params?.arguments?.title ?? "").toLowerCase().replace(/\s+/g, "-");
         send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: slug }] } });
