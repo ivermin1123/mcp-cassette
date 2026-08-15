@@ -16,7 +16,7 @@ const v2 = process.env.TINY_V2 === "1";
 const secrets = process.env.TINY_SECRETS === "1";
 
 /** Shaped like a GitHub PAT, valid nowhere. Mirrored in tests/e2e.test.ts. */
-const FAKE_GITHUB_TOKEN = "ghp_Fak3T0k3nF0rR3d4ct10nT3st0000000000";
+const FAKE_GITHUB_TOKEN = "ghp_NOTAREALTOKENUSEDINTESTSONLY000000";
 
 const tools = [
   {
