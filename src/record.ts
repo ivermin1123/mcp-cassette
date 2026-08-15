@@ -11,17 +11,22 @@
  * originals, so redaction stays invisible to the live session.
  */
 
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { CassetteWriter } from "./cassette.js";
 import { LineBuffer, parseFrame } from "./jsonrpc.js";
 import { redactCommand, redactFrame, redactRawLine } from "./redact.js";
 import type { JsonRpcFrame } from "./jsonrpc.js";
 
+export type RecordMode = "once" | "all";
+
 export interface RecordOptions {
   out: string;
   command: string[];
   /** Redact secrets before writing. Default: true. */
   redact?: boolean;
+  /** "once" (default): refuse to overwrite an existing cassette. "all": always re-record. */
+  mode?: RecordMode;
 }
 
 export function runRecord(opts: RecordOptions): Promise<number> {
@@ -29,6 +34,14 @@ export function runRecord(opts: RecordOptions): Promise<number> {
     const [cmd, ...args] = opts.command;
     if (!cmd) {
       reject(new Error("record: missing server command after --"));
+      return;
+    }
+    if ((opts.mode ?? "once") === "once" && fs.existsSync(opts.out)) {
+      reject(
+        new Error(
+          `record: ${opts.out} already exists — replay it, or pass --mode all to re-record over it`
+        )
+      );
       return;
     }
 
