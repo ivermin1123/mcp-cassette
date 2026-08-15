@@ -95,19 +95,28 @@ export function normalizeForDiff(value: unknown): unknown {
   return value;
 }
 
-/** Remove the value at a JSON Pointer, if present. Missing paths are a no-op. */
+const IGNORED_SENTINEL = "[ignored]";
+
+/** Blank out the value at a JSON Pointer, if present. Missing paths are a no-op. */
 export function removePointer(value: unknown, pointer: string): void {
   const segments = splitPointer(pointer);
   if (segments.length === 0) return; // "" points at the root; nothing to remove it from
   let parent: unknown = value;
   for (const seg of segments.slice(0, -1)) {
-    if (Array.isArray(parent)) parent = parent[Number(seg)];
+    if (Array.isArray(parent)) parent = /^\d+$/.test(seg) ? parent[Number(seg)] : undefined;
     else if (parent && typeof parent === "object") parent = (parent as Record<string, unknown>)[seg];
     else return;
   }
   const last = segments[segments.length - 1]!;
-  if (Array.isArray(parent)) parent.splice(Number(last), 1);
-  else if (parent && typeof parent === "object") delete (parent as Record<string, unknown>)[last];
+  if (Array.isArray(parent)) {
+    // Replace, never splice: removal would re-index the tail and misalign the
+    // two payloads when their lengths differ. A non-numeric segment under an
+    // array is a typo'd pointer, not index 0 — leave the payload untouched.
+    if (!/^\d+$/.test(last) || Number(last) >= parent.length) return;
+    parent[Number(last)] = IGNORED_SENTINEL;
+  } else if (parent && typeof parent === "object") {
+    delete (parent as Record<string, unknown>)[last];
+  }
 }
 
 function prepare(payload: unknown, ignore: string[]): unknown {
@@ -179,6 +188,11 @@ export async function verifyAgainstServer(
   serverCommand: string[],
   opts: VerifyOptions = {}
 ): Promise<VerifyResult[]> {
+  // A malformed pointer must fail here, before any recorded request is
+  // re-executed against the live server (they can have real side effects).
+  for (const pointer of [...(opts.ignore ?? []), ...(opts.allowChangedPaths ?? [])]) {
+    splitPointer(pointer);
+  }
   const pairs = collectVerifyPairs(cassette);
   const results: VerifyResult[] = [];
   const { client } = await MiniClient.connect({ kind: "stdio", command: serverCommand }, opts.timeoutMs);
@@ -215,24 +229,28 @@ export function verifyFailed(results: VerifyResult[]): boolean {
 }
 
 export function printVerifyReport(results: VerifyResult[], write = (s: string) => process.stdout.write(s)): void {
+  // One write for the whole report: like `redact --scan`, an unbounded report
+  // followed by process.exit() can be truncated on a piped stdout.
+  const lines: string[] = [];
   for (const r of results) {
     if (r.status === "MATCH") {
-      write(`✓ MATCH    ${r.label}\n`);
+      lines.push(`✓ MATCH    ${r.label}\n`);
     } else if (r.status === "CHANGED") {
-      write(`${r.allowed ? "○ CHANGED (allowed)" : "✗ CHANGED "} ${r.label}\n`);
+      lines.push(`${r.allowed ? "○ CHANGED (allowed)" : "✗ CHANGED "} ${r.label}\n`);
       for (const c of r.changes.slice(0, 10)) {
-        write(`    ${c.path || "/"}: ${formatValue(c.recorded)} → ${formatValue(c.live)}\n`);
+        lines.push(`    ${c.path || "/"}: ${formatValue(c.recorded)} → ${formatValue(c.live)}\n`);
       }
-      if (r.changes.length > 10) write(`    … ${r.changes.length - 10} more path(s)\n`);
+      if (r.changes.length > 10) lines.push(`    … ${r.changes.length - 10} more path(s)\n`);
     } else {
-      write(`✗ ${r.status} ${r.label}${r.detail ? ` — ${r.detail}` : ""}\n`);
+      lines.push(`✗ ${r.status} ${r.label}${r.detail ? ` — ${r.detail}` : ""}\n`);
     }
   }
   const count = (s: VerifyStatus) => results.filter((r) => r.status === s).length;
   const waived = results.filter((r) => r.status === "CHANGED" && r.allowed).length;
-  write(
+  lines.push(
     `verify: ${count("MATCH")} match, ${count("CHANGED")} changed` +
       (waived > 0 ? ` (${waived} allowed)` : "") +
       `, ${count("ERROR-SHAPE-CHANGED")} error-shape-changed, ${count("MISSING")} missing\n`
   );
+  write(lines.join(""));
 }

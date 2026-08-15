@@ -136,15 +136,25 @@ program
   .argument("<command...>", "server command (prefix with -- )")
   .action(async (cassette: string, command: string[], opts: { ignore: string[]; allowChangedPaths: string[] }) => {
     try {
-      const results = await verifyAgainstServer(readCassette(cassette), command, {
+      const parsed = readCassette(cassette);
+      // verify re-executes the recorded calls for real. A redacted cassette
+      // re-fires placeholder credentials, so auth-bearing calls will drift.
+      if (parsed.header.redaction?.applied) {
+        process.stderr.write(
+          "verify: cassette was recorded with redaction — recorded request params contain placeholders, " +
+            "so credential-bearing calls may fail against the live server\n"
+        );
+      }
+      const results = await verifyAgainstServer(parsed, command, {
         ignore: opts.ignore,
         allowChangedPaths: opts.allowChangedPaths,
       });
       printVerifyReport(results);
-      process.exit(verifyFailed(results) ? 1 : 0);
+      // exitCode, not exit(): exit() can truncate a long report on a piped stdout.
+      process.exitCode = verifyFailed(results) ? 1 : 0;
     } catch (err) {
       process.stderr.write(`verify failed: ${(err as Error).message}\n`);
-      process.exit(2);
+      process.exitCode = 2;
     }
   });
 

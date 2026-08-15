@@ -20,11 +20,13 @@ export {
   collectVerifyPairs,
   isAllowedChange,
   normalizeForDiff,
+  pairLabel,
   printVerifyReport,
   removePointer,
   verifyAgainstServer,
   verifyFailed,
   type VerifyOptions,
+  type VerifyPair,
   type VerifyResult,
   type VerifyStatus,
 } from "./verify.js";
