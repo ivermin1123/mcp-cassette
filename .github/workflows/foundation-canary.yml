@@ -125,6 +125,16 @@ jobs:
   #   node dist/cli.js check --stdio "node dist/cli.js record \
   #     -o tests/fixtures/tiny-server.golden.cassette.jsonl \
   #     -- node tests/fixtures/tiny-server.mjs"
+  #
+  # That driver is `check`, so the recording stops at the handshake and
+  # tools/list — enough to prove replay serves a lifecycle, and all the
+  # scenarios reachable today can ask for anyway.
+  #
+  # TODO: when upstream ships stdio support, replace it with a committed
+  # generator script and record a fuller golden cassette — tools/call over each
+  # fixture tool, plus an error case — so the suite meets a replay that can
+  # answer more than two methods. The pass/fail count is only worth reading
+  # once the cassette is deeper than the questions being asked.
   conformance-probe:
     name: conformance-probe (official suite vs. our replay)
     runs-on: ubuntu-latest
