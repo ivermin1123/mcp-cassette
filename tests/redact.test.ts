@@ -13,7 +13,15 @@ import {
 } from "../src/redact.js";
 import type { Cassette } from "../src/cassette.js";
 
-/** Fake credentials — shaped like the real thing, valid nowhere. */
+/**
+ * Fake credentials — shaped like the real thing, valid nowhere.
+ *
+ * The Slack one is deliberately *not* structurally accurate. A fixture with real
+ * `xoxb-<digits>-<digits>-<alnum>` shape trips GitHub push protection, which
+ * blocks the push for a token that never existed. The rules only key on the
+ * prefix, so an obviously synthetic value exercises them identically — please
+ * don't "fix" this one to look realistic.
+ */
 const SECRETS = {
   jwt: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSIsIm5hbWUiOiJ0ZXN0In0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
   github: "ghp_Fak3T0k3nN0tR34l0000000000000000000",
