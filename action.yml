@@ -1,0 +1,170 @@
+name: mcp-cassette contract gate
+description: >-
+  Health-check a live MCP server and gate schema drift against a committed
+  contract snapshot, with one self-updating pull-request comment.
+author: Hoang Le
+
+branding:
+  icon: disc
+  color: purple
+
+inputs:
+  server-command:
+    description: >-
+      Command that starts the MCP server on stdio, e.g. "node dist/server.js".
+      Run any build step yourself before this action.
+    required: true
+  snapshot-file:
+    description: Path to the committed contract snapshot.
+    required: false
+    default: mcp-contract.snapshot.json
+  mode:
+    description: >-
+      What to run: "check" (health + safety lint), "snapshot" (contract drift),
+      or "both".
+    required: false
+    default: both
+  fail-on:
+    description: >-
+      Lowest drift tier that fails the job: "breaking", or "dangerous" to also
+      gate enum widening, default-value drift and added optional parameters.
+    required: false
+    default: breaking
+  comment:
+    description: >-
+      Post (and afterwards update in place) a single results comment on the pull
+      request. Ignored outside pull-request events.
+    required: false
+    default: 'true'
+  version:
+    description: >-
+      Version of mcp-cassette to run from npm. The special value "local" runs
+      the CLI built in this action's own checkout, which is how this repository
+      dogfoods the action against itself; it is not useful to consumers.
+    required: false
+    default: 0.1.2
+  github-token:
+    description: >-
+      Token used to write the pull-request comment. Needs `pull-requests: write`.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    # Inputs reach the shell through the environment, never through ${{ }}
+    # interpolation: a server command is arbitrary text, and interpolating it
+    # into a script body would let it run as script.
+    - name: Resolve the CLI and validate inputs
+      id: setup
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        COMMENT: ${{ inputs.comment }}
+        VERSION: ${{ inputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        case "$MODE" in
+          check|snapshot|both) ;;
+          *) echo "::error::mode must be check, snapshot or both (got '$MODE')"; exit 1 ;;
+        esac
+        case "$FAIL_ON" in
+          breaking|dangerous) ;;
+          *) echo "::error::fail-on must be breaking or dangerous (got '$FAIL_ON')"; exit 1 ;;
+        esac
+        case "$COMMENT" in
+          true|false) ;;
+          *) echo "::error::comment must be true or false (got '$COMMENT')"; exit 1 ;;
+        esac
+
+        if [ "$VERSION" = "local" ]; then
+          CLI_BIN="$ACTION_PATH/dist/cli.js"
+          if [ ! -f "$CLI_BIN" ]; then
+            echo "::error::version 'local' needs a built CLI at $CLI_BIN — run 'npm run build' first"
+            exit 1
+          fi
+          echo "cli=node $CLI_BIN" >> "$GITHUB_OUTPUT"
+        else
+          echo "cli=npx -y mcp-cassette@$VERSION" >> "$GITHUB_OUTPUT"
+        fi
+
+    # `check` and `snapshot` record their exit codes instead of aborting: the
+    # comment is the point of this action, and a job that dies before writing it
+    # reports drift only to whoever opens the raw log. The gate step at the end
+    # turns those codes back into a job result.
+    - name: Health + safety check
+      id: check
+      if: inputs.mode == 'check' || inputs.mode == 'both'
+      shell: bash
+      env:
+        CLI: ${{ steps.setup.outputs.cli }}
+        SERVER_COMMAND: ${{ inputs.server-command }}
+      run: |
+        set -uo pipefail
+        $CLI check --stdio "$SERVER_COMMAND" 2>&1 | tee "$RUNNER_TEMP/mcp-cassette-check.log"
+        echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+    - name: Contract drift
+      id: snapshot
+      if: inputs.mode == 'snapshot' || inputs.mode == 'both'
+      shell: bash
+      env:
+        CLI: ${{ steps.setup.outputs.cli }}
+        SERVER_COMMAND: ${{ inputs.server-command }}
+        SNAPSHOT_FILE: ${{ inputs.snapshot-file }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        set -uo pipefail
+        if [ ! -f "$SNAPSHOT_FILE" ]; then
+          echo "::error::no contract snapshot at $SNAPSHOT_FILE — create one with 'npx mcp-cassette snapshot --stdio \"<server>\"' and commit it"
+          echo "status=2" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # --json goes to a file so the diff survives for the comment step; the
+        # human-readable form is what shows up in the log.
+        $CLI snapshot --check --json --fail-on "$FAIL_ON" -f "$SNAPSHOT_FILE" \
+          --stdio "$SERVER_COMMAND" > "$RUNNER_TEMP/mcp-cassette-diff.json" 2> "$RUNNER_TEMP/mcp-cassette-diff.err"
+        STATUS=$?
+        cat "$RUNNER_TEMP/mcp-cassette-diff.err" >&2 || true
+        if [ "$STATUS" -ge 2 ]; then
+          echo "::error::snapshot --check could not run — see the log above"
+        fi
+        echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+    # One render, three destinations: the job log, the step summary, and — on a
+    # pull request — a single comment that is edited in place on every re-run
+    # rather than appended to.
+    - name: Report
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        MODE: ${{ inputs.mode }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        SNAPSHOT_FILE: ${{ inputs.snapshot-file }}
+        COMMENT: ${{ inputs.comment }}
+        CHECK_STATUS: ${{ steps.check.outputs.status }}
+        SNAPSHOT_STATUS: ${{ steps.snapshot.outputs.status }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        EVENT_NAME: ${{ github.event_name }}
+      run: node "$GITHUB_ACTION_PATH/scripts/contract-report.mjs"
+
+    - name: Gate
+      shell: bash
+      env:
+        CHECK_STATUS: ${{ steps.check.outputs.status }}
+        SNAPSHOT_STATUS: ${{ steps.snapshot.outputs.status }}
+      run: |
+        set -euo pipefail
+        FAILED=0
+        if [ "${CHECK_STATUS:-0}" != "0" ]; then
+          echo "::error::mcp-cassette check failed (exit ${CHECK_STATUS})"
+          FAILED=1
+        fi
+        if [ "${SNAPSHOT_STATUS:-0}" != "0" ]; then
+          echo "::error::mcp-cassette contract gate failed (exit ${SNAPSHOT_STATUS})"
+          FAILED=1
+        fi
+        exit "$FAILED"
