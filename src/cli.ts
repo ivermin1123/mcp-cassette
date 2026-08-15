@@ -29,7 +29,7 @@ import {
   writeSnapshot,
   type FailOn,
 } from "./snapshot.js";
-import type { Target } from "./client.js";
+import type { EraOption, Target } from "./client.js";
 
 /** Split a command string honoring single/double quotes: `npx -y "my server"` */
 export function tokenize(cmd: string): string[] {
@@ -66,6 +66,13 @@ function resolveTarget(opts: { stdio?: string; url?: string }): { target: Target
     return { target: { kind: "http", url: opts.url }, label: opts.url };
   }
   throw new Error("missing target: pass --stdio \"<command>\" or --url <http-url>");
+}
+
+const ERA_HELP = "server lifecycle: legacy (initialize handshake) | modern (2026-07-28 stateless) | auto";
+
+function resolveEra(value: string): EraOption {
+  if (value === "auto" || value === "legacy" || value === "modern") return value;
+  throw new Error(`--era must be legacy | modern | auto (got "${value}")`);
 }
 
 const program = new Command();
@@ -134,13 +141,20 @@ program
     []
   )
   .option("--allow-all-changes", "let every CHANGED pair pass — the explicit waive-everything switch")
-  .argument("<command...>", "server command (prefix with -- )")
+  .option("--url <url>", "verify against a Streamable HTTP server instead of a spawned command")
+  .option("--era <era>", ERA_HELP, "auto")
+  .argument("[command...]", "server command (prefix with -- ); omit when using --url")
   .action(async (
     cassette: string,
     command: string[],
-    opts: { ignore: string[]; allowChangedPaths: string[]; allowAllChanges?: boolean }
+    opts: { ignore: string[]; allowChangedPaths: string[]; allowAllChanges?: boolean; url?: string; era: string }
   ) => {
     try {
+      if (opts.url && command.length > 0) throw new Error("use either --url or a server command, not both");
+      if (!opts.url && command.length === 0) {
+        throw new Error("missing target: pass a server command after -- , or --url <http-url>");
+      }
+      const server: Target = opts.url ? { kind: "http", url: opts.url } : { kind: "stdio", command };
       const parsed = readCassette(cassette);
       // verify re-executes the recorded calls for real. A redacted cassette
       // re-fires placeholder credentials, so auth-bearing calls will drift.
@@ -152,10 +166,11 @@ program
             "  the affected paths, or keep a separate --no-redact recording just for verify.\n"
         );
       }
-      const results = await verifyAgainstServer(parsed, command, {
+      const results = await verifyAgainstServer(parsed, server, {
         ignore: opts.ignore,
         allowChangedPaths: opts.allowChangedPaths,
         allowAllChanges: opts.allowAllChanges === true,
+        era: resolveEra(opts.era),
       });
       printVerifyReport(results);
       // exitCode, not exit(): exit() can truncate a long report on a piped stdout.
@@ -171,11 +186,12 @@ program
   .description("Health + safety check: lifecycle, schemas (ajv 2020-12), description safety lint")
   .option("--stdio <command>", "stdio server command, e.g. \"npx -y @modelcontextprotocol/server-everything\"")
   .option("--url <url>", "Streamable HTTP server URL (experimental)")
+  .option("--era <era>", ERA_HELP, "auto")
   .option("--json", "machine-readable JSON output")
-  .action(async (opts: { stdio?: string; url?: string; json?: boolean }) => {
+  .action(async (opts: { stdio?: string; url?: string; era: string; json?: boolean }) => {
     try {
       const { target, label } = resolveTarget(opts);
-      const report = await runCheck(target, label);
+      const report = await runCheck(target, label, resolveEra(opts.era));
       if (opts.json) process.stdout.write(JSON.stringify(report, null, 2) + "\n");
       else printReport(report);
       process.exit(report.ok ? 0 : 1);
@@ -198,11 +214,13 @@ program
     "lowest tier that fails --check: breaking | dangerous",
     "breaking"
   )
+  .option("--era <era>", ERA_HELP, "auto")
   .option("--json", "machine-readable diff output (--check only)")
   .action(
     async (opts: {
       stdio?: string;
       url?: string;
+      era: string;
       file: string;
       check?: boolean;
       update?: boolean;
@@ -215,7 +233,7 @@ program
         }
         const failOn = opts.failOn as FailOn;
         const { target } = resolveTarget(opts);
-        const live = await captureContract(target);
+        const live = await captureContract(target, resolveEra(opts.era));
 
         if (opts.check) {
           if (!fs.existsSync(opts.file)) {

@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, not only those targeting main: a PR stacked on another
+  # PR's branch needs its own CI run, not "no checks reported".
   pull_request:
-    branches: [main]
   schedule:
     # Weekly, so the non-blocking smoke-canary job below reports upstream
     # reference-server drift even in a quiet week. Mondays, 06:00 UTC.
