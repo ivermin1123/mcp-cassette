@@ -47,6 +47,35 @@ describe("redactString rules", () => {
     });
   }
 
+  it("redacts only the password in a connection string, for any scheme", () => {
+    const dsns: Array<[string, string]> = [
+      ["postgres://app_user:s3cr3tP4ss@db.internal:5432/appdb", "postgres"],
+      ["redis://default:r3d1sPassw0rd@cache:6379/0", "redis"],
+      ["mongodb://admin:M0ng0Secret@mongo:27017/admin?authSource=admin", "mongodb"],
+      ["mysql://root:mysqlpw123@127.0.0.1:3306/shop", "mysql"],
+      ["amqp://guest:gu3stPass@rabbit:5672/vhost", "amqp"],
+      ["https://user:httpPassw0rd@api.example.com/v1", "https"],
+    ];
+    for (const [dsn, scheme] of dsns) {
+      const out = redactString(dsn);
+      const [before, after] = dsn.split(/:[^:/@]+@/);
+      expect(out).toMatch(/\[REDACTED:urlcreds:[0-9a-f]{8}\]/);
+      expect(out.startsWith(`${before}:[REDACTED:urlcreds:`)).toBe(true); // scheme, user kept
+      expect(out.endsWith(`@${after}`)).toBe(true); // host, port, path kept
+      expect(out).toContain(`${scheme}://`);
+    }
+  });
+
+  it("leaves a URL with no userinfo alone", () => {
+    for (const url of [
+      "postgres://app_user@db.internal:5432/appdb",
+      "https://api.example.com/v1/tokens",
+      "redis://cache:6379/0",
+    ]) {
+      expect(redactString(url)).toBe(url);
+    }
+  });
+
   it("keeps the word Bearer and redacts only the token", () => {
     const out = redactString(`Authorization: Bearer ${SECRETS.jwt}`);
     expect(out).toContain("Bearer [REDACTED:bearer:");
@@ -119,6 +148,22 @@ describe("redactFrame", () => {
     expect(out.params.name).toBe("deploy");
     expect(out.params.arguments.headers[0].value).toContain("Bearer [REDACTED:bearer:");
     expect(out.params.arguments.nested.deep.key).toMatch(/^\[REDACTED:aws:[0-9a-f]{8}\]$/);
+  });
+
+  it("redacts a connection string passed as a tool argument", () => {
+    const out = redactFrame({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "query",
+        arguments: { dsn: "postgres://app_user:s3cr3tP4ss@db.internal:5432/appdb", sql: "select 1" },
+      },
+    }) as Record<string, any>;
+    expect(out.params.arguments.dsn).toContain("postgres://app_user:[REDACTED:urlcreds:");
+    expect(out.params.arguments.dsn).toContain("@db.internal:5432/appdb");
+    expect(out.params.arguments.dsn).not.toContain("s3cr3tP4ss");
+    expect(out.params.arguments.sql).toBe("select 1");
   });
 
   it("redacts by key context regardless of the value's shape", () => {
@@ -275,6 +320,7 @@ describe("maskSecret", () => {
   it("masks opaque secrets whole — a leak detector must not print a password", () => {
     expect(maskSecret("hunter22", "keyctx")).toBe("******** (8 chars)");
     expect(maskSecret("abcd1234efgh", "bearer")).toBe("************ (12 chars)");
+    expect(maskSecret("s3cr3tP4ss", "urlcreds")).toBe("********** (10 chars)");
   });
 });
 

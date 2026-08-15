@@ -141,6 +141,7 @@ Each hit becomes a placeholder:
 | Rule | Catches |
 |---|---|
 | `bearer` | `Bearer <token>` (the word `Bearer` is kept) |
+| `urlcreds` | the password in `scheme://user:password@host` — any scheme, so `postgres://`, `redis://`, `mongodb://`, `mysql://` and `amqp://` connection strings are covered. Scheme, username, host and path are kept |
 | `jwt` | three-part `eyJ…` base64url tokens |
 | `github` | `ghp_` `gho_` `ghu_` `ghs_` `ghr_` `github_pat_` |
 | `openai` | `sk-…` |
