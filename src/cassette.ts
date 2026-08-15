@@ -34,6 +34,8 @@ export interface FrameEntry {
   t: number;
   dir: Direction;
   frame: JsonRpcFrame;
+  /** Present on entries appended by `replay --on-miss passthrough`, absent on originally recorded ones. */
+  origin?: "live";
 }
 
 export interface RawEntry {
