@@ -197,7 +197,7 @@ it("fails with a mismatch when the arguments drifted", async () => {
 ```
 
 ```
-CassetteMismatchError: mcp-cassette: no recorded answer for "tools/call" — method and tool
+CassetteMismatchError: mcp-cassette: no recorded answer for "tools/call", method and tool
 match a recording, but arguments differ at: /m (recorded "recorded", got "drifted").
 Re-record the cassette or adjust the interaction.
 ```
@@ -251,7 +251,18 @@ They are separate ids on purpose: "we could not classify this" and "we could not
 
 ### Where this stops
 
-**`snapshot --check` is finished, not in progress.** It gates one server against one committed file and classifies the diff into the tiers above. That is the whole intended scope, and no further rule families are planned: not `outputSchema`, not constraint direction, not `anyOf`/`oneOf`, not resolving `$ref`. Bugs in what exists still get fixed.
+**`snapshot --check` is finished, not in progress.** It gates one server against one committed file and classifies the diff into the tiers above. That is the whole intended scope. Bugs in what exists still get fixed; no further rule families are planned.
+
+Stated as a boundary rather than left for you to find by hitting it:
+
+| Covered | Not covered |
+|---|---|
+| Recursion into nested schemas, at any depth | `anyOf` / `oneOf` / `allOf` composition |
+| Stable rule IDs, and the four tiers above | Constraint direction: `minimum`/`maximum`, `minLength`/`maxLength`, `pattern`, `format` |
+| A CI gate with a configurable `--fail-on` | `outputSchema` |
+| A conservative guard that reports rather than guesses when it meets an unresolved `$ref` | Resolving `$ref` / `$defs` to compare what they point at |
+
+A change in the right-hand column is not missed silently. It surfaces as `input-schema-changed-unclassified` or `input-schema-ref-unclassified`, both of which count as breaking, so an unclassifiable change fails the gate instead of passing it.
 
 The reason is worth stating plainly rather than leaving you to discover it: **[`@kryptosai/mcp-observatory`](https://github.com/KryptosAI/mcp-observatory) already covers this ground, and covers more of it.** It is MIT, five months older, and its `lock create` / `lock verify` pair is the same one-command-against-one-committed-file workflow, with `test` and `diff --fail-on-schema-drift` alongside. Installed clean and run against three deliberately planted changes, it caught all three at sensible severities and gated correctly. If contract drift is your main problem, look there first. You will get more of it, maintained by people who are treating it as the product rather than as one command among several.
 
@@ -305,7 +316,7 @@ Every pattern in the rule set is proven free of super-linear backtracking by [re
 {
   "ruleId": "CAS-L001",
   "level": "error",
-  "message": { "text": "instruction-override phrasing (classic prompt-injection) (in description) — …" },
+  "message": { "text": "instruction-override phrasing (classic prompt-injection) (in description): ..." },
   "partialFingerprints": { "mcpCassetteFindingV1": "86f30c3c29712ff6" },
   "locations": [{ "logicalLocations": [{ "fullyQualifiedName": "get_weather", "kind": "member" }] }]
 }

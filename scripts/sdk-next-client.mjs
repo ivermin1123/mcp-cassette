@@ -64,10 +64,10 @@ let failed = false;
 function step(label, fn) {
   return Promise.resolve()
     .then(fn)
-    .then((detail) => console.log(`[ok]   ${label}${detail ? ` — ${detail}` : ""}`))
+    .then((detail) => console.log(`[ok]   ${label}${detail ? `: ${detail}` : ""}`))
     .catch((err) => {
       failed = true;
-      console.log(`[FAIL] ${label} — ${err?.message ?? err}`);
+      console.log(`[FAIL] ${label}: ${err?.message ?? err}`);
     });
 }
 
@@ -102,5 +102,5 @@ if (!failed) {
 
 await client.close().catch(() => {});
 
-console.log(failed ? "\nresult: SDK DRIFT SIGNAL — see the failures above" : "\nresult: the latest SDK still speaks the classic lifecycle");
+console.log(failed ? "\nresult: SDK DRIFT SIGNAL, see the failures above" : "\nresult: the latest SDK still speaks the classic lifecycle");
 process.exit(failed ? 1 : 0);

@@ -161,14 +161,14 @@ describe("formatMiss is the only renderer", () => {
   it("renders the exact sentences the terminal used to print", () => {
     expect(formatMiss({ kind: "empty-cassette" })).toBe("the cassette contains no request/response pairs at all");
     expect(formatMiss({ kind: "unknown-method", method: "prompts/get", recordedMethods: ["resources/read"] })).toBe(
-      'no recorded request has method "prompts/get" — recorded methods: resources/read'
+      'no recorded request has method "prompts/get". Recorded methods: resources/read'
     );
     expect(formatMiss({ kind: "unknown-tool", tool: "slugify", recordedTools: ["add", "echo"] })).toBe(
-      'no recorded tools/call for tool "slugify" — recorded tools: add, echo'
+      'no recorded tools/call for tool "slugify". Recorded tools: add, echo'
     );
     expect(formatMiss({ kind: "exhausted", fingerprint: "fp", recordedCount: 1 })).toBe(
       "this exact fingerprint was recorded 1 time(s), but every recorded response was already consumed " +
-        "earlier in this session — the client is calling it more often than the recording did"
+        "earlier in this session; the client is calling it more often than the recording did"
     );
     // Byte for byte what http-replay used to build inline.
     expect(formatMiss({ kind: "stream-exhausted", fingerprint: "fp", recordedCount: 2 })).toBe(

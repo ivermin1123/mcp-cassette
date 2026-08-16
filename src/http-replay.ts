@@ -166,8 +166,8 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
   const cassette = readCassette(cassettePath);
   if (cassette.header.transport !== "http") {
     throw new Error(
-      `replay --listen serves HTTP cassettes; ${cassettePath} was recorded over ${cassette.header.transport} — ` +
-        `replay it without --listen to serve it on stdio`
+      `replay --listen serves HTTP cassettes; ${cassettePath} was recorded over ${cassette.header.transport}. ` +
+        `Replay it without --listen to serve it on stdio`
     );
   }
   const onMiss = opts.onMiss ?? "error";
@@ -283,15 +283,15 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
   const checkHeaders = (req: http.IncomingMessage, frame: JsonRpcRequest) => {
     const sent = req.headers["mcp-session-id"];
     if (sessioned && sessionId && sent !== sessionId) {
-      warn(`"${frame.method}" arrived with session id ${sent ?? "absent"}, expected the minted one — answering anyway`);
+      warn(`"${frame.method}" arrived with session id ${sent ?? "absent"}, expected the minted one; answering anyway`);
     }
     const declared = req.headers["mcp-method"];
     if (era === "modern" && typeof declared === "string" && declared !== frame.method) {
-      warn(`Mcp-Method "${declared}" does not match the body's "${frame.method}" — answering anyway`);
+      warn(`Mcp-Method "${declared}" does not match the body's "${frame.method}"; answering anyway`);
     }
     const spoken = req.headers["mcp-protocol-version"];
     if (version && typeof spoken === "string" && spoken !== version) {
-      warn(`MCP-Protocol-Version "${spoken}" is not the recorded "${version}" — answering anyway`);
+      warn(`MCP-Protocol-Version "${spoken}" is not the recorded "${version}"; answering anyway`);
     }
   };
 
@@ -340,7 +340,7 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       : diagnoseMissReason(index, frame);
     missLog.push({ method: frame.method, request: frame, reason });
     const diagnosis = formatMiss(reason);
-    warn(`fingerprint miss for "${frame.method}" — ${diagnosis}`);
+    warn(`fingerprint miss for "${frame.method}": ${diagnosis}`);
     if (spy) {
       void forwardMiss(res, frame);
       return;
@@ -418,7 +418,7 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       // One GET endpoint, so one standalone stream. Serving the first is a
       // choice, not an accident, and a cassette with more should hear about it.
       if (standalone && streams.extraStandalone > 0) {
-        warn(`${streams.extraStandalone + 1} standalone GET stream(s) recorded — only the first is served`);
+        warn(`${streams.extraStandalone + 1} standalone GET stream(s) recorded; only the first is served`);
       }
       resolve({
         url: bound,

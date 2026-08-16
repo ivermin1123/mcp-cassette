@@ -79,7 +79,7 @@ export function useCassette(cassettePath: string, options: UseCassetteOptions = 
   const running = (): ReplayServer => {
     if (!server) {
       throw new Error(
-        `mcp-cassette: the replay server for ${file} is not running yet — read .url inside a test or beforeEach, not at describe scope`
+        `mcp-cassette: the replay server for ${file} is not running yet. Read .url inside a test or beforeEach, not at describe scope`
       );
     }
     return server;
@@ -109,19 +109,19 @@ export function useCassette(cassettePath: string, options: UseCassetteOptions = 
   return {
     get url(): string {
       if (transport !== "http") {
-        throw new Error(`mcp-cassette: ${file} is a stdio cassette — spawn .command instead of connecting to .url`);
+        throw new Error(`mcp-cassette: ${file} is a stdio cassette; spawn .command instead of connecting to .url`);
       }
       return running().url;
     },
     get command(): string[] {
       if (transport !== "stdio") {
-        throw new Error(`mcp-cassette: ${file} is an http cassette — connect to .url instead of spawning .command`);
+        throw new Error(`mcp-cassette: ${file} is an http cassette; connect to .url instead of spawning .command`);
       }
       return [process.execPath, cliPath(), "replay", file];
     },
     get server(): ReplayServer {
       if (transport !== "http") {
-        throw new Error(`mcp-cassette: ${file} is a stdio cassette — it has no in-process server`);
+        throw new Error(`mcp-cassette: ${file} is a stdio cassette; it has no in-process server`);
       }
       return running();
     },

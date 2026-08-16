@@ -241,7 +241,7 @@ export function formatMiss(reason: MissReason): string {
     case "exhausted":
       return (
         `this exact fingerprint was recorded ${reason.recordedCount} time(s), but every recorded response ` +
-        `was already consumed earlier in this session — the client is calling it more often than the recording did`
+        `was already consumed earlier in this session; the client is calling it more often than the recording did`
       );
     case "stream-exhausted":
       return (
@@ -249,9 +249,9 @@ export function formatMiss(reason: MissReason): string {
         `was already replayed earlier in this session`
       );
     case "unknown-method":
-      return `no recorded request has method "${reason.method}" — recorded methods: ${reason.recordedMethods.join(", ")}`;
+      return `no recorded request has method "${reason.method}". Recorded methods: ${reason.recordedMethods.join(", ")}`;
     case "unknown-tool":
-      return `no recorded tools/call for tool "${reason.tool}" — recorded tools: ${reason.recordedTools.join(", ")}`;
+      return `no recorded tools/call for tool "${reason.tool}". Recorded tools: ${reason.recordedTools.join(", ")}`;
     case "arguments-differ":
       return describeChanges(reason.changes, "arguments");
     case "params-differ":
@@ -446,7 +446,7 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
     const request = resolved.request;
     misses++;
     const diagnosis = diagnoseMiss(index, request);
-    process.stderr.write(`mcp-cassette replay: fingerprint miss for "${request.method}" — ${diagnosis}\n`);
+    process.stderr.write(`mcp-cassette replay: fingerprint miss for "${request.method}": ${diagnosis}\n`);
     if (onMiss === "passthrough") {
       const out = await forwardMiss(request).catch((err: Error): JsonRpcResponse => {
         forwardFailures++;

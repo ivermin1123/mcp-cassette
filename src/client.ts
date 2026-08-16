@@ -95,7 +95,7 @@ export class InputRequiredError extends Error {
     readonly method: string,
     readonly inputRequests: unknown
   ) {
-    super(`"${method}" needs client input (MRTR) — mcp-cassette runs non-interactively`);
+    super(`"${method}" needs client input (MRTR); mcp-cassette runs non-interactively`);
   }
 }
 
@@ -168,10 +168,10 @@ export class MiniClient {
       // request is the answer, not falling back to the other era.
       if (firstErr instanceof ModernServerError) throw firstErr;
       const second: Era = first === "modern" ? "legacy" : "modern";
-      logProbe(`${first} probe failed (${firstErr.message}) — trying ${second}`);
+      logProbe(`${first} probe failed (${firstErr.message}), trying ${second}`);
       return this.probe(second).catch((secondErr: Error) => {
         throw new Error(
-          `server answered neither era — ${first}: ${firstErr.message}; ${second}: ${secondErr.message}`
+          `server answered neither era. ${first}: ${firstErr.message}; ${second}: ${secondErr.message}`
         );
       });
     });

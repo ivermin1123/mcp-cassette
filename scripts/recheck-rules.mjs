@@ -21,7 +21,7 @@ import { check } from "recheck";
 import { LINT_RULES } from "../dist/lint.js";
 
 /** Rules that legitimately match without a regex. Each needs a reason. */
-const EXEMPT = new Map([["CAS-L008", "a length comparison — there is no pattern to analyse"]]);
+const EXEMPT = new Map([["CAS-L008", "a length comparison, so there is no pattern to analyse"]]);
 
 const rows = [];
 let failures = 0;
@@ -52,8 +52,8 @@ for (const rule of LINT_RULES) {
     failures++;
     const detail =
       diagnostics.status === "vulnerable"
-        ? `${complexity} blowup — attack string: ${JSON.stringify(diagnostics.attack?.pattern ?? "?")}`
-        : `status "${diagnostics.status}" — recheck could not decide, so this is not a proof`;
+        ? `${complexity} blowup, attack string: ${JSON.stringify(diagnostics.attack?.pattern ?? "?")}`
+        : `status "${diagnostics.status}": recheck could not decide, so this is not a proof`;
     rows.push([rule.id, "FAIL", detail]);
   }
 }
