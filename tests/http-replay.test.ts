@@ -96,7 +96,7 @@ describe("the §3.2 method matrix", () => {
 });
 
 describe("the §3.2 POST rows", () => {
-  const POSTS: { slug: string; what: string; send: unknown; status: number; expect: (body: string) => void }[] = [
+  const POSTS: { slug: string; what: string; send: unknown; status: number; expect: (body: string, res: Response) => void }[] = [
     {
       slug: "matched",
       what: "a matched JSON answer, re-keyed to the incoming id",
@@ -131,11 +131,13 @@ describe("the §3.2 POST rows", () => {
     },
     {
       slug: "streamed",
-      what: "an answer the cassette has but cannot serve yet",
+      what: "a recorded stream, framed as SSE and re-keyed on its final frame",
       send: ask(80, "resources/list"),
       status: 200,
-      expect: (b) =>
-        expect(JSON.parse(b).error.message).toContain("is streamed; SSE replay lands in PR 7"),
+      expect: (b, res) => {
+        expect(res.headers.get("content-type")).toBe("text/event-stream");
+        expect(b).toBe(`data: ${JSON.stringify({ jsonrpc: "2.0", id: 80, result: { resources: [] } })}\n\n`);
+      },
     },
   ];
 
@@ -147,14 +149,14 @@ describe("the §3.2 POST rows", () => {
     await server.close();
 
     expect(res.status).toBe(row.status);
-    row.expect(body);
+    row.expect(body, res);
   });
 
   it("counts a miss but never a streamed answer — the cassette does have one of those", async () => {
     const file = cassette("counting", { era: "legacy" }, LEGACY_ENTRIES);
     const server = await startHttpReplay(file, { listen: "127.0.0.1:0" });
     await withStderr(async () => {
-      await post(server.url, ask(1, "resources/list")); // streamed: known, just not served here
+      await post(server.url, ask(1, "resources/list")); // answered by its recorded stream
       expect(server.misses()).toBe(0);
       await post(server.url, ask(2, "roots/list")); // genuinely absent
     });
@@ -222,7 +224,7 @@ describe("what replay is faithful about, and what it refuses to be", () => {
     const blocked = await fetch(server.url, { method: "POST", headers: { origin: "https://evil.example.com" } });
     await server.close();
 
-    expect(stderr).toContain("1 streamed answer(s) in the cassette — served in PR 7");
+    expect(stderr).toContain("1 streamed answer(s) in the cassette");
     expect(stderr).toContain("as a legacy server at");
     expect(blocked.status).toBe(403);
   });

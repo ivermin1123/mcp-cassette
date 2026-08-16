@@ -120,23 +120,31 @@ program
   .description("Serve a recorded cassette as a deterministic MCP server — stdio, or Streamable HTTP with --listen")
   .argument("<cassette>", "path to a .cassette.jsonl file")
   .option("--listen <host:port>", `serve an HTTP cassette over Streamable HTTP (default ${DEFAULT_LISTEN})`)
+  .option("--timing <mode>", "streamed answers: none (default, emit back to back) or recorded (honor recorded offsets)", "none")
   .option(
     "--on-miss <mode>",
     "on fingerprint miss: error (fail the session), warn (answer with an error, exit 0), or passthrough (forward to the real server after -- and append the interaction)",
     "error"
   )
   .argument("[command...]", "real server command for --on-miss passthrough (prefix with -- )")
-  .action(async (cassette: string, command: string[], opts: { onMiss: string; listen?: string }) => {
+  .action(async (cassette: string, command: string[], opts: { onMiss: string; listen?: string; timing: string }) => {
     try {
       if (opts.onMiss !== "error" && opts.onMiss !== "warn" && opts.onMiss !== "passthrough") {
         throw new Error(`replay: unknown --on-miss "${opts.onMiss}" (expected error, warn, or passthrough)`);
+      }
+      if (opts.timing !== "none" && opts.timing !== "recorded") {
+        throw new Error(`replay: unknown --timing "${opts.timing}" (expected none or recorded)`);
       }
       if (opts.listen !== undefined) {
         if (opts.onMiss === "passthrough") {
           throw new Error("replay --listen does not support --on-miss passthrough yet (it lands with HTTP passthrough)");
         }
-        await runHttpReplay(cassette, { listen: opts.listen, onMiss: opts.onMiss });
+        await runHttpReplay(cassette, { listen: opts.listen, onMiss: opts.onMiss, timing: opts.timing });
         return;
+      }
+      // Pacing only means something for a streamed answer, and only HTTP serves those.
+      if (opts.timing !== "none") {
+        throw new Error("replay --timing applies to streamed answers, which only --listen serves — add --listen or drop --timing");
       }
       await runReplay(cassette, { onMiss: opts.onMiss as OnMissMode, serverCommand: command });
     } catch (err) {
