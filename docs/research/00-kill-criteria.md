@@ -1,39 +1,40 @@
 # Kill criteria
 
-## LUẬT SỐ 1 — ĐÂY LÀ OPEN SOURCE, KHÔNG PHẢI ĐỂ BÁN. Đọc trước mọi phân tích.
+## LAW №1 — THIS IS OPEN SOURCE, NOT SOMETHING TO SELL. Read before any analysis.
 
-`mcp-cassette` là OSS (Apache-2.0). Không bán, không có khách trả tiền, không có
-doanh thu trong bất kỳ ô nào dưới đây.
+`mcp-cassette` is OSS (Apache-2.0). Nothing is sold, there is no paying customer,
+and there is no revenue in any box below.
 
-**Thước đo đúng:**
+**The right measures:**
 
-1. Có ai **cài và dùng** không — kể cả chính owner.
-2. **Thời gian** của owner đổi lấy gì — dùng được · học được · uy tín.
-3. Có ai **đóng góp cùng** không.
+1. Does anyone **install and use** it — including the owner.
+2. What the owner's **time** buys — something usable · something learned · credibility.
+3. Does anyone **contribute alongside**.
 
-**Cấm dùng làm khung:** "bán được không" · "thị trường đủ lớn" · "khách hàng" ·
-"sẵn sàng chi trả" · "độ khẩn đủ để móc ví" · TAM/segment.
+**Banned as a frame:** "can it be sold" · "is the market big enough" · "customers" ·
+"willingness to pay" · "urgent enough to open a wallet" · TAM/segment.
 
-**Dùng thay vào:** *"cái này có ĐỠ MỆT HƠN cách họ đang làm không?"* — đó là
-toàn bộ rào adoption của OSS, và nó thấp hơn rào mua hàng rất nhiều.
+**Use instead:** *"is this LESS TIRING than the way they do it today?"* — that is
+the whole adoption barrier for OSS, and it sits far below a purchase barrier.
 
-**Ba hệ quả về bằng chứng, áp cho mọi kết luận trong báo cáo:**
+**Three consequences for evidence, applied to every conclusion in the report:**
 
-- **a. Vắng tiếng kêu = bằng chứng YẾU, không phải bằng chứng ngược.** OSS thì
-  người ta cài trước, kêu sau, hoặc không bao giờ kêu. Không được dùng "0 ca
-  phàn nàn" một mình để giết một hướng. Ngưỡng "cầu thật ≥ 8 ca" (Box E) chỉ
-  **ủng hộ** được, **không giết** được.
-- **b. Đối thủ đáng sợ là thứ MIỄN PHÍ và ĐÃ NẰM SẴN TRONG TAY họ** —
-  in-memory/linked transport của SDK chính thức, MCP Inspector — chứ không phải
-  sản phẩm thương mại nào. Một sản phẩm thương mại làm cùng việc **không** tính
-  là chiếm chỗ (Box C).
-- **c. Đối thủ thật sự là sự LƯỜI CÀI THÊM DEPENDENCY.** Lập luận "việc này tự
-  viết 20–50 dòng là xong" **nặng hơn** dưới khung OSS, không nhẹ đi. Mỗi tính
-  năng phải trả lời được: vì sao người ta chịu rước thêm một dependency thay vì
-  tự viết? (Box D)
+- **a. Absence of complaint = WEAK evidence, not counter-evidence.** In OSS people
+  install first and complain later, or never. "0 complaints" may not be used on
+  its own to kill a direction. The "real demand ≥ 8 cases" threshold (Box E)
+  can only **support**; it can never **kill**.
+- **b. The competitor to fear is the one that is FREE and ALREADY IN THEIR HANDS** —
+  the official SDKs' in-memory/linked transport, MCP Inspector — not any
+  commercial product. A commercial product doing the same job does **not** count
+  as occupying (Box C).
+- **c. The real competitor is UNWILLINGNESS TO ADD A DEPENDENCY.** The argument
+  "I can write this myself in 20–50 lines" weighs **more** under the OSS frame,
+  not less. Every feature has to answer: why would anyone take on another
+  dependency instead of writing it themselves? (Box D)
 
-**Chấm ba tính năng RIÊNG** — `replay` · `snapshot --check` · `check` poisoning.
-Chấm gộp thì một tính năng chết sẽ kéo hai cái kia chết oan.
+**Score the three features SEPARATELY** — `replay` · `snapshot --check` · `check`
+poisoning. Scoring them together lets one dead feature drag the other two down
+with it.
 
 > *English gloss:* this project is Apache-2.0 OSS with no buyer and no revenue.
 > Judge it by whether anyone installs and uses it, what the owner's time buys,
