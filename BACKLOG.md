@@ -88,6 +88,37 @@ the extract-and-stub verification described in
 
 ---
 
+## Resolve local `$defs` / `$ref` in the contract diff
+
+**Raised** 2026-08-16, deferred past 0.4.0 deliberately.
+
+`snapshot --check` does not follow a `$ref`. A schema carrying one is reported as
+`input-schema-changed-unclassified` — breaking, correct, and uninformative: the
+user is told their contract changed somewhere, not that `Address.city` went from
+`string` to `integer`. Resolving `$defs` locally would turn that one line into
+the same precise rule ids every other change gets, at a JSON Pointer inside
+`$defs`.
+
+**Not urgent, and here is the number behind that claim.** A survey of seven
+published MCP servers on 2026-08-16 — four TypeScript/zod (`server-everything`,
+`filesystem`, `memory`, `sequential-thinking`) and three Python/Pydantic
+(`mcp-server-git`, `mcp-server-time`, `mcp-server-fetch`), 50 tools in total —
+found **zero** `$ref` and zero `$defs`. Every one of those servers takes flat
+scalar arguments.
+
+**Read that number honestly.** All seven come from the same organisation, and
+the sample skews toward simple tools. It means "not yet common among the
+first-party servers sampled". It does not mean "rare in the wild", and it says
+nothing about servers nobody surveyed. The generating mechanism is entirely
+ordinary: FastMCP hands Pydantic the argument model, and Pydantic emits
+`$defs`/`$ref` for any nested model, reused model, or `Enum`. A single nested
+model puts a server in this class, and `tests/fixtures/contracts/` holds a real
+one that does.
+
+Until then the guard keeps the answer conservative rather than wrong. The cost
+is a coarse message on a schema shape that is not yet common, which is a fair
+price for not shipping a resolver in a hurry.
+
 ## Schema-diff completeness
 
 **Raised** 2026-08-16. Design pass in progress — see the rule-family table
