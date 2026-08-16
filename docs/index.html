@@ -291,6 +291,12 @@ result: FOUND (2 secret(s) detected)</code></pre>
   run: npx vitest run   # your tests point the MCP client at:
                         # mcp-cassette replay fixtures/session.cassette.jsonl</code></pre>
 
+<p>For vitest specifically there is an adapter, <code>mcp-cassette/vitest</code>: one
+<code>useCassette()</code> call wraps a <code>describe</code> block with a replay server, and a
+fingerprint miss fails the test that caused it instead of arriving as a JSON-RPC error the
+assertion never looks at. See
+<a href="https://github.com/ivermin1123/mcp-cassette#testing-with-vitest">Testing with vitest</a>.</p>
+
 <h2>Cassettes are plain files</h2>
 
 <p>Append-only JSONL: a header line, then one line per captured frame with direction and a
