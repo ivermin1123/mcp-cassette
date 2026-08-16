@@ -311,7 +311,7 @@ Two things worth knowing before you wire it up:
 
 The output is validated against the official OASIS SARIF 2.1.0 schema in the test suite; that schema is vendored under `schemas/` (see `schemas/vendored.json` for source and version) so the suite stays offline, with a weekly canary warning if it drifts upstream.
 
-> The workflow snippet above is the standard `upload-sarif` wiring and has **not** been executed end to end against GitHub code scanning from this repository — the `check --format sarif` half is real and its output is schema-validated in CI, but the upload half is unverified here.
+> **GitHub code scanning currently rejects this output, and the snippet above will not work as written.** Running it end to end from this repository ([run 31940968730](https://github.com/ivermin1123/mcp-cassette/actions/runs/31940968730/job/95149992573)) uploaded the document successfully and then failed to process it: `Code Scanning could not process the submitted SARIF file: locationFromSarifResult: expected a physical location`, once per finding. No alert was created. The cause is the `logicalLocations`-only design described just above — principled, but code scanning requires a `physicalLocation` and discards results without one. Nothing needs enabling in repository settings; `permissions: security-events: write` was sufficient for the upload itself. A fix that anchors findings to a real file is being worked on; until it lands, `check --format sarif` is useful to SARIF consumers that accept logical locations, and not to GitHub code scanning.
 
 ## Cassette format (open, v2)
 
