@@ -158,18 +158,27 @@ const program = new Command();
 
 program
   .name("mcp-cassette")
-  .description("Record a real MCP session once, replay it forever. VCR + contract tests for MCP servers.")
+  .description(
+    "A recorded MCP session that is itself an MCP server, so any client in any language " +
+      "connects to it exactly as it connects to the live one: no library to import, " +
+      "no product code to change, no transport to wrap."
+  )
   .version(VERSION);
 
 program
   .command("record")
-  .description("Record a session: a transparent proxy in front of a stdio command or an HTTP server")
-  .requiredOption("-o, --out <file>", "cassette output path (.cassette.jsonl)")
+  .description("Sit between your client and a live server, and write every message to a cassette file")
+  .requiredOption("-o, --out <file>", "cassette output path, e.g. session.cassette.jsonl")
   .option("--no-redact", "record secrets verbatim instead of redacting them")
   .option("--mode <mode>", "once: refuse to overwrite an existing cassette; all: always re-record", "once")
-  .option("--http <url>", "record a Streamable HTTP server: reverse-proxy this upstream URL")
-  .option("--listen <host:port>", "address the HTTP recording proxy binds", DEFAULT_LISTEN)
+  .option("--http <url>", "record a Streamable HTTP server, e.g. http://127.0.0.1:3000/mcp")
+  .option("--listen <host:port>", "address the HTTP recording proxy binds, e.g. 127.0.0.1:6402", DEFAULT_LISTEN)
   .argument("[command...]", "server command (prefix with -- ); omit when using --http")
+  .addHelpText(
+    "after",
+    "\nExample:\n" +
+      "  mcp-cassette record -o session.cassette.jsonl -- npx -y @modelcontextprotocol/server-everything stdio\n"
+  )
   .action(async (command: string[], opts: { out: string; redact: boolean; mode: string; http?: string; listen: string }) => {
     try {
       if (opts.mode !== "once" && opts.mode !== "all") {
@@ -194,9 +203,9 @@ program
 
 program
   .command("replay")
-  .description("Serve a recorded cassette as a deterministic MCP server: stdio, or Streamable HTTP with --listen")
-  .argument("<cassette>", "path to a .cassette.jsonl file")
-  .option("--listen <host:port>", `serve an HTTP cassette over Streamable HTTP (default ${DEFAULT_LISTEN})`)
+  .description("Serve a cassette as a real MCP server, so a client talks to it instead of the live one")
+  .argument("<cassette>", "path to a .cassette.jsonl file, e.g. session.cassette.jsonl")
+  .option("--listen <host:port>", `serve an HTTP cassette over Streamable HTTP, e.g. ${DEFAULT_LISTEN}`)
   .option("--timing <mode>", "streamed answers: none (default, emit back to back) or recorded (honor recorded offsets)", "none")
   .option(
     "--on-miss <mode>",
@@ -204,6 +213,14 @@ program
     "error"
   )
   .argument("[command...]", "real server command for --on-miss passthrough (prefix with -- )")
+  .addHelpText(
+    "after",
+    "\nExamples:\n" +
+      "  # point any MCP client at this command instead of the real server\n" +
+      "  mcp-cassette replay session.cassette.jsonl\n\n" +
+      "  # serve the same cassette over Streamable HTTP\n" +
+      "  mcp-cassette replay session.cassette.jsonl --listen 127.0.0.1:6402\n"
+  )
   .action(async (cassette: string, command: string[], opts: { onMiss: string; listen?: string; timing: string }) => {
     try {
       if (opts.onMiss !== "error" && opts.onMiss !== "warn" && opts.onMiss !== "passthrough") {
@@ -311,9 +328,9 @@ program
 
 program
   .command("check")
-  .description("Health + safety check: lifecycle, schemas (ajv 2020-12), description safety lint")
+  .description("Start a server, validate its handshake and schemas, and lint its tool descriptions for poisoning")
   .option("--stdio <command>", "stdio server command, e.g. \"npx -y @modelcontextprotocol/server-everything\"")
-  .option("--url <url>", "Streamable HTTP server URL (experimental)")
+  .option("--url <url>", "Streamable HTTP server URL (experimental), e.g. http://127.0.0.1:3000/mcp")
   .option("--era <era>", ERA_HELP, "auto")
   .option("--format <format>", "output format: text | json | sarif", "text")
   // Kept permanently, not deprecated: it predates --format, it is in every
@@ -322,7 +339,19 @@ program
   .option("--fail-on <level>", "lowest finding level that fails the run: error | warn", "error")
   .option(
     "--sarif-location <file>",
-    "file in the repository to anchor SARIF findings to (default: the contract snapshot, if one exists)"
+    "file in the repository to anchor SARIF findings to, e.g. mcp-contract.snapshot.json (default: the contract snapshot, if one exists)"
+  )
+  .addHelpText(
+    "after",
+    "\nExamples:\n" +
+      "  # health and safety check against a live server\n" +
+      "  mcp-cassette check --stdio \"npx -y @modelcontextprotocol/server-everything stdio\"\n\n" +
+      "  # the same check against a cassette, offline\n" +
+      "  mcp-cassette check --stdio \"mcp-cassette replay session.cassette.jsonl\"\n\n" +
+      "  # SARIF for GitHub code scanning, anchored to a committed file\n" +
+      "  mcp-cassette check --stdio \"node dist/my-server.js\" \\\n" +
+      "    --format sarif --sarif-location mcp-contract.snapshot.json > mcp-cassette.sarif\n\n" +
+      "Exit codes: 0 clean, 1 a finding at or above --fail-on.\n"
   )
   .action(
     async (opts: {
@@ -362,10 +391,10 @@ program
 
 program
   .command("snapshot")
-  .description("Capture the tool contract; --check diffs live server vs snapshot and fails CI on breaking changes")
-  .option("--stdio <command>", "stdio server command")
-  .option("--url <url>", "Streamable HTTP server URL (experimental)")
-  .option("-f, --file <file>", "snapshot file", "mcp-contract.snapshot.json")
+  .description("Write the tool contract to a file, or with --check diff a live server against it and fail on breaking changes")
+  .option("--stdio <command>", "stdio server command, e.g. \"node dist/my-server.js\"")
+  .option("--url <url>", "Streamable HTTP server URL (experimental), e.g. http://127.0.0.1:3000/mcp")
+  .option("-f, --file <file>", "snapshot file, e.g. mcp-contract.snapshot.json", "mcp-contract.snapshot.json")
   .option("--check", "compare against existing snapshot instead of writing")
   .option("--update", "rewrite the snapshot file even if it exists")
   .option(
@@ -375,6 +404,16 @@ program
   )
   .option("--era <era>", ERA_HELP, "auto")
   .option("--json", "machine-readable diff output (--check only)")
+  .addHelpText(
+    "after",
+    "\nExamples:\n" +
+      "  # capture the contract once, then commit the file\n" +
+      "  mcp-cassette snapshot --stdio \"node dist/my-server.js\"\n\n" +
+      "  # in CI: fail the build when the contract broke\n" +
+      "  mcp-cassette snapshot --check --stdio \"node dist/my-server.js\"\n\n" +
+      "Exit codes: 0 no change at or above --fail-on, 1 a breaking change.\n" +
+      "Every finding carries a stable rule id in parentheses; match on the id, not the wording.\n"
+  )
   .action(
     async (opts: {
       stdio?: string;
