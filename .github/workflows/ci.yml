@@ -149,25 +149,28 @@ jobs:
             exit 1
           fi
 
-  # The other half of `check --format sarif`. The suite already validates the
-  # document against the OASIS schema; what it cannot prove is that GitHub
-  # *accepts* it — a schema-valid SARIF can still be rejected for rules the
-  # schema does not express. So this uploads a real document from a real run.
+  # Half of `check --format sarif`: the half that can afford to run on every
+  # commit. The suite already validates the document against the OASIS schema.
+  # What the schema cannot express is the one rule that actually costs findings,
+  # that code scanning silently discards any result without a `physicalLocation`.
+  # So this asserts the anchoring locally, against a document from a real run.
   #
-  # Pull requests only, deliberately. Code scanning alerts uploaded from a PR
-  # branch are scoped to that PR; uploading on push to main would leave six
-  # permanent "prompt injection" alerts on the repository's Security tab, all of
-  # them describing a fixture that exists to be poisoned.
+  # It does not upload, and that is the point of the split. The fixture it scans
+  # is poisoned on purpose, so uploading here would hang six alerts and a red
+  # check on every pull request for the rest of the project's life. A check that
+  # is always red stops being read by the second week, including on the day it
+  # goes red for a reason. Pointing the job at a clean fixture instead would trade
+  # the false alarm for a worse failure: an empty `results` array uploads
+  # perfectly happily, so the job would stay green through exactly the regression
+  # it exists to catch.
+  #
+  # The other half, proving GitHub still accepts what we emit, is the weekly
+  # `sarif-canary` job in foundation-canary.yml. It uploads for real, and blocks
+  # nothing.
   sarif:
-    name: sarif (upload findings to code scanning)
-    if: github.event_name == 'pull_request'
+    name: sarif (findings anchored where code scanning keeps them)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: read
-      # The only permission the upload needs. A public repository needs nothing
-      # enabled in Settings beyond this.
-      security-events: write
     steps:
       - uses: actions/checkout@v7
 
@@ -196,34 +199,56 @@ jobs:
             --format sarif \
             --sarif-location tests/fixtures/tiny-server-evil.snapshot.json > mcp-cassette.sarif
 
-      # The upload reports success for a document code scanning then discards,
-      # so "it uploaded" is not evidence. Fail here instead, where the log says
-      # which result was unanchored.
-      - name: Assert every result carries a physical location
+      # An upload reports success for a document code scanning then throws away,
+      # so "it uploaded" was never evidence of anything. These four checks are
+      # what the upload could not tell us, and the log names the result that
+      # broke each one.
+      - name: Assert every finding is anchored where code scanning keeps it
         run: |
           node -e '
             const fs = require("fs");
+
+            // Five safety rules fire on the single poisoned tool `get_weather`
+            // (CAS-L001 through CAS-L005), and CAS-C005 fires on the malformed
+            // schema of the `broken` tool. Six is therefore the whole poisoned
+            // surface of the fixture, not a sample of it.
+            //
+            // The count is pinned because the other three checks are all of the
+            // form "every result is well formed", and every result is trivially
+            // well formed when there are none. A rule that quietly stopped
+            // firing would leave this job green while the coverage it reports
+            // had gone. If you change the fixture or add a rule, change this
+            // number in the same commit and say why.
+            const EXPECTED_RESULTS = 6;
+
             const s = JSON.parse(fs.readFileSync("mcp-cassette.sarif", "utf8"));
             const r = s.runs[0];
             console.log("driver:", r.tool.driver.name, r.tool.driver.version);
             console.log("rules:", r.tool.driver.rules.length, "results:", r.results.length);
-            if (r.results.length === 0) throw new Error("no findings: the fixture stopped being poisoned");
+
+            if (r.results.length !== EXPECTED_RESULTS) {
+              throw new Error(
+                `expected ${EXPECTED_RESULTS} findings from the poisoned fixture, got ${r.results.length}`
+              );
+            }
+
             for (const x of r.results) {
               const p = x.locations[0].physicalLocation;
               if (!p) throw new Error(`${x.ruleId}: no physicalLocation, code scanning would drop it`);
-              if (!fs.existsSync(p.artifactLocation.uri)) {
-                throw new Error(`${x.ruleId}: anchored at ${p.artifactLocation.uri}, which is not in the checkout`);
+
+              const uri = p.artifactLocation.uri;
+              if (!fs.existsSync(uri)) {
+                throw new Error(`${x.ruleId}: anchored at ${uri}, which is not in the checkout`);
               }
-              console.log(`  ${x.ruleId}  ${p.artifactLocation.uri}:${p.region.startLine}`);
+
+              const line = p.region && p.region.startLine;
+              if (!Number.isInteger(line) || line < 1) {
+                throw new Error(`${x.ruleId}: startLine is ${line}, which points at no line of ${uri}`);
+              }
+
+              console.log(`  ${x.ruleId}  ${uri}:${line}`);
             }
           '
-
-      - uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: mcp-cassette.sarif
-          # Keeps these results in their own bucket, so they never merge with
-          # findings from another tool scanning the same commit.
-          category: mcp-cassette
 
   smoke-canary:
     name: smoke-canary (unpinned reference server, non-blocking)

@@ -330,7 +330,7 @@ Every pattern in the rule set is proven free of super-linear backtracking by [re
 }
 ```
 
-This is the wiring, copied from [the job that runs it in this repository](.github/workflows/ci.yml):
+This is the wiring, copied from [the job that runs it in this repository](.github/workflows/foundation-canary.yml):
 
 ```yaml
 permissions:
@@ -368,6 +368,8 @@ The output is validated against the official OASIS SARIF 2.1.0 schema in the tes
 > **Verified end to end against GitHub code scanning**, not just against the schema. [Run 31950265132](https://github.com/ivermin1123/mcp-cassette/actions/runs/31950265132) uploaded a document from the poisoned fixture; the analysis processed with no error and created six alerts, each one anchored to the line of the tool it describes (`get_weather` at line 58, `broken` at line 30). The API record for that analysis reads `results=6, error=""`.
 >
 > It has also been verified in the failing direction, which is why the anchor exists. The same job on an earlier PR, emitting `logicalLocations` only, uploaded successfully and then recorded `results=0` with `locationFromSarifResult: expected a physical location` once per finding, creating no alerts. An upload reporting success is not evidence that anything was kept.
+
+That upload is not repeated on every pull request, and the reason is worth stating, because the snippet above is the right thing for *your* server and the wrong thing for this repository. The document above comes from a fixture that is poisoned on purpose, so uploading it per pull request would attach six alerts and a permanent red check to every branch this project ever opens; a check that is always red is one nobody reads by the second week, including the week it goes red for a real reason. Scanning a clean fixture instead would be worse, because an empty `results` array uploads perfectly happily, so the job would stay green through exactly the regression it exists to catch. The proof above was worth running once. What runs now is a split: [ci.yml](.github/workflows/ci.yml) asserts on every pull request that each finding is anchored to a real file at a real line, without uploading anything, and a weekly non-blocking job in [foundation-canary.yml](.github/workflows/foundation-canary.yml) does the real upload and asks the API what survived, parking its alerts on a `ci/sarif-canary` branch so they touch neither main nor any pull request.
 
 ## Cassette format (open, v2)
 

@@ -1,5 +1,7 @@
-# Early warning about drift in the MCP foundations this project sits on: the
-# official SDK, and the official conformance suite.
+# Early warning about drift in the foundations this project sits on: the
+# official MCP SDK, the official conformance suite, and GitHub's own code
+# scanning ingest, which decides whether `check --format sarif` is worth
+# emitting at all.
 #
 # This is a radar, not a gate. Every job is `continue-on-error: true` and a red
 # signal here means "go look upstream", never "this repository is broken". The
@@ -264,4 +266,136 @@ jobs:
               echo "- the suite cannot be pointed at \`replay\` until it does:"
               echo "  <https://github.com/modelcontextprotocol/conformance/issues/258>"
             fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The half of `check --format sarif` that only a real upload can answer.
+  #
+  # ci.yml asserts the anchoring locally on every pull request, which catches us
+  # breaking the document. It cannot catch GitHub changing its mind about what it
+  # accepts, and that has already happened once in the other direction: an
+  # earlier upload of the same findings was accepted, reported success, and then
+  # recorded `results=0` because the results carried no `physicalLocation`. The
+  # ingest validator is outside our control and can tighten on someone else's
+  # schedule, which is the definition of what this file watches.
+  #
+  # The alerts are parked on `ci/sarif-canary` rather than on main or on a pull
+  # request. `upload-sarif` takes a `ref` and honours it: the alerts land on that
+  # branch, and the Security tab for main stays empty. Verified before this job
+  # was written, by running exactly this upload from a throwaway branch: six
+  # alerts on `refs/heads/ci/sarif-canary`, none on `refs/heads/main`, none on
+  # the branch the job was running from. `sha` must be passed alongside `ref`,
+  # and code scanning records the analysed commit rather than the value passed,
+  # which is correct and worth knowing before it surprises someone.
+  #
+  # If the parking branch is ever deleted, recreate it from main; the anchored
+  # fixture has to exist somewhere on the ref the alerts hang from.
+  sarif-ingest:
+    name: sarif-ingest (does code scanning still keep our findings?)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Resolve the parking branch
+        id: parking
+        run: |
+          set -euo pipefail
+          SHA=$(git ls-remote origin refs/heads/ci/sarif-canary | cut -f1)
+          if [ -z "$SHA" ]; then
+            echo "::warning::ci/sarif-canary is gone; recreate it from main or the alerts have nowhere to live"
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # TINY_EVIL serves a poisoned tool and a broken schema, so the document
+      # carries real findings rather than an empty `results`. `check` exits
+      # non-zero on error-level findings by design and writes the file before it
+      # does; the gate firing is the point, not a failure.
+      - name: Scan the poisoned fixture
+        continue-on-error: true
+        run: |
+          node dist/cli.js check \
+            --stdio "env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs" \
+            --format sarif \
+            --sarif-location tests/fixtures/tiny-server-evil.snapshot.json > mcp-cassette.sarif
+
+      - name: Upload to the parking branch
+        id: upload
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: mcp-cassette.sarif
+          # Its own bucket, so these never merge with another tool's findings.
+          category: mcp-cassette-canary
+          ref: refs/heads/ci/sarif-canary
+          sha: ${{ steps.parking.outputs.sha }}
+
+      # The upload succeeding still proves nothing. Ask the API what it kept.
+      - name: Ask the API what survived
+        id: verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SARIF_ID: ${{ steps.upload.outputs.sarif-id }}
+        run: |
+          set -uo pipefail
+          STATUS=$(gh api "repos/$GITHUB_REPOSITORY/code-scanning/sarifs/$SARIF_ID" \
+            --jq '.processing_status' 2>/dev/null || echo "unreachable")
+          ANALYSIS=$(gh api \
+            "repos/$GITHUB_REPOSITORY/code-scanning/analyses?ref=refs/heads/ci/sarif-canary&per_page=1" \
+            --jq '.[0] | "\(.results_count)\t\(.error)"' 2>/dev/null || printf 'unreachable\t')
+          COUNT=${ANALYSIS%%$'\t'*}
+          ERROR=${ANALYSIS#*$'\t'}
+
+          echo "processing_status=$STATUS  results_count=$COUNT  error=${ERROR:-<empty>}"
+          {
+            echo "status=$STATUS"
+            echo "count=$COUNT"
+            echo "error=$ERROR"
+          } >> "$GITHUB_OUTPUT"
+
+          # Warnings, never failures. Nothing in this file blocks a merge, and a
+          # red mark here means "go look at GitHub", not "this branch is bad".
+          if [ "$STATUS" != "complete" ]; then
+            echo "::warning::code scanning reports processing_status=$STATUS"
+          fi
+          if [ -n "$ERROR" ]; then
+            echo "::warning::code scanning recorded an error: $ERROR"
+          fi
+          case "$COUNT" in
+            ''|*[!0-9]*)
+              echo "::warning::could not read results_count (got '$COUNT')" ;;
+            0)
+              echo "::warning::the analysis kept 0 findings; code scanning is discarding what we emit" ;;
+          esac
+
+      - name: Summarize
+        if: always()
+        env:
+          STATUS: ${{ steps.verdict.outputs.status }}
+          COUNT: ${{ steps.verdict.outputs.count }}
+          ERROR: ${{ steps.verdict.outputs.error }}
+        run: |
+          set -uo pipefail
+          {
+            echo "### sarif-ingest"
+            echo "- processing status: \`${STATUS:-unknown}\`"
+            echo "- findings kept: **${COUNT:-?}**"
+            if [ -n "${ERROR:-}" ]; then
+              echo "- error: \`${ERROR}\`"
+            else
+              echo "- error: none"
+            fi
+            echo "- alerts live on \`ci/sarif-canary\`, deliberately off main and off every pull request"
           } >> "$GITHUB_STEP_SUMMARY"
