@@ -86,26 +86,39 @@ jobs:
       # `uses: ivermin1123/mcp-cassette@v0` resolves a *tag*, not a range, so
       # without this step the action freezes at whatever v0 pointed to when it
       # was first cut and no consumer ever sees an update. Moving a floating
-      # major tag onto each release is how GitHub's own actions are
-      # distributed, and it is what makes the short `@v0` form in the README
-      # honest.
+      # tag onto each release is how GitHub's own actions are distributed, and
+      # it is what makes the short forms in the README honest.
       #
-      # Last on purpose: it runs only once npm and the GitHub Release have both
-      # succeeded, so `@v0` can never point at a version that failed to ship.
-      - name: Move the floating major tag
+      # Two floats, because one is not enough to express the promise. While the
+      # major version is 0 a minor may break, so `@v0` cannot be recommended to
+      # anyone who does not want that: on 0.3.0 it carried eight new lint rules
+      # onto servers nobody had touched. `@v0.<minor>` is the pin the README
+      # recommends — it only ever gains patches — and `@v0` remains for people
+      # who want every release and have said so.
+      #
+      # Last on purpose: this runs only once npm and the GitHub Release have
+      # both succeeded, so neither float can point at a version that failed to
+      # ship.
+      - name: Move the floating major and minor tags
         run: |
           set -euo pipefail
-          # v0.1.2 -> v0 ; keeps working unchanged at v1 and beyond.
-          MAJOR="${GITHUB_REF_NAME%%.*}"
-          # A prerelease must not become what `@v0` resolves to.
+          # A prerelease must not become what either float resolves to. Checked
+          # before the names are derived, because `%.*` on v0.4.0-rc.1 yields
+          # `v0.4.0-rc` — a string that is nobody's float and should not appear
+          # in a log line either.
           case "$GITHUB_REF_NAME" in
-            *-*) echo "prerelease $GITHUB_REF_NAME — leaving $MAJOR where it is"; exit 0 ;;
+            *-*) echo "prerelease $GITHUB_REF_NAME — leaving the floats where they are"; exit 0 ;;
           esac
+          # v0.3.0 -> v0 and v0.3 ; both keep working unchanged at v1 and beyond.
+          MAJOR="${GITHUB_REF_NAME%%.*}"
+          MINOR="${GITHUB_REF_NAME%.*}"
           # Lightweight on purpose: no committer identity needed, and the tag
-          # this points at carries the real release metadata.
-          git tag -f "$MAJOR" "$GITHUB_SHA"
-          git push -f origin "refs/tags/$MAJOR"
-          echo "$MAJOR now points at $GITHUB_REF_NAME ($GITHUB_SHA)"
+          # these point at carries the real release metadata.
+          for float in "$MAJOR" "$MINOR"; do
+            git tag -f "$float" "$GITHUB_SHA"
+            git push -f origin "refs/tags/$float"
+            echo "$float now points at $GITHUB_REF_NAME ($GITHUB_SHA)"
+          done
 
   # Everything above proves the tarball builds and tests green *here*. This job
   # proves the artifact that actually reached consumers works *there*: a clean
