@@ -4,7 +4,7 @@
  * These sit on the hot path of the record proxy, where the input is whatever a
  * third-party server wrote to stdout: a half-flushed line, a BOM from a
  * Windows toolchain, a megabyte of base64, a log message that is nearly JSON.
- * An uncaught throw there does not surface as a bad parse — it kills the proxy
+ * An uncaught throw there does not surface as a bad parse; it kills the proxy
  * mid-session and takes the recording with it.
  *
  * So the contract under fuzz is narrow and absolute: never throw, and never
@@ -46,7 +46,7 @@ const hostileChar = fc.constantFrom(
 
 const hostileLine = fc.string({ unit: hostileChar, maxLength: 120 });
 
-/** A valid frame, then cut somewhere — the half-flushed-write case. */
+/** A valid frame, then cut somewhere: the half-flushed-write case. */
 const truncatedFrame = fc
   .tuple(
     fc.record({ jsonrpc: fc.constant("2.0" as const), id: fc.integer(), method: fc.string() }),
@@ -78,7 +78,7 @@ describe("parseFrame", () => {
   it("still parses a frame behind a byte-order mark", () => {
     // `JSON.parse` rejects a BOM, but `trim()` counts U+FEFF as whitespace, so
     // the leading mark a Windows toolchain emits is gone before the parse. A
-    // server on that toolchain records as frames rather than as raw lines —
+    // server on that toolchain records as frames rather than as raw lines,
     // worth pinning, because it is a property of `trim`, not of this file.
     expect(parseFrame('\uFEFF{"jsonrpc":"2.0","id":1,"method":"ping"}')).toEqual({
       jsonrpc: "2.0",

@@ -1,7 +1,7 @@
-# Cassette format v2 — design sketch
+# Cassette format v2: design sketch
 
 Status: **format implemented** as firmed up by
-`docs/design/http-record-replay.md` — `src/cassette.ts` writes v2 (header
+`docs/design/http-record-replay.md`. `src/cassette.ts` writes v2 (header
 `era`/`url`/`sessioned`, `chunks[]`, `http.status`) and reads v1 forever. The
 HTTP record/replay behavior that fills these fields lands over the v0.3 PR
 sequence; `state`/`seq` below remains a sketch. This document is kept as the
@@ -27,7 +27,7 @@ Three pressures are visible from the v1 shape:
 
 v2 keeps everything that made v1 workable: an open, append-only JSONL file,
 one JSON object per line, header first. A v2 file is a v1 file with a bumped
-version and new, optional fields — no field of v1 is renamed or removed.
+version and new, optional fields. No field of v1 is renamed or removed.
 
 ### Header
 
@@ -49,7 +49,7 @@ version and new, optional fields — no field of v1 is renamed or removed.
 ```
 
 `era` tells replay whether to expect (and verify whether to perform) an
-initialize handshake. Readers treat a missing `era` as `"legacy"` — which is
+initialize handshake. Readers treat a missing `era` as `"legacy"`, which is
 also the v1→v2 migration rule.
 
 ### Frame entries
@@ -80,7 +80,7 @@ Two optional fields join them:
 }
 ```
 
-### `chunks[]` — streamed results
+### `chunks[]`: streamed results
 
 When a response arrives as a stream, the single `frame` field cannot hold it
 without inventing a merged payload that never existed on the wire. v2 reserves
@@ -102,28 +102,28 @@ a `chunks` entry type for this:
 
 The HTTP recorder writes these today, and the HTTP replayer serves them: an SSE
 answer becomes one `chunks` entry when its stream ends, with two fields the
-sketch did not name — `id` (absent on the legacy standalone GET stream, which
-answers no request) and `via` (`"post"` by default and then omitted, `"get"` for
-that GET stream). `docs/design/http-record-replay.md` §1.3 is the authority on
+sketch did not name. `id` is absent on the legacy standalone GET stream, which
+answers no request; `via` is `"post"` by default and then omitted, `"get"` for
+that GET stream. `docs/design/http-record-replay.md` §1.3 is the authority on
 both.
 
 On replay, an id-bearing entry is emitted as SSE and the stream closes after its
 final frame; only that final frame is re-keyed to the incoming request id, so a
 progress notification is replayed exactly as recorded. A `via:"get"` entry is
 served on GET and held open, because it answered no request and so completes
-none. A cassette may hold more than one `via:"get"` entry — a session can open
-the standalone stream more than once — but there is only one endpoint to serve
-them from, so replay serves the first and says so on stderr rather than choosing
-in silence.
+none. A cassette may hold more than one `via:"get"` entry, because a session can
+open the standalone stream more than once, but there is only one endpoint to
+serve them from, so replay serves the first and says so on stderr rather than
+choosing in silence.
 
 `replay --on-miss passthrough` appends `chunks` entries too, carrying
 `origin:"live"`, when the live answer arrived as a stream.
 
 Design intent, firmed up in §1.3 of that document:
 
-- Each chunk stores the frame **as it appeared on the wire** (after redaction)
-  — the cassette stays a transcript, not an interpretation. SSE event ids,
-  `retry` fields, and keep-alive comment lines are parsed and dropped: the
+- Each chunk stores the frame **as it appeared on the wire** (after redaction),
+  so the cassette stays a transcript rather than an interpretation. SSE event
+  ids, `retry` fields, and keep-alive comment lines are parsed and dropped: the
   modern era deleted resumability, and comment lines are data-free by
   definition.
 - Replay of a `chunks` entry emits every chunk in order (optionally honoring
@@ -132,10 +132,10 @@ Design intent, firmed up in §1.3 of that document:
 - Verify treats the final chunk as the response payload for diffing and may
   compare chunk counts as a shape check.
 - A v2 reader that predates streamed-results support may refuse `chunks`
-  entries with a clear "recorded with a newer mcp-cassette" error — but it can
-  still parse the file, because unknown entry types are skippable by design.
+  entries with a clear "recorded with a newer mcp-cassette" error. It can still
+  parse the file, because unknown entry types are skippable by design.
 
-### `state` / `seq` — scenario states
+### `state` / `seq`: scenario states
 
 v1 answers repeated identical requests from an ordered pool, which encodes
 "first call, then second call" implicitly. v2 makes progression explicit:
@@ -147,10 +147,10 @@ v1 answers repeated identical requests from an ordered pool, which encodes
   original recording already occupies earlier lines).
 
 A future `replay --scenario` can then start in `initial` and move between
-states via an explicit trigger (a control request, or "state advances when its
-pool is exhausted" — to be decided). Without `--scenario`, replay ignores both
-fields and behaves exactly like v1 — the fields are annotations, not a new
-matching engine.
+states via an explicit trigger: a control request, or "state advances when its
+pool is exhausted", to be decided. Without `--scenario`, replay ignores both
+fields and behaves exactly like v1, because the fields are annotations rather
+than a new matching engine.
 
 ## Backward compatibility principles
 

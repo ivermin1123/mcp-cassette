@@ -10,10 +10,10 @@
  *
  * Four invariants, none of which an example test can establish on its own:
  *
- *   idempotent   — redacting twice is redacting once
- *   shape-stable — the set of JSON pointers is untouched
- *   deterministic — one secret, one placeholder, wherever it appears
- *   minimal      — a string no rule recognizes is returned byte-for-byte
+ *   idempotent   : redacting twice is redacting once
+ *   shape-stable : the set of JSON pointers is untouched
+ *   deterministic: one secret, one placeholder, wherever it appears
+ *   minimal      : a string no rule recognizes is returned byte-for-byte
  */
 
 import { describe, expect, it } from "vitest";
@@ -43,7 +43,7 @@ function anyRuleMatches(s: string): boolean {
 }
 
 /**
- * Keys that put a value under key context, mixed with ordinary ones — the
+ * Keys that put a value under key context, mixed with ordinary ones. The
  * generated payloads have to exercise both paths through `redactValue`.
  */
 const payloadKey = fc.constantFrom(

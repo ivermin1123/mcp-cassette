@@ -1,14 +1,14 @@
 /**
- * Properties of the replay fingerprint — the function that decides whether an
+ * Properties of the replay fingerprint: the function that decides whether an
  * incoming request is "the same call" as a recorded one.
  *
  * Two failure modes matter, and they pull in opposite directions:
  *
- *   too strict  — a client that serializes its params in a different key order,
+ *   too strict  : a client that serializes its params in a different key order,
  *                 or attaches a progress token under `_meta`, stops matching a
  *                 cassette that would answer it perfectly. Replay breaks for
  *                 reasons that have nothing to do with the call.
- *   too loose   — two genuinely different calls collapse onto one fingerprint,
+ *   too loose   : two genuinely different calls collapse onto one fingerprint,
  *                 and replay confidently returns the wrong recorded answer.
  *
  * The examples cover the shapes we thought of. These properties cover the ones
@@ -20,7 +20,7 @@ import fc from "fast-check";
 import { fingerprint } from "../../src/replay.js";
 import { stableStringify } from "../../src/jsonrpc.js";
 
-/** Methods whose fingerprint is the method name alone — params are ignored. */
+/** Methods whose fingerprint is the method name alone; params are ignored. */
 const METHOD_ONLY = [
   "initialize",
   "ping",

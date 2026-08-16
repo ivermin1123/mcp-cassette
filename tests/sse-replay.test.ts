@@ -3,7 +3,7 @@
  *
  * Two kinds of stream, and the difference is the whole design (§3.2): an answer
  * to a request ends when its final frame lands, while the legacy standalone
- * stream answered nothing and so completes nothing — it is held open. Both are
+ * stream answered nothing and so completes nothing, so it is held open. Both are
  * asserted here through a raw reader rather than a buffered body, because
  * "the client consumed progress and *then* the result" is a claim about
  * arrival order that a buffered read cannot make.
@@ -148,7 +148,7 @@ describe("a streamed answer to a POST", () => {
     const body = JSON.parse(await again.text());
     expect(body.error.message).toContain("already replayed earlier in this session");
 
-    // And the session still closes — a half-emitted stream is not a hostage.
+    // And the session still closes: a half-emitted stream is not a hostage.
     await expect(server.close()).resolves.toBeUndefined();
   });
 
@@ -232,11 +232,11 @@ describe("the legacy standalone GET stream", () => {
     expect(await read.next()).toEqual(PUSHED);
 
     // Still open: nothing followed the last recorded frame, and no close came
-    // either — the standalone stream answers no request, so it completes none.
+    // either: the standalone stream answers no request, so it completes none.
     const raced = await Promise.race([read.next(), new Promise((r) => setTimeout(() => r("still open"), 150))]);
     expect(raced).toBe("still open");
 
-    // The session closes it anyway — this is the dangling socket the design warns about.
+    // The session closes it anyway: this is the dangling socket the design warns about.
     await expect(server.close()).resolves.toBeUndefined();
     expect(await read.next()).toBeNull();
   });

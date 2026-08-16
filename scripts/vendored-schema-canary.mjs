@@ -3,14 +3,14 @@
  * Has a vendored schema drifted from upstream?
  *
  * The schemas under schemas/ are byte-identical copies, kept locally so the
- * test suite never touches the network — an offline CI is the thing this
+ * test suite never touches the network, because an offline CI is the thing this
  * project sells, and a fetch in a test turns someone else's outage into our red
  * build.
  *
  * The cost of a copy is that it goes stale silently. This is the counterweight:
  * a weekly fetch that compares hashes and *says so*. It never fails the build.
  * A schema moving upstream is news to read, not a reason to break every branch
- * until someone runs an update — the same shape as the conformance canary.
+ * until someone runs an update, the same shape as the conformance canary.
  */
 
 import { createHash } from "node:crypto";

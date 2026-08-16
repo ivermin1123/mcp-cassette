@@ -4,12 +4,12 @@
  * The stdio recorder's philosophy, over HTTP: a reverse proxy that forwards
  * every request to the upstream essentially verbatim and relays the answer
  * back, capturing JSON-RPC frames on the way through. It never interprets the
- * session, only observes it — which is why it records any client against any
+ * session, only observes it, which is why it records any client against any
  * server in either era.
  *
  * What reaches the cassette is deliberately narrower than what crosses the
  * wire: frames (redacted), and nothing else. Header *values* are never
- * written — an `Authorization` that never reaches the file cannot leak through
+ * written: an `Authorization` that never reaches the file cannot leak through
  * a gap in redaction. The one header fact replay needs is a boolean:
  * `sessioned`, meaning the upstream minted an `Mcp-Session-Id`.
  */
@@ -43,7 +43,7 @@ const HOP_BY_HOP = new Set([
  * Response direction only: fetch has already decoded the body, so forwarding
  * the upstream's `content-encoding` would claim gzip over plaintext and a
  * strict client would fail to decode it. The request direction keeps its
- * encoding headers — that body is forwarded byte for byte.
+ * encoding headers; that body is forwarded byte for byte.
  */
 const RESPONSE_STRIP = new Set([...HOP_BY_HOP, "content-encoding"]);
 
@@ -90,7 +90,7 @@ function portHolder(port: number): string {
 }
 
 /**
- * The loud bind failure §2.2 mandates — a deterministic endpoint is part of the
+ * The loud bind failure §2.2 mandates, because a deterministic endpoint is part of the
  * client's configuration, so a taken port names its holder and stops, it never
  * hops to a free one. Replay binds under the same rule (§3.2), hence the
  * caller-supplied command name.
@@ -134,7 +134,7 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
     writer.frame(dir, redact ? (redactFrame(frame) as JsonRpcFrame) : frame, status ? { status } : undefined);
   };
   /**
-   * §4.1: the first *successful* exchange decides, never a probe — success is
+   * §4.1: the first *successful* exchange decides, never a probe; success is
    * the whole test, not whether the method was a lifecycle one. A
    * dual-era client that tries `server/discover`, gets an error, and falls back
    * to `initialize` is recorded honestly and still classified legacy.
@@ -190,8 +190,8 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
       const type = upstream.headers.get("content-type") ?? "";
       res.writeHead(upstream.status, out);
       // A POST stream answers the request that opened it; a GET stream is the
-      // legacy standalone one and answers nothing (§1.3). Anything else — a
-      // DELETE teardown — is relayed and never captured.
+      // legacy standalone one and answers nothing (§1.3). Anything else, such
+      // as a DELETE teardown, is relayed and never captured.
       const streamed = type.includes("text/event-stream") && upstream.body;
       if (streamed && (req.method === "POST" || req.method === "GET")) {
         const asked = sent && isRequest(sent) ? sent : null;
@@ -220,8 +220,8 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
     }
 
     /**
-     * §2.5: relay the stream byte for byte as it arrives — the client sees the
-     * upstream's own framing and pacing, `X-Accel-Buffering: no` included —
+     * §2.5: relay the stream byte for byte as it arrives, so the client sees the
+     * upstream's own framing and pacing, `X-Accel-Buffering: no` included,
      * while an incremental parser splits events on the side. One `chunks` entry
      * lands when the stream ends, even if it carried no JSON-RPC at all: a
      * stream that happened is part of the transcript whether or not we
@@ -262,7 +262,7 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
           // §4.1 over SSE: a final response that arrives streamed is successful
           // evidence like any other. `decideEra` ignores everything that is not
           // a successful response, so offering it every frame is the same as
-          // offering it the last one — and survives a trailing notification.
+          // offering it the last one, and survives a trailing notification.
           if (meta.method) for (const chunk of seen) decideEra(meta.method, chunk.frame);
         },
       };
@@ -300,7 +300,7 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
         close: () =>
           new Promise<void>((done) => {
             // A stream still open when the session ends is flushed with the
-            // chunks it showed (§2.5), then closed at both ends — otherwise
+            // chunks it showed (§2.5), then closed at both ends; otherwise
             // `server.close` would wait forever for a connection that was
             // designed to last, and the upstream would hold one too.
             for (const stream of live) stream.close();

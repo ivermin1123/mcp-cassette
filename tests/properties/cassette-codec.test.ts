@@ -2,7 +2,7 @@
  * Property: the cassette codec is lossless framing over JSON.
  *
  * The example tests pin the shapes we expect to record. This one asks the
- * harder question — is there *any* JSON a real server could emit that the
+ * harder question: is there *any* JSON a real server could emit that the
  * JSONL framing mangles? The interesting adversaries are values that carry the
  * delimiter: a raw log line holding a newline, a tool argument holding one, a
  * string that is itself a serialized cassette.
@@ -38,7 +38,7 @@ const frameEntry = fc.record({
   http: fc.option(fc.record({ status: fc.integer({ min: 100, max: 599 }) }), { nil: undefined }),
 });
 
-// v2: a streamed (SSE) response — id-less + via:"get" for a legacy standalone
+// v2: a streamed (SSE) response, id-less + via:"get" for a legacy standalone
 // GET stream, id-bearing for a stream that answers a request.
 const chunksEntry = fc.record({
   type: fc.constant("chunks" as const),

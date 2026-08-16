@@ -1,6 +1,6 @@
 # Contributing to mcp-cassette
 
-Thanks for taking the time to help. This is a small, focused tool — issues, bug
+Thanks for taking the time to help. This is a small, focused tool. Issues, bug
 reports, and PRs are all welcome.
 
 ## Before you start
@@ -8,13 +8,13 @@ reports, and PRs are all welcome.
 **Open an issue before large features.** Anything that adds a command, changes
 the cassette format, or introduces a dependency should be discussed first. It
 saves you from writing code that doesn't fit the direction, and it gives the
-change a place to be designed in the open. Small fixes — a bug, a typo, a
-missing edge case — go straight to a PR.
+change a place to be designed in the open. Small fixes (a bug, a typo, a missing
+edge case) go straight to a PR.
 
 ## Language
 
 **Everything committed to this repository is in English.** Code, comments, docs,
-research reports, commit messages, issues, PR descriptions — all of it, with no
+research reports, commit messages, issues, PR descriptions: all of it, with no
 exception for a file that "only the owner will read". A repository is read by
 strangers, and a document a stranger cannot read cannot be checked, which is the
 whole point of publishing the research files.
@@ -28,7 +28,7 @@ Vietnamese and had to be translated afterwards. Translating a **frozen** documen
 is the expensive part: `docs/research/00-kill-criteria.md` had to be re-expressed
 in another language after its answers were already known, which is exactly the
 moment when softening a threshold is tempting and invisible. If you ever have to
-do this, translate only — hold the numbers, the structure, and the self-criticism
+do this, translate only. Hold the numbers, the structure, and the self-criticism
 where they are, and prove it with a diff a reviewer can check.
 
 ## Dev setup
@@ -65,7 +65,7 @@ npm run test:watch
 round-trips any JSON, the replay fingerprint ignores key order and `_meta`,
 redaction is idempotent and shape-preserving, `diff(s, s)` is empty, and the
 line parsers never throw on hostile input. They found a real defect on their
-first run — `urlcreds` re-redacting its own placeholder under a second hash —
+first run, `urlcreds` re-redacting its own placeholder under a second hash,
 which is the kind of thing example tests do not go looking for.
 
 The seed is fixed (`tests/properties/fast-check-seed.ts`) so a red build
@@ -76,13 +76,13 @@ FAST_CHECK_SEED=$RANDOM npm test
 ```
 
 If a random seed finds something, add the counterexample as a plain example
-test next to the property — the property proves the law, the example documents
+test next to the property: the property proves the law, the example documents
 the bug.
 
 ## Smoke test
 
 The smoke test dogfoods the CLI end-to-end against the official MCP reference
-server — `check` a live server, `record` a session through the proxy, `check`
+server: `check` a live server, `record` a session through the proxy, `check`
 the replayed cassette, then `snapshot` and `snapshot --check` against that
 replay:
 
@@ -104,13 +104,13 @@ SERVER_PKG='@modelcontextprotocol/server-everything@latest' ./scripts/smoke.sh
 ```
 
 CI does exactly that in a separate weekly `smoke-canary` job, which is
-non-blocking — it warns about upstream drift without failing anyone's PR. If you
+non-blocking; it warns about upstream drift without failing anyone's PR. If you
 bump the pin, do it as its own commit so the reason stays visible in history.
 
 ## Changing `release.yml`
 
 `release.yml` runs only on a tag push, so there is no way to try a change before
-it matters — and the version it would break is the one you are shipping. The
+it matters, and the version it would break is the one you are shipping. The
 v0.2.0 release job carried two defects for exactly this reason.
 
 So prove the shell logic outside the workflow. Extract the step's script
@@ -118,7 +118,7 @@ So prove the shell logic outside the workflow. Extract the step's script
 real one on `PATH`, and run it against every ref shape you care about:
 
 ```bash
-# the line range is whatever the step's `run:` block currently occupies —
+# the line range is whatever the step's `run:` block currently occupies;
 # find it with: grep -n 'Move the floating' .github/workflows/release.yml
 sed -n '104,121p' .github/workflows/release.yml | sed 's/^          //' > /tmp/step.sh
 mkdir -p /tmp/fakebin && printf '#!/bin/sh\necho "GIT $*"\n' > /tmp/fakebin/git
@@ -140,17 +140,17 @@ dispatch cannot publish.
 
 ## Where decisions get written down
 
-- **[BACKLOG.md](BACKLOG.md)** — work that needs an argument before it needs
+- **[BACKLOG.md](BACKLOG.md)**: work that needs an argument before it needs
   code, usually because it touches something consumers already depend on. If you
   are about to add an input, a rule, or a tier, check whether it is already
   being argued here.
-- **[README roadmap](README.md#roadmap)** — things not built yet that need no
+- **[README roadmap](README.md#roadmap)**: things not built yet that need no
   argument.
-- **[RELEASING.md](RELEASING.md)** — how a release actually happens, including
+- **[RELEASING.md](RELEASING.md)**: how a release actually happens, including
   the parts that are only discoverable by getting them wrong.
-- **`docs/`** — the published site (mcpcassette.dev) and the format and design
+- **`docs/`**: the published site (mcpcassette.dev) and the format and design
   documents behind it.
-- **`plans/`** — git-ignored on purpose. Session reports, handoffs and scratch
+- **`plans/`**: git-ignored on purpose. Session reports, handoffs and scratch
   notes live here and are not expected to survive a fresh clone. Anything that
   should outlive the machine it was written on does not belong in `plans/`;
   promote it to one of the files above.
@@ -161,8 +161,8 @@ dispatch cannot publish.
 project law because it has already cost a wrong answer twice in one day.
 
 `docs/research/01-reality-check.md` first concluded that a competitor did not
-offer a contract-lock workflow. It does — `lock create` and `lock verify` — and
-the reason the report said otherwise is that its author read the command list
+offer a contract-lock workflow. It does, through `lock create` and `lock verify`,
+and the reason the report said otherwise is that its author read the command list
 through `--help | head -35`, which cut nine commands including that one. The same
 report then measured the competitor's poisoning coverage using the wrong
 subcommand, having never seen the right one. Both conclusions were wrong in the
@@ -175,7 +175,7 @@ So, before writing any sentence of the form "tool X cannot do Y":
 - Prefer the tool's own listing to its README, and prefer running it to both.
 - If the tool appears to fail, suspect the invocation before the tool. A flag
   that exits 0 when you expected 1 is more often the wrong flag than a broken
-  gate — `--fail-on-regression` versus `--fail-on-schema-drift` cost an hour
+  gate; `--fail-on-regression` versus `--fail-on-schema-drift` cost an hour
   here.
 - Name the exact command in the write-up. A comparison that does not say what
   was run cannot be checked, and will eventually be wrong without anyone
@@ -198,7 +198,7 @@ ci: run smoke test on pull requests
 chore: bump ajv to 8.17
 ```
 
-Keep commits small and focused — one logical change each. The release notes are
+Keep commits small and focused, one logical change each. The release notes are
 generated from commit history, so the subject line is what users will read.
 
 ## Pull requests
@@ -213,7 +213,8 @@ Before opening a PR:
 
 In the PR description, say what changed and why. If it fixes an issue, link it
 with `Fixes #123`. If it changes the cassette format or a command's output,
-call that out explicitly — those are the changes most likely to break someone.
+call that out explicitly, because those are the changes most likely to break
+someone.
 
 CI runs the test matrix (Node 20 and 22) and the smoke test on every PR. Both
 must be green before merge.
@@ -229,15 +230,15 @@ must be green before merge.
 | `src/lint.ts` | The `CAS-L*` safety lint rules |
 | `src/snapshot.ts` | Contract capture and breaking-change diff |
 | `src/cassette.ts` | Cassette format v1 read/write |
-| `src/client.ts` | `MiniClient` — the small MCP client used by `check`/`snapshot` |
+| `src/client.ts` | `MiniClient`, the small MCP client used by `check`/`snapshot` |
 | `tests/` | Unit tests plus an end-to-end suite against a fixture server |
 | `scripts/smoke.sh` | End-to-end dogfood run against the reference server |
 | `action.yml` | The composite GitHub Action wrapping `check` and `snapshot` |
-| `BACKLOG.md` | Decisions owed before code — see above |
+| `BACKLOG.md` | Decisions owed before code, see above |
 
 ## Reporting security issues
 
-Please don't open a public issue for a security problem — see
+Please don't open a public issue for a security problem. See
 [SECURITY.md](SECURITY.md).
 
 ## License

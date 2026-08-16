@@ -61,7 +61,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * Epoch-like numbers. Two windows, both spanning ~2001→2065:
  *   seconds:      1e9  .. 3e9   (2001-09 .. 2065-01)
  *   milliseconds: 1e12 .. 3e12  (2001-09 .. 2065-01)
- * Integers only — 1234.5 is data, not a clock. The windows are a heuristic:
+ * Integers only; 1234.5 is data, not a clock. The windows are a heuristic:
  * a server returning a plain big count in this range gets masked too, which
  * trades a rare false "match" for never flagging every run over a timestamp.
  */
@@ -115,7 +115,7 @@ export function removePointer(value: unknown, pointer: string): void {
   if (Array.isArray(parent)) {
     // Replace, never splice: removal would re-index the tail and misalign the
     // two payloads when their lengths differ. A non-numeric segment under an
-    // array is a typo'd pointer, not index 0 — leave the payload untouched.
+    // array is a typo'd pointer, not index 0, so leave the payload untouched.
     if (!/^\d+$/.test(last) || Number(last) >= parent.length) return;
     parent[Number(last)] = IGNORED_SENTINEL;
   } else if (parent && typeof parent === "object") {
@@ -194,7 +194,7 @@ export async function verifyAgainstServer(
   server: string[] | Target,
   opts: VerifyOptions = {}
 ): Promise<VerifyResult[]> {
-  // "" would waive every change — an unset shell variable must not silently
+  // "" would waive every change, and an unset shell variable must not silently
   // open that valve. The explicit switch for it is --allow-all-changes.
   if ((opts.allowChangedPaths ?? []).includes("")) {
     throw new Error(

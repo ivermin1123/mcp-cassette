@@ -3,7 +3,7 @@
  *
  * The engine answers a miss with a JSON-RPC error, which is right for a server
  * and useless for a test runner: a test that quietly receives an error frame
- * passes. So the adapter turns misses into thrown errors — and the type it
+ * passes. So the adapter turns misses into thrown errors, and the type it
  * throws is the answer to the question the reader will actually ask.
  *
  * "Did I never record this, or did I record it and the arguments drifted?" is
@@ -26,7 +26,7 @@ export function isMismatch(reason: MissReason): boolean {
 export class ReplayError extends Error {
   /** Every miss in the test that failed, in arrival order. */
   readonly misses: MissEvent[];
-  /** The miss that decided the type — the first one. */
+  /** The miss that decided the type: the first one. */
   readonly reason: MissReason;
 
   constructor(message: string, misses: MissEvent[]) {

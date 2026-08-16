@@ -4,7 +4,7 @@
  *
  * The lint reads text an attacker wrote. A pattern with catastrophic
  * backtracking would turn that into a denial of service against the very CI
- * job meant to be checking the attacker's tool — so "these regexes look fine"
+ * job meant to be checking the attacker's tool, so "these regexes look fine"
  * is not a standard this file accepts. `recheck` decides it by analysis, not by
  * eyeballing.
  *

@@ -266,7 +266,7 @@ describe("verify against a live server (e2e)", () => {
     const results = await verifyAgainstServer(baseCassette(), v2);
     const toolsList = results[0]!;
     expect(toolsList.status).toBe("CHANGED");
-    // v2 removed slugify and changed add's schema — the paths say so.
+    // v2 removed slugify and changed add's schema, and the paths say so.
     expect(toolsList.changes.some((c) => c.path.startsWith("/tools/"))).toBe(true);
     expect(verifyFailed(results)).toBe(true);
   }, 20_000);
@@ -276,7 +276,7 @@ describe("verify against a live server (e2e)", () => {
     const waived = await verifyAgainstServer(baseCassette(), v2, { allowChangedPaths: ["/tools"] });
     expect(waived[0]!.status).toBe("CHANGED");
     expect(waived[0]!.allowed).toBe(true);
-    // echo's reply also drifts in v2? It does not — the call still matches.
+    // echo's reply also drifts in v2? It does not; the call still matches.
     expect(verifyFailed(waived)).toBe(false);
 
     const notCovering = await verifyAgainstServer(baseCassette(), v2, { allowChangedPaths: ["/unrelated"] });

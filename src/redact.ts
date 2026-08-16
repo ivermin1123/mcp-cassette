@@ -8,7 +8,7 @@
  * SHA-256 of the secret itself.
  *
  * The placeholder is deterministic: the same secret always collapses to the
- * same text. That is what lets replay keep matching — a live token sent by the
+ * same text. That is what lets replay keep matching: a live token sent by the
  * client redacts to exactly the placeholder that was recorded (see replay.ts).
  *
  * Pattern matching is a tripwire, not a proof: a credential with no recognizable
@@ -21,7 +21,7 @@ import type { JsonRpcFrame } from "./jsonrpc.js";
 
 export interface RedactRule {
   id: string;
-  /** Must be a global regex — matching goes through String.replace, which resets lastIndex. */
+  /** Must be a global regex, because matching goes through String.replace, which resets lastIndex. */
   pattern: RegExp;
   /** Capture group holding the secret; omit to redact the whole match. */
   group?: number;
@@ -30,13 +30,13 @@ export interface RedactRule {
 /**
  * Order matters. `bearer` runs first so an `Authorization` value collapses to a
  * single placeholder instead of a placeholder inside a placeholder, and
- * `anthropic` runs before `openai` because `sk-ant-…` also satisfies the
- * generic `sk-…` shape.
+ * `anthropic` runs before `openai` because `sk-ant-...` also satisfies the
+ * generic `sk-...` shape.
  */
 export const REDACT_RULES: readonly RedactRule[] = Object.freeze([
   { id: "bearer", pattern: /\bBearer\s+([A-Za-z0-9._~+/=-]{8,})/g, group: 1 },
-  // Any scheme, not just http(s): the common case is a connection string —
-  // postgres://, redis://, mongodb://, mysql://, amqp:// — which an MCP server
+  // Any scheme, not just http(s): the common case is a connection string.
+  // postgres://, redis://, mongodb://, mysql:// and amqp:// are all shapes an MCP server
   // wrapping a database carries in its env or its tool arguments. Only the
   // password is replaced; scheme, username, host and path are identifying rather
   // than secret, and keeping them keeps the cassette debuggable. Runs early so a
@@ -46,9 +46,9 @@ export const REDACT_RULES: readonly RedactRule[] = Object.freeze([
   // makes that quadratic. Real schemes are under a dozen characters.
   { id: "urlcreds", pattern: /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]+:([^\s/@]+)@/gi, group: 1 },
   // Segment lengths are capped. `-` is both a class member and a word boundary,
-  // so `eyJ-eyJ-…` offers one candidate start per 4 characters; an unbounded
+  // so `eyJ-eyJ-...` offers one candidate start per 4 characters; an unbounded
   // first segment makes each of them rescan the rest of the line, which is
-  // quadratic — 6s on 128KB, stalling the proxy's synchronous data handler.
+  // quadratic: 6s on 128KB, stalling the proxy's synchronous data handler.
   // Real JWT segments are far below these caps.
   { id: "jwt", pattern: /\beyJ[A-Za-z0-9_-]{4,1024}\.[A-Za-z0-9_-]{4,8192}\.[A-Za-z0-9_-]{0,1024}/g },
   { id: "github", pattern: /\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,})/g },
@@ -71,11 +71,11 @@ export const SENSITIVE_KEY =
  * Ask whether the name appears *inside* ordinary English words or common field
  * names that carry no secret:
  *
- * - **No** — `token`, `password`, `credential`. Put it in `SENSITIVE_KEY`. That
+ * - **No**: `token`, `password`, `credential`. Put it in `SENSITIVE_KEY`. That
  *   alternation is unanchored on purpose, which is what lets it catch
  *   `accessToken`, `refresh_token` and `X-Api-Key` without enumerating every
  *   spelling. A false positive there is cheap; a missed credential is not.
- * - **Yes** — short names, three or four letters, that are substrings of real
+ * - **Yes**: short names, three or four letters, that are substrings of real
  *   words. Put it here. `pin` is the founding case: unanchored it also matches
  *   `shipping`, `mapping`, `spinner` and `pinned`, and redacting a shipping
  *   address is a worse failure than the leak it prevents. Segment matching gives
@@ -83,7 +83,7 @@ export const SENSITIVE_KEY =
  *
  * The tiebreaker when a name could go either way: unanchored matching over-
  * redacts and segment matching under-redacts, so weigh how visible each failure
- * is. Over-redaction shows up as a placeholder where a test expected data —
+ * is. Over-redaction shows up as a placeholder where a test expected data,
  * annoying, immediate, obvious. Under-redaction shows up as a credential
  * committed to a repository, and nothing tells you.
  *
@@ -102,7 +102,7 @@ function keySegments(key: string): string[] {
     .map((segment) => segment.toLowerCase());
 }
 
-/** Values shorter than this under a sensitive key are left alone (flags, "none", …). */
+/** Values shorter than this under a sensitive key are left alone (flags, "none", and the like). */
 export const KEYCTX_MIN_LENGTH = 8;
 
 /**
@@ -122,13 +122,13 @@ const PLACEHOLDER_ANYWHERE = /\[REDACTED:[a-z]+:[0-9a-f]{8}\]/;
 
 /**
  * `SENSITIVE_KEY` is deliberately unanchored so it still catches camelCase keys
- * like `accessToken` — weakening it would trade a visible false positive for a
+ * like `accessToken`; weakening it would trade a visible false positive for a
  * silent missed secret. The cost is that OAuth/OIDC discovery metadata (RFC 8414)
  * uses field names containing "token" and "authorization" for values that are
  * public endpoint URLs. Exempt those on the *value* side instead: the key must be
  * a known discovery field AND the value must be a plain absolute http(s) URL.
  * `token_endpoint: "https://evil/?secret=abc"` (query string) and
- * `token_endpoint: "eyJ…"` (not a URL) both still redact.
+ * `token_endpoint: "eyJ..."` (not a URL) both still redact.
  */
 const DISCOVERY_METADATA_KEYS = new Set([
   "token_endpoint",
@@ -168,7 +168,7 @@ function isKeyctxSecret(key: string, value: string): boolean {
  * the server bothered to quote it, so key context has to reach numbers too.
  *
  * The secret is hashed from its decimal text, which means `123456789` and
- * `"123456789"` collapse to the *same* placeholder — a server that answers with
+ * `"123456789"` collapse to the *same* placeholder, so a server that answers with
  * a number and a client that sends the same value as a string still match on
  * replay.
  *
@@ -212,8 +212,8 @@ function applyRule(s: string, rule: RedactRule, onHit?: (secret: string) => void
     // that reads a delimited field: `urlcreds` sees the password slot of
     // `postgres://user:[REDACTED:urlcreds:76880d60]@host/db` and happily
     // redacts it again under a *different* hash, because the hash is taken of
-    // whatever was there. That breaks the promise the whole scheme rests on —
-    // one secret, one placeholder — and with it replay matching, which
+    // whatever was there. That breaks the promise the whole scheme rests on,
+    // one secret and one placeholder, and with it replay matching, which
     // fingerprints requests through this same function. Guarding here rather
     // than in each pattern makes idempotence a property of the mechanism
     // instead of something every future rule has to remember.
@@ -247,7 +247,7 @@ function sensitiveKeyOf(key: string): SensitiveKey {
 }
 
 /**
- * Define rather than assign: `out[key] = …` for the key `__proto__` invokes the
+ * Define rather than assign: `out[key] = value` for the key `__proto__` invokes the
  * prototype setter instead of creating an own property, which would drop the
  * field from the cassette and move attacker-supplied data onto the result's
  * prototype.
@@ -266,7 +266,7 @@ function redactValue(value: unknown, sensitiveKey: SensitiveKey): unknown {
   // A redacted number becomes a string, which changes the JSON type a strict
   // client sees on replay. That is the deliberate trade: a type mismatch fails
   // loudly and points at the placeholder in the error, whereas a numeric stand-in
-  // would forge plausible data, defeat the `[REDACTED:…]` marker that makes
+  // would forge plausible data, defeat the `[REDACTED:...]` marker that makes
   // redaction idempotent and auditable, and leave the leak invisible.
   if (typeof value === "number") {
     if (sensitiveKey !== null && isKeyctxNumericSecret(value)) {
@@ -294,7 +294,7 @@ export function redactFrame(frame: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
-// Scanning (audit mode) — reports what redaction *would* remove, without writing.
+// Scanning (audit mode): reports what redaction *would* remove, without writing.
 // ---------------------------------------------------------------------------
 
 export interface SecretHit {
@@ -374,25 +374,25 @@ export function scanFrame(frame: unknown): SecretHit[] {
 }
 
 // ---------------------------------------------------------------------------
-// Raw lines — anything the recorder could not parse as a JSON-RPC frame.
+// Raw lines: anything the recorder could not parse as a JSON-RPC frame.
 // ---------------------------------------------------------------------------
 
 /**
  * A raw line is not necessarily un-structured: `parseFrame` rejects JSON-RPC
  * batch arrays and any frame missing `"jsonrpc":"2.0"`, and those still carry
  * `params.arguments.password`. Scanning such a line as flat text would apply the
- * shape rules only, silently skipping `keyctx` — a secret on disk under a header
+ * shape rules only, silently skipping `keyctx`, so a secret on disk under a header
  * that claims redaction was applied.
  *
  * So: parse it, walk it for key-context secrets, and replace just those
  * substrings in the original text. Everything around them keeps its exact bytes,
  * which is what makes a raw entry a faithful transcript. A line that is not JSON
- * at all gets the shape rules and nothing more — object walking has nothing to
+ * at all gets the shape rules and nothing more, because object walking has nothing to
  * walk, and no key context exists to recover.
  *
  * A *numeric* secret is the one case that surgery cannot do safely. Its digits
  * are unquoted in the text, the placeholder is a string, and the same digits can
- * legitimately appear inside a neighbouring string or a longer number — so a
+ * legitimately appear inside a neighbouring string or a longer number, so a
  * literal substring swap can just as easily produce invalid JSON as a redacted
  * line. Those lines are re-serialized from the parsed tree instead: exact bytes
  * are the weaker promise, and it is the one worth losing.
@@ -448,7 +448,7 @@ function collectKeyctxSecrets(line: string): RawKeyctxHit[] {
   try {
     parsed = JSON.parse(line);
   } catch {
-    return []; // not JSON — no keys, no key context
+    return []; // not JSON: no keys, no key context
   }
   const found: RawKeyctxHit[] = [];
   const walk = (value: unknown, path: string, sensitiveKey: SensitiveKey): void => {
@@ -515,7 +515,7 @@ export function scanRawLine(line: string): SecretHit[] {
 // Cassette-level operations
 // ---------------------------------------------------------------------------
 
-/** Redact a whole cassette. Pure — returns a new cassette, input untouched. */
+/** Redact a whole cassette. Pure: returns a new cassette, input untouched. */
 export function redactCassette(cassette: Cassette): Cassette {
   const command = cassette.header.command ? redactCommand(cassette.header.command) : undefined;
   return {

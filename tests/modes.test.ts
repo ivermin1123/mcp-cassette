@@ -32,7 +32,7 @@ async function recordEchoSession(cassettePath: string, extra: string[] = []): Pr
 }
 
 /**
- * Drive a replay process with raw frames and observe its real exit code —
+ * Drive a replay process with raw frames and observe its real exit code,
  * MiniClient can't, because closing it SIGTERMs the child.
  */
 function replaySession(
@@ -213,7 +213,7 @@ describe("replay --on-miss", () => {
     expect(replayAgain.code).toBe(0);
 
     // A second passthrough session must continue the live-N sequence, not
-    // reuse live-1 — duplicate ids would cross-wire request/response pairing.
+    // reuse live-1, because duplicate ids would cross-wire request/response pairing.
     const missCall2: JsonRpcFrame = {
       jsonrpc: "2.0",
       id: 9,
@@ -232,7 +232,7 @@ describe("replay --on-miss", () => {
       .map((e) => ((e as { frame: { id?: unknown } }).frame.id));
     expect(liveIds).toEqual(["live-1", "live-2"]);
 
-    // …and the grown cassette still pairs each request with its own response.
+    // ...and the grown cassette still pairs each request with its own response.
     const third = await replaySession([cassettePath], [initFrame, initializedNote, missCall, missCall2]);
     const first = third.out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
     const secondHit = third.out.find((f) => "id" in f && f.id === 9) as JsonRpcResponse;
@@ -297,11 +297,11 @@ describe("replay --on-miss", () => {
     );
     expect(code).toBe(0);
 
-    // The wire answer to the client carries the live server's real reply…
+    // The wire answer to the client carries the live server's real reply...
     const forwarded = out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
     expect(JSON.stringify(forwarded.result)).toContain(`received:${TOKEN_LIVE}`);
 
-    // …but the file gained only placeholders: passthrough must not be the
+    // ...but the file gained only placeholders: passthrough must not be the
     // door through which raw secrets enter a redacted cassette.
     const onDisk = fs.readFileSync(cassettePath, "utf8");
     expect(onDisk).not.toContain(TOKEN_LIVE);

@@ -74,7 +74,7 @@ const quiet = async <T>(run: () => Promise<T>): Promise<T> => {
   }
 };
 
-/** A legacy cassette that knows `initialize` and nothing else — everything else misses. */
+/** A legacy cassette that knows `initialize` and nothing else; everything else misses. */
 const RECORDED: CassetteEntry[] = [
   { type: "frame", t: 0, dir: "c2s", frame: { jsonrpc: "2.0", id: 1, method: "initialize", params: {} } },
   { type: "frame", t: 1, dir: "s2c", frame: { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } } },

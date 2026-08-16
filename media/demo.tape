@@ -1,4 +1,4 @@
-# mcp-cassette demo — render with: vhs demo.tape
+# mcp-cassette demo, render with: vhs demo.tape
 # Needs mcp-cassette on PATH and a warm npx cache for
 # @modelcontextprotocol/server-everything. The [BREAKING] scene reads
 # demo.snapshot.json, a contract snapshot edited to disagree with the live

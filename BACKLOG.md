@@ -1,7 +1,7 @@
 # Backlog
 
 Decisions this project owes itself. Each item is here because it needs an
-argument before it needs code — usually because it touches something a consumer
+argument before it needs code, usually because it touches something a consumer
 already depends on. Items that are merely "not built yet" belong in the
 [README roadmap](README.md#roadmap) or in an issue; these are the ones where
 picking the obvious implementation would be the mistake.
@@ -24,8 +24,8 @@ looser setting.
 
 So every release that adds an `error`-level rule is a hard adoption cliff for
 anyone who cannot fix all findings that day, and their only escape drops the
-safety check entirely — the opposite of what they want. 0.3.0 shipped three such
-rules.
+safety check entirely, which is the opposite of what they want. 0.3.0 shipped
+three such rules.
 
 **Sketch, to be argued rather than assumed:** a `lint-fail-on` input taking
 `error｜warn｜none`, passed through to `check`, so a rule set can be adopted
@@ -57,7 +57,7 @@ which matches the floating tags (`v0`, `v0.3`) as well as real release tags
 succeed: `Verify tag matches package.json version` compares `0.3` against
 `0.3.0`, fails, and stops.
 
-**Measured, not assumed.** The failure is safe — it lands on the first gate,
+**Measured, not assumed.** The failure is safe: it lands on the first gate,
 before `npm test`, `npm publish`, the GitHub Release, and the float move, all of
 which were skipped ([run 31940214098](https://github.com/ivermin1123/mcp-cassette/actions/runs/31940214098)).
 And it only happens for a *hand* push: across the last 20 Release runs there is
@@ -65,14 +65,14 @@ no run for ref `v0`, though `v0` has been force-moved on four releases, because
 a push made with `GITHUB_TOKEN` does not re-trigger workflows. The workflow
 moving its own floats is invisible to itself; a maintainer moving one is not.
 
-So the cost today is one red run in the Actions history per manual float cut —
-noise, not risk.
+So the cost today is one red run in the Actions history per manual float cut.
+Noise, not risk.
 
 **Directions, none chosen:**
 
 - **Narrow the pattern** to full versions (`v[0-9]+.[0-9]+.[0-9]+*`). Removes the
   noise, and also removes the version gate's protection from anything the
-  narrowed pattern no longer matches — a typo'd tag would simply do nothing
+  narrowed pattern no longer matches: a typo'd tag would simply do nothing
   instead of failing loudly.
 - **Accept the noise** and document it, treating the red run as proof the
   version gate works. Costs nothing but leaves a permanent "is the release
@@ -81,21 +81,21 @@ noise, not risk.
   the run goes green-and-skipped rather than red.
 
 **Why this is a design checkpoint:** it is the release path. A change here is
-only exercised by cutting a real release, so it cannot be dry-run — the same
-constraint that let two defects ship in the v0.2.0 release job. Any edit needs
+only exercised by cutting a real release, so it cannot be dry-run. That is the
+same constraint that let two defects ship in the v0.2.0 release job. Any edit needs
 the extract-and-stub verification described in
 [CONTRIBUTING](CONTRIBUTING.md#changing-releaseyml).
 
 ---
 
-## Schema-diff completeness — CANCELLED
+## Schema-diff completeness: CANCELLED
 
 **Raised** 2026-08-16. **Cancelled** 2026-08-16, the same day, after
 [`docs/research/01-reality-check.md`](docs/research/01-reality-check.md) measured
 the contract-gate feature as occupied: `@kryptosai/mcp-observatory` ships
 `lock create` / `lock verify`, five months older and working on a clean install,
 and the follow-up check found its workflow is the same one command against one
-committed file — so the ergonomic argument for continuing does not survive
+committed file, so the ergonomic argument for continuing does not survive
 either.
 
 **What shipped before the stop**, because both were defect repairs rather than
@@ -105,16 +105,16 @@ stopped reporting reordering as breaking, and a `$ref` guard that refuses to
 classify what it cannot resolve. See the Unreleased section of
 [CHANGELOG.md](CHANGELOG.md).
 
-**What is cancelled**, from the design's own pairing —
+**What is cancelled**, from the design's own pairing in
 `plans/reports/design-260816-1705-schema-diff-completeness.md`:
 
-- Pair 2 — `additionalProperties` tiers, nested `required` families, array
+- Pair 2: `additionalProperties` tiers, nested `required` families, array
   cardinality, nullability.
-- Pair 3 — `anyOf` / `oneOf` / `allOf`, constraint direction.
-- Pair 4 — `outputSchema` rules and the v2 snapshot format migration.
+- Pair 3: `anyOf` / `oneOf` / `allOf`, constraint direction.
+- Pair 4: `outputSchema` rules and the v2 snapshot format migration.
 
 The design's four open questions go with them; none needs an answer now. The
-feature that exists keeps working and keeps being maintained — this cancels
+feature that exists keeps working and keeps being maintained; this cancels
 further investment, not the command.
 
 ### Where the fence is
@@ -122,8 +122,8 @@ further investment, not the command.
 Frozen does not mean nothing may be touched. It means one thing, and this is the
 line:
 
-> **Fixing so it is NO WORSE than 0.3.0 — inside the fence.
-> Making it BETTER than 0.3.0 ever was — outside the fence, not done.**
+> **Fixing so it is NO WORSE than 0.3.0 is inside the fence.
+> Making it BETTER than 0.3.0 ever was is outside the fence, and not done.**
 
 The rule was written after the first thing to hit it. The recursive walk shipped
 with a `$ref` guard that returned early, so a removed parameter went unreported
@@ -136,7 +136,7 @@ Per-node `$ref` reporting is the other side of the line. The guard reports once
 per tool, having scanned the whole schema; now that the walk is recursive it
 could report at the node holding the `$ref`, with a JSON Pointer, which would be
 a more useful message than 0.3.0 or anything before it ever gave. That is better
-rather than not-worse, so it stays undone — and it would change how many findings
+rather than not-worse, so it stays undone. It would also change how many findings
 a diff produces, which is a real change for anyone counting them in CI. Recorded
 so the next reader knows the current shape was chosen, not overlooked.
 
@@ -146,7 +146,7 @@ so the next reader knows the current shape was chosen, not overlooked.
 captured from a **real FastMCP server** (`pydantic-nested-server.py` plus three
 `.contract.json` snapshots taken across schema edits). Pydantic emits
 `$defs`/`$ref` for any nested model, so this is the empirical answer to "do real
-MCP servers actually emit references?" — and it is the only contract data in
+MCP servers actually emit references?", and it is the only contract data in
 this project not written by hand. `main` proves the `$ref` guard with
 hand-written schemas instead.
 
@@ -156,8 +156,8 @@ is anchored to tags, which survive branch cleanup:
 
 | Tag | What it holds |
 |---|---|
-| `corpus/pydantic-2026-08-16` | #50 head — the corpus and the tests written against it |
-| `corpus/pydantic-guard-2026-08-16` | #49 head — the corpus and the original guard implementation |
+| `corpus/pydantic-2026-08-16` | #50 head: the corpus and the tests written against it |
+| `corpus/pydantic-guard-2026-08-16` | #49 head: the corpus and the original guard implementation |
 
 Fetch with `git fetch origin --tags`, then `git show corpus/pydantic-2026-08-16`.
 Whoever reopens contract diffing should start from that data rather than

@@ -13,7 +13,7 @@
  * HTTP and stdio are not symmetric, and this does not pretend otherwise.
  * An HTTP cassette is served in-process, so its whole lifecycle is real. A
  * stdio replay owns `process.stdin` and `process.stdout` and would fight vitest
- * for them, so the adapter hands back the argv for a client to spawn instead —
+ * for them, so the adapter hands back the argv for a client to spawn instead,
  * see `command` for what that costs.
  */
 
@@ -44,7 +44,7 @@ export interface CassetteHandle {
    * argv for a client to spawn as its stdio server. stdio cassettes only.
    *
    * A process spawned by the client is a process the adapter does not own, so
-   * misses on this path arrive only as the JSON-RPC error the client receives —
+   * misses on this path arrive only as the JSON-RPC error the client receives,
    * `onMiss` cannot fail the test for you, and `takeMisses()` has nothing to
    * drain. HTTP cassettes do not have this limitation.
    */
@@ -55,7 +55,7 @@ export interface CassetteHandle {
 
 /**
  * `dist/vitest/index.js` and `src/vitest/index.ts` both sit two levels under
- * the package root, so one expression finds the built CLI from either — from
+ * the package root, so one expression finds the built CLI from either: from
  * the repo during its own tests, and from `node_modules` once installed.
  */
 const cliPath = (): string => fileURLToPath(new URL("../../dist/cli.js", import.meta.url));

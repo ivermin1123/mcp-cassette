@@ -3,7 +3,7 @@
  *
  * The design calls status fidelity the risk worth mitigating with a table, so
  * §3.2's matrix is a table here: one row per (era, sessioned, method), one row
- * per kind of POST. The rest asserts what §3.3 separates — what replay must be
+ * per kind of POST. The rest asserts what §3.3 separates: what replay must be
  * faithful about (recorded statuses, 202, 405, a session id minted fresh) from
  * what it must not (strictness: a wrong header is a warning and a correct
  * answer, never a 400).
@@ -45,7 +45,7 @@ function cassette(name: string, header: Record<string, unknown>, entries: Casset
 const post = (url: string, body: unknown, headers: Record<string, string> = {}) =>
   fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 
-/** Capture stderr for the duration of one call — §3.3's warnings are an asserted behavior. */
+/** Capture stderr for the duration of one call; §3.3's warnings are an asserted behavior. */
 async function withStderr<T>(run: () => Promise<T>): Promise<[T, string]> {
   const lines: string[] = [];
   const write = process.stderr.write.bind(process.stderr);

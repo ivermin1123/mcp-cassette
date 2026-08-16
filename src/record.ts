@@ -4,7 +4,7 @@
  * Transparent stdio proxy: the MCP client talks to this process as if it were
  * the server; every byte is forwarded verbatim in both directions while every
  * JSON-RPC frame is captured into the cassette. Works with any server,
- * any SDK, any spec revision — recording happens at the transport level.
+ * any SDK, any spec revision: recording happens at the transport level.
  *
  * Frames are redacted on the way into the cassette (see redact.ts) so the file
  * is safe to commit; the bytes forwarded to the client and the server are the
@@ -95,7 +95,7 @@ export function runRecord(opts: RecordOptions): Promise<number> {
     child.on("error", (err) => {
       // A server that never started must not leave a cassette behind for the
       // next `--mode once` run to trip over. The stdio writer puts its header on
-      // disk immediately, so discarding the buffer is not enough — the file that
+      // disk immediately, so discarding the buffer is not enough: the file that
       // this run created, and already truncated, goes with it.
       void writer.discard().then(() => {
         fs.rmSync(opts.out, { force: true });

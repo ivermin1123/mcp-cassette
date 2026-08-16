@@ -2,7 +2,7 @@
 # official SDK, and the official conformance suite.
 #
 # This is a radar, not a gate. Every job is `continue-on-error: true` and a red
-# signal here means "go look upstream", never "this repository is broken" — the
+# signal here means "go look upstream", never "this repository is broken". The
 # things it watches are outside our control and change on someone else's
 # schedule. Do NOT add any job in this file to the required status checks in
 # branch protection.
@@ -25,7 +25,7 @@ on:
   schedule:
     # Wednesdays, 06:00 UTC.
     - cron: '0 6 * * 3'
-  # So a maintainer can ask the question on demand instead of waiting a week —
+  # So a maintainer can ask the question on demand instead of waiting a week,
   # after an upstream release, say.
   workflow_dispatch:
 
@@ -38,13 +38,13 @@ concurrency:
 
 jobs:
   # mcp-cassette implements the MCP wire protocol itself and depends on no SDK.
-  # That is deliberate — a recorder that shares a client implementation with the
-  # thing it records cannot notice that implementation drifting — but it means
+  # That is deliberate: a recorder that shares a client implementation with the
+  # thing it records cannot notice that implementation drifting, but it means
   # nothing in the test suite reacts when the official SDK changes how a client
   # behaves on the wire. This job is that missing sensor.
   # The SARIF schema lives in schemas/ as a byte-identical copy so the test
   # suite never touches the network. The cost of a copy is that it goes stale
-  # quietly; this is the counterweight. It warns and stays green — a schema
+  # quietly; this is the counterweight. It warns and stays green, because a schema
   # moving upstream is news to read, not a reason to break every branch.
   vendored-schemas:
     name: vendored-schemas (local copies vs. upstream)
@@ -135,7 +135,7 @@ jobs:
   # modelcontextprotocol/conformance#258. So the probe records the scenario
   # inventory (new scenarios appearing is itself the signal to read), checks
   # whether stdio support has landed, and runs the suite against our replay the
-  # moment it does — no edit to this file required on the day it ships.
+  # moment it does, with no edit to this file required on the day it ships.
   #
   # The golden cassette it replays is a committed recording of the fixture
   # server's classic lifecycle. Regenerate it with:
@@ -146,12 +146,12 @@ jobs:
   #     -- node tests/fixtures/tiny-server.mjs"
   #
   # That driver is `check`, so the recording stops at the handshake and
-  # tools/list — enough to prove replay serves a lifecycle, and all the
+  # tools/list, enough to prove replay serves a lifecycle, and all the
   # scenarios reachable today can ask for anyway.
   #
   # TODO: when upstream ships stdio support, replace it with a committed
-  # generator script and record a fuller golden cassette — tools/call over each
-  # fixture tool, plus an error case — so the suite meets a replay that can
+  # generator script and record a fuller golden cassette: tools/call over each
+  # fixture tool, plus an error case, so the suite meets a replay that can
   # answer more than two methods. The pass/fail count is only worth reading
   # once the cassette is deeper than the questions being asked.
   conformance-probe:

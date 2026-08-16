@@ -12,11 +12,11 @@
  * so an event may arrive in any number of pieces and a CR may be separated
  * from its LF by a chunk boundary. Feed bytes as they come; complete events
  * come back. A trailing block with no blank line after it is not an event yet
- * and is deliberately not reported — that is the spec's own rule, and it is
+ * and is deliberately not reported; that is the spec's own rule, and it is
  * also what makes a stream cut short at shutdown record only what it showed.
  */
 
-/** One dispatched event. Fields the cassette never stores are still parsed — see `chunks` in the design (§1.3). */
+/** One dispatched event. Fields the cassette never stores are still parsed; see `chunks` in the design (§1.3). */
 export interface SseEvent {
   /** The `event:` field, or "message" when the stream named none. */
   type: string;
@@ -57,7 +57,7 @@ export class SseParser {
 
   /**
    * No more bytes are coming. A CR held back for a possible LF can only have
-   * been a line ending after all, so the line it ended is processed now — which
+   * been a line ending after all, so the line it ended is processed now, which
    * may dispatch the stream's last event. A block that never got its blank line
    * is still not an event, per spec, and is dropped.
    */

@@ -22,7 +22,7 @@ const baseTool = {
   },
 };
 
-/** The same tool with a replaced inputSchema — the shape most cases vary. */
+/** The same tool with a replaced inputSchema: the shape most cases vary. */
 function withSchema(inputSchema: unknown) {
   return { ...baseTool, inputSchema };
 }
