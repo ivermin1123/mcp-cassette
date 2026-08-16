@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-cassette: a test double that speaks the protocol, not your language</title>
+<meta name="description" content="How a recorded MCP session serves as a real MCP server for a client in any language: the WHATWG event-stream parser, the two protocol lifecycles a cassette has to tell apart, and the header line that cannot be written when the file is opened.">
+<link rel="canonical" href="https://mcpcassette.dev/replay/">
+<meta name="color-scheme" content="light dark">
+
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mcpcassette.dev/replay/">
+<meta property="og:title" content="A test double that speaks the protocol, not your language">
+<meta property="og:description" content="One cassette, a health check and a Python client, identical answers. What it costs to implement: incremental SSE parsing, two protocol eras in one file, a deferred header.">
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>
+
+<style>
+:root {
+  --bg:        #fdfdfc;
+  --surface:   #f4f4f1;
+  --border:    #e2e2dd;
+  --text:      #1a1a18;
+  --muted:     #5c5c56;
+  --accent:    #8a4b2a;
+  --code-bg:   #f4f4f1;
+  --code-text: #1a1a18;
+  --note-bg:   #fdf6e8;
+  --note-brd:  #d9b878;
+  --note-text: #5a4520;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:        #14140f;
+    --surface:   #1e1e19;
+    --border:    #33332c;
+    --text:      #eceae2;
+    --muted:     #a3a096;
+    --accent:    #e0a06a;
+    --code-bg:   #1a1a15;
+    --code-text: #eceae2;
+    --note-bg:   #241d10;
+    --note-brd:  #7a6032;
+    --note-text: #e3c98f;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  padding: 0 1.25rem 5rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow-wrap: break-word;
+}
+
+.wrap { max-width: 46rem; margin: 0 auto; }
+
+header { padding: 3.5rem 0 1rem; }
+
+.back {
+  display: inline-block;
+  margin-bottom: 1.75rem;
+  font-size: .9rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+h1 {
+  font-size: 1.9rem;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  margin: 0 0 .5rem;
+}
+
+.pitch {
+  font-size: 1.2rem;
+  line-height: 1.45;
+  font-weight: 600;
+  margin: 0 0 .75rem;
+  letter-spacing: -0.01em;
+}
+
+.sub { color: var(--muted); margin: 0 0 1.5rem; font-size: .95rem; }
+
+h2 {
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  margin: 3rem 0 .5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+h3 {
+  font-size: .95rem;
+  margin: 2rem 0 .35rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--accent);
+}
+
+p { margin: 0 0 1rem; }
+
+a { color: var(--accent); text-underline-offset: 2px; }
+a:hover { text-decoration: none; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .1em .35em;
+}
+
+pre {
+  background: var(--code-bg);
+  color: var(--code-text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .9rem 1rem;
+  overflow-x: auto;
+  font-size: .85rem;
+  line-height: 1.5;
+  margin: 0 0 1rem;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+ul { margin: 0 0 1rem; padding-left: 1.2rem; }
+li { margin-bottom: .5rem; }
+
+blockquote {
+  margin: 1.5rem 0;
+  padding: 0 0 0 1rem;
+  border-left: 3px solid var(--accent);
+  font-size: 1.1rem;
+  line-height: 1.5;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+blockquote p { margin: 0; }
+
+.note {
+  background: var(--note-bg);
+  border: 1px solid var(--note-brd);
+  border-left-width: 3px;
+  color: var(--note-text);
+  border-radius: 4px;
+  padding: .75rem .9rem;
+  margin: 0 0 1.5rem;
+  font-size: .92rem;
+}
+
+.note :last-child { margin-bottom: 0; }
+
+.note a { color: inherit; }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0 0 1.25rem;
+  font-size: .9rem;
+}
+
+th, td {
+  border: 1px solid var(--border);
+  padding: .45rem .6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+th { background: var(--surface); font-weight: 600; }
+
+footer {
+  margin-top: 3.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+.links { list-style: none; padding: 0; margin: 0 0 1.25rem; }
+.links li { margin-bottom: .4rem; }
+
+@media (max-width: 34rem) {
+  header { padding-top: 2.25rem; }
+  h1 { font-size: 1.5rem; }
+  .pitch { font-size: 1.05rem; }
+  blockquote { font-size: 1rem; }
+  pre { font-size: .74rem; }
+  table { font-size: .82rem; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <a class="back" href="/">&#8592; mcp-cassette</a>
+  <h1>A test double that speaks the protocol, not your language</h1>
+  <p class="pitch">The cassette is itself an MCP server, so any client in any language connects to it exactly as it connects to the live one: no library to import, no product code to change, no transport to wrap.</p>
+  <p class="sub">That sentence is one line to write and considerably more than one line to implement. This is what it costs: an incremental parser for a streaming format whose line endings are not obvious, two protocol lifecycles in one file, and a header that cannot be written when the file is opened.</p>
+</header>
+
+<h2>Testing a client means owning a server</h2>
+
+<p>A test suite for an MCP client needs a server. There are two usual ways to get one, and both charge you.</p>
+
+<p><strong>Run the real server.</strong> Correct by construction, and it costs what real things cost: credentials in CI, rate limits, network failures you did not schedule, state that survives runs, and a counterparty free to change its answers without telling you. Tolerable once; not on every push.</p>
+
+<p><strong>Write a fake and run it in the same process.</strong> Fast, hermetic, no credentials, and two properties easy to miss while writing it. It is a library for one language, so a team with clients in two languages writes and maintains two fakes. And it is assembled from your reading of the specification rather than from what a server put on the wire, with nothing keeping the two in step. It passes because it agrees with you.</p>
+
+<p>Before deciding which parts of this project were worth keeping, we measured the population it serves: 158 public MCP servers, read by hand where the automated pass was ambiguous. Of those, <strong>83 test through the protocol under the strict reading and 89 under the looser one, which is 52.5% and 56.3%</strong>; the honest bracket after accounting for both measurement errors found is 45 to 60%. Among those 83, <strong>16 (19.2%)</strong> reach for an official SDK's in-memory transport to avoid live APIs. The method, including two measurement defects that moved the number and were reported rather than quietly fixed, is in <a href="https://github.com/ivermin1123/mcp-cassette/blob/main/docs/research/01-reality-check.md">docs/research/01-reality-check.md</a>.</p>
+
+<p>Read that the way it falls: protocol-layer testing is already a mainstream habit, not a frontier, and most of that majority got there without this tool. The open question is what sits at the other end, and whether it is the same artifact for every language you write clients in.</p>
+
+<h2>record: bytes, not a summary</h2>
+
+<p>The recorder is a transparent stdio proxy. Point your client at it instead of at the server, give it the server command, and it forwards bytes verbatim in both directions while writing every JSON-RPC frame it recognises to an append-only JSONL file (<a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/record.ts">src/record.ts</a>). Neither side can tell it is there, and what lands in the file is what the server said rather than what a wrapper decided it meant. Output that is not JSON-RPC at all, such as a chatty server's stdout logs, is preserved as <code>raw</code> entries, so the transcript stays faithful even to a misbehaving server.</p>
+
+<h2>replay: the recording answers</h2>
+
+<p>Replay reads that file and serves it as an MCP server on stdio (<a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/replay.ts">src/replay.ts</a>). Requests are fingerprinted and matched against recorded pairs: lifecycle calls by method, <code>tools/call</code> by tool name plus stable-stringified arguments, everything else by method plus params with the volatile parts (<code>_meta</code>, pagination cursors) removed. A fingerprint miss falls back to the next unconsumed response for the same method in recorded order, so a reordered test run still lands. A true miss reports the closest recorded fingerprint and exactly which component diverged.</p>
+
+<p>The claim in the pitch is testable, so here it is tested: the same health check against a live reference server, then against the recording of it.</p>
+
+<pre><code>server: mcp-servers/everything@2.0.0  protocol: 2025-06-18
+surface: 13 tools, 7 resources, 4 prompts
+[OK] no findings
+result: PASS (0 error(s), 0 warning(s))</code></pre>
+
+<p>Those four lines are the output twice: once with the real server running, once with nothing but a file. Now the part a fake in your own test suite cannot do, using the official Python SDK, which has never heard of this project:</p>
+
+<pre><code>SERVER = StdioServerParameters(
+    command="npx",
+    args=["-y", "mcp-cassette@0.4.0", "replay", "everything.cassette.jsonl"],
+)
+
+async with stdio_client(SERVER) as (read, write):
+    async with ClientSession(read, write) as session:
+        init = await session.initialize()
+        tools = await session.list_tools()</code></pre>
+
+<pre><code>server: mcp-servers/everything 2.0.0
+protocol: 2025-06-18
+tools: 13
+first three: ['echo', 'get-annotated-message', 'get-env']</code></pre>
+
+<p>One cassette, two clients in two languages, identical answers. The Python side imports nothing from here: it launches a subprocess and speaks stdio, exactly as it would to the real server. The rest of this page is what that costs to make true.</p>
+
+<h2>Server-sent events are not "split on a blank line"</h2>
+
+<p>Over HTTP, an MCP response may arrive as a stream, and recording it faithfully means parsing it the way the specification says rather than the way it looks. The parser is <a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/sse.ts">src/sse.ts</a>, and it implements <a href="https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation">WHATWG HTML's "interpreting an event stream"</a> and nothing else. The rules that a hand-rolled split would get wrong:</p>
+
+<ul>
+  <li><strong>Three line endings, not one.</strong> CRLF, LF, and a bare CR all end a line.</li>
+  <li><strong>A CR can be separated from its LF by a chunk boundary.</strong> The proxy sees whatever TCP hands it, so a CR arriving as the last byte of a read may be a line ending or may be the first half of a CRLF, and there is no way to know yet. The parser holds it: <code>if (c === "\r" &amp;&amp; i === this.buffer.length - 1) break;</code>. At end of stream, a held CR can only have been a line ending after all, and is processed then.</li>
+  <li><strong>One space after the colon is stripped, and only one.</strong> <code>data:&nbsp;&nbsp;x</code> carries a leading space in its value.</li>
+  <li><strong>An empty data buffer dispatches nothing.</strong> A block of fields with no <code>data</code> line is not an event. An empty <code>data:</code> line is a different thing and does dispatch.</li>
+  <li><strong>An <code>id</code> containing NUL is ignored</strong>, and the previous last event id stands.</li>
+  <li><strong>retry takes ASCII digits or is discarded</strong>, and is parsed to be handled rather than recorded.</li>
+  <li><strong>A trailing block with no blank line after it is not an event</strong> and is not reported, which makes a stream cut short at shutdown record only what it showed.</li>
+</ul>
+
+<p>The chunk-boundary rule is the one with teeth: it fails only under timing you do not control and cannot be reproduced by reading the code. So it is tested by exhaustion rather than by example. One stream carrying all three line endings, a comment, a multi-line data field and a trailing bare CR is fed at every read size from 1 byte to the whole string, and every size must produce the same three events (<code>tests/sse-capture.test.ts</code>, "splits the same events no matter where the reads fall").</p>
+
+<h2>Two lifecycles, one file</h2>
+
+<p>The protocol has two eras alive at once, and a recording has to know which one it captured.</p>
+
+<p>The classic lifecycle (revisions up to 2025-11-25) opens with <code>initialize</code>, then <code>notifications/initialized</code>, then requests, and the server states its protocol version in that result. The 2026-07-28 revision is stateless: there is no handshake, every request carries <code>_meta</code>, and <code>server/discover</code> answers what <code>initialize</code> used to. Sessions are gone in that world, and so is the standalone GET stream.</p>
+
+<p>A cassette records the era it saw in the header line, and replay serves in that era rather than guessing from frames (<a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/cassette.ts">src/cassette.ts</a>, <a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/http-replay.ts">src/http-replay.ts</a>). The migration rule is one function, and worth stating out loud rather than leaving to a reader of the type declaration:</p>
+
+<pre><code>export function cassetteEra(header: CassetteHeader): Era {
+  return header.era ?? "legacy";
+}</code></pre>
+
+<p>A cassette with no era field is legacy by definition. That is not a fallback chosen for convenience; it is what keeps every file recorded before the field existed working, with no migration step. The stdio recording made for this page is one of them: its header carries no <code>era</code>, and both clients above were served, correctly, as legacy.</p>
+
+<h2>A header that cannot be written yet</h2>
+
+<p>Which leaves an ordering problem. The header is line 1 of an append-only file, so it is written before anything else. But the era is decided by the first <em>successful</em> exchange, which has not happened when the file is opened, and cannot be inferred from the first request: a dual-era client may try <code>server/discover</code>, get an error, and fall back to <code>initialize</code>. Guessing from that attempt records a lie.</p>
+
+<p>So the HTTP recorder opens the writer in deferred-header mode: entries are buffered in memory, and <code>setEra()</code> writes the header and flushes everything behind it once an exchange has actually succeeded (<a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/cassette.ts">src/cassette.ts</a>, <a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/proxy.ts">src/proxy.ts</a>). Success is the whole test, not whether the method was a lifecycle one. A session where nothing succeeded flushes at close with the era omitted, which the reader treats as legacy by the rule above, and changing the era after the header has reached disk throws rather than pretending. The case easiest to get wrong is tested: a <code>server/discover</code> answered with a JSON-RPC error over a stream leaves the header with no era, and still records the failure.</p>
+
+<h2>What replay does not do</h2>
+
+<p>Three limits, stated as they are in the machine-readable index:</p>
+
+<ul>
+  <li>A replay answers from the recording, so it cannot compare models or servers and cannot tell you whether a live server still behaves that way. Use <code>verify</code> for that.</li>
+  <li>Replay is a test double, not a conformance checker. A missing session id or a mismatched protocol header is a warning on stderr, never a protocol error.</li>
+  <li>Replay answers requests from the client. Requests and notifications the <em>server</em> initiated are recorded but not replayed in v1, and replay says how many it skipped. The cassette for this page contains exactly one, so both clients above printed this to stderr:
+    <pre><code>mcp-cassette replay: 1 server-initiated frame(s) in the cassette are not replayed in v1</code></pre>
+  </li>
+</ul>
+
+<p>The first two are consequences of the design rather than gaps in it. A recording is a statement about one past session, and treating it as one about the present is the mistake this tool makes easy, which is why <code>verify</code> re-fires recorded requests at a live server and diffs the answers.</p>
+
+<p>The third is a gap, and the words <em>in v1</em> are the admission. A server that samples, elicits, or notifies speaks a direction of the protocol this replay does not reproduce: the frames are in the file, and nothing plays them back. Test a client that depends on that traffic against a live server.</p>
+
+<h2>Three commands</h2>
+
+<p>Node 20 or later, and network access for the first one only.</p>
+
+<pre><code>npx -y mcp-cassette@0.4.0 check --stdio "npx -y mcp-cassette@0.4.0 record -o everything.cassette.jsonl -- npx -y @modelcontextprotocol/server-everything@2026.7.4 stdio"
+
+npx -y mcp-cassette@0.4.0 check --stdio "npx -y mcp-cassette@0.4.0 replay everything.cassette.jsonl"
+
+npx -y mcp-cassette@0.4.0 lint everything.cassette.jsonl</code></pre>
+
+<p>The first drives the recording proxy with the health check, so the check is the client and you need none of your own. The second runs the identical check with no server and no network. The third reads the finished file against its own header:</p>
+
+<pre><code>everything.cassette.jsonl: header and frames agree</code></pre>
+
+<p>Every version here is pinned, and not only because the specification is moving. An unpinned <code>npx</code> will reuse a copy already in the local cache instead of resolving the registry: on the machine these commands were run, bare <code>npx mcp-cassette</code> ran 0.1.1 while <code>latest</code> was 0.4.0, silently, with different output. Pin, or install once and call the binary.</p>
+
+<p>From there, point whatever client your tests already use at <code>mcp-cassette replay &lt;cassette&gt;</code>, in whatever language, and change nothing else.</p>
+
+<footer>
+  <p><a href="/">mcp-cassette</a> is Apache-2.0. <a href="https://github.com/ivermin1123/mcp-cassette">Source and issues on GitHub</a>.</p>
+</footer>
+
+</div>
+</body>
+</html>
