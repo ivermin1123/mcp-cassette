@@ -3,6 +3,17 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Re-run `verify-publish` alone against a version that is already on npm.
+  # Release infrastructure that can only be exercised by cutting a release is
+  # infrastructure nobody can fix safely: the v0.2.0 job shipped two defects
+  # that a single dry run would have caught. This dispatch reads the registry
+  # and nothing else — the publish job below is gated off, so no dispatch can
+  # publish, tag, or touch OIDC.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'A version already published to npm, e.g. 0.2.0. Verifies only; never publishes.'
+        required: true
 
 permissions:
   contents: read
@@ -10,6 +21,8 @@ permissions:
 jobs:
   release:
     name: publish to npm and create the GitHub Release
+    # A tag push is the only thing that may publish.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -113,6 +126,10 @@ jobs:
   verify-publish:
     name: verify the published package from npm
     needs: release
+    # On a tag push this gates on the publish having succeeded. On a dispatch
+    # `release` is skipped, and `needs` alone would skip this too — hence the
+    # explicit result check rather than a bare `needs:`.
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.release.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -126,11 +143,25 @@ jobs:
         with:
           node-version: '22.x'
 
+      # The tag names the version on a release; a dispatch says so directly.
+      # The value ends up in an npx specifier and a directory name, so it is
+      # validated rather than trusted.
       - name: Resolve the released version
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${INPUT_VERSION#v}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          case "$version" in
+            ''|*[!0-9A-Za-z.+-]*) echo "::error::not a usable version: '$version'"; exit 1 ;;
+          esac
+          echo "verifying mcp-cassette@$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # A publish is not instantly readable from every registry edge, so the
       # retry loop is not optional. What matters is *what* gets retried: this
@@ -178,10 +209,13 @@ jobs:
           echo "::error::mcp-cassette@$VERSION never became runnable from the registry"
           exit 1
 
-      # `version:` is the released number, not `local`, so the action resolves
-      # its CLI through `npx -y mcp-cassette@<version>` — the same path a
-      # consumer's workflow takes. `comment` is off: a tag push has no pull
-      # request to comment on.
+      # `version:` is the released number, not `local`, so the action pulls its
+      # CLI from the registry — the same path a consumer's workflow takes.
+      # `comment` is off: a tag push has no pull request to comment on.
+      #
+      # This step is also the only place the action's registry path is ever
+      # exercised against a checkout named `mcp-cassette`, which is what made
+      # it the first to hit npx discarding the version pin. See action.yml.
       - name: The published action gates the fixture server
         uses: ./
         with:
