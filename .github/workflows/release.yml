@@ -132,25 +132,25 @@ jobs:
           set -euo pipefail
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      # A publish is not instantly readable from every registry edge, so a
-      # bare `npx` right after it can 404 on a package that is perfectly fine.
-      # Poll first, and only then let a failure mean something.
-      - name: Wait for the registry to serve the version
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -uo pipefail
-          for attempt in $(seq 1 20); do
-            if npm view "mcp-cassette@$VERSION" version > /dev/null 2>&1; then
-              echo "mcp-cassette@$VERSION is on the registry (attempt $attempt)"
-              exit 0
-            fi
-            echo "not visible yet (attempt $attempt); retrying in 15s"
-            sleep 15
-          done
-          echo "::error::mcp-cassette@$VERSION never became visible on the registry"
-          exit 1
-
+      # A publish is not instantly readable from every registry edge, so the
+      # retry loop is not optional. What matters is *what* gets retried: this
+      # used to be two steps — poll `npm view`, then assert with `npx` — and
+      # those are different resolvers reading different caches. On the v0.2.0
+      # release the poll went green on its first attempt and the very next line
+      # died with `ETARGET No matching version found for mcp-cassette@0.2.0`,
+      # on a package that had published perfectly (run 31925582059). A
+      # readiness probe that does not exercise the command it is gating proves
+      # nothing about that command, so the loop now wraps the real assertion
+      # and there is exactly one resolver in this job.
+      #
+      # `--prefer-online` is the other half: it forces npm to revalidate the
+      # cached packument rather than trust a copy it may have fetched seconds
+      # before the publish landed.
+      #
+      # A version *mismatch* is not retried. Unresolvable means "not propagated
+      # yet"; resolvable-but-wrong means the tarball itself is wrong, and
+      # waiting cannot fix that.
+      #
       # Deliberately no `npm ci`, no global install, and run from an empty
       # directory: `npx pkg@<exact>` will happily run an already-present
       # binary of another version instead of the pin — observed locally, where
@@ -161,14 +161,22 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           cd "$RUNNER_TEMP"
-          got="$(npx -y "mcp-cassette@$VERSION" --version)"
-          echo "npx reported: $got"
-          if [ "$got" != "$VERSION" ]; then
-            echo "::error::published CLI reports '$got' but the tag says '$VERSION'" >&2
-            exit 1
-          fi
+          for attempt in $(seq 1 10); do
+            if got="$(npx --prefer-online -y "mcp-cassette@$VERSION" --version)"; then
+              echo "npx reported: $got (attempt $attempt)"
+              if [ "$got" != "$VERSION" ]; then
+                echo "::error::published CLI reports '$got' but the tag says '$VERSION'"
+                exit 1
+              fi
+              exit 0
+            fi
+            echo "not resolvable yet (attempt $attempt); retrying in 30s"
+            sleep 30
+          done
+          echo "::error::mcp-cassette@$VERSION never became runnable from the registry"
+          exit 1
 
       # `version:` is the released number, not `local`, so the action resolves
       # its CLI through `npx -y mcp-cassette@<version>` — the same path a
