@@ -1,0 +1,3 @@
+{"type":"header","cassetteVersion":2,"recorder":"mcp-cassette@fixture","startedAt":"2026-08-16T00:00:00Z","transport":"stdio"}
+{"type":"frame","t":1,"dir":"c2s","frame":{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}}
+{"type":"frame","t":2,"dir":"s2c","frame":{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"echo","description":"echoes","inputSchema":{"type":"object","properties":{"m":{"type":"string"}}}}]}}}
