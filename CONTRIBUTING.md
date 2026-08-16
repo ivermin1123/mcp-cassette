@@ -31,6 +31,37 @@ moment when softening a threshold is tempting and invisible. If you ever have to
 do this, translate only. Hold the numbers, the structure, and the self-criticism
 where they are, and prove it with a diff a reviewer can check.
 
+## Rule ids are a public contract
+
+`docs/llms.txt` tells machine readers: "Every finding carries a stable rule id in
+parentheses. Match on the id, not the wording." That sentence turned every
+`CAS-L*` and `CAS-C*` id into a surface consumers build on, so the ids are
+governed like a flag or a command name, not like prose.
+
+- **Renaming or removing a released id is a breaking change.** It silently
+  breaks whatever matches on it: a CI gate, a SARIF suppression, an agent
+  reading `--json`. It needs a line under `### BREAKING` in
+  [CHANGELOG.md](CHANGELOG.md).
+- **A retired id is never reused for a different meaning.** Once `CAS-L007` has
+  shipped meaning one thing, that number is spent. Reuse is worse than removal,
+  because the consumer's match keeps succeeding and starts being wrong.
+  Retire the number and take the next free one.
+
+This is not a rule against changing rules. Two things you are free to do:
+
+- **Adding a new id is not a breaking change.** Nobody was matching on it
+  yesterday.
+- **Rewording a rule's message is not a breaking change.** The message is prose
+  and it is expected to get better. That is exactly why `llms.txt` tells readers
+  to match on the id instead of the sentence.
+
+`tests/lint-foundation.test.ts` freezes the released `CAS-L*` ids, so dropping
+one fails that gate by name. Adding one does not trip the freeze, though two
+assertions will ask you to register the new id before the suite goes green: the
+risk map in the same file, and the fixture pair in `tests/lint-rules.test.ts`.
+The `CAS-C*` ids are under the same law but have no freeze gate; they live in
+`src/check.ts` and `src/sarif.ts`.
+
 ## Dev setup
 
 Requires Node.js >= 20.
