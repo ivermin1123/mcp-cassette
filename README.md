@@ -146,6 +146,59 @@ Prefer plain commands? They are the same gate:
     npx mcp-cassette snapshot --check --fail-on dangerous --stdio "node dist/my-server.js"
 ```
 
+## Testing with vitest
+
+`mcp-cassette/vitest` puts a replay server around a `describe` block, so a suite that talks to an MCP server keeps working with no server and no network.
+
+```ts
+import { describe, expect, it } from "vitest";
+import { useCassette } from "mcp-cassette/vitest";
+
+const call = (id: number, name: string, args: unknown) =>
+  ({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+const post = (url: string, body: unknown) =>
+  fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+describe("recorded call", () => {
+  const tape = useCassette("tests/cassettes/weather.http.jsonl");
+
+  it("is answered from the cassette", async () => {
+    const res = await post(tape.url, call(1, "echo", { m: "recorded" }));
+    expect(await res.json()).toMatchObject({ result: { content: [{ text: "recorded" }] } });
+  });
+});
+```
+
+`useCassette` registers `beforeAll` / `afterEach` / `afterAll` itself — call it at describe scope, not inside a test.
+
+**A miss fails the test that caused it.** The replay engine answers a miss with a JSON-RPC error, which a test would happily swallow, so the adapter drains the misses after every test and throws:
+
+```ts
+it("fails with a mismatch when the arguments drifted", async () => {
+  await post(tape.url, call(2, "echo", { m: "drifted" }));
+  // No assertion here on purpose: afterEach is what fails this test.
+});
+```
+
+```
+CassetteMismatchError: mcp-cassette: no recorded answer for "tools/call" — method and tool
+match a recording, but arguments differ at: /m (recorded "recorded", got "drifted").
+Re-record the cassette or adjust the interaction.
+```
+
+Two classes, because there are two fixes. `CassetteMissError` means nothing in the cassette answered; `CassetteMismatchError` means a recording matched the method and tool and diverged, and carries `.changes` — the actual diff, so an assertion can read it instead of the message. Both extend `ReplayError`. `useCassette(file, { onMiss: "warn" })` leaves the JSON-RPC error frame as the only signal.
+
+**HTTP and stdio are not symmetric, and this does not pretend otherwise.** An HTTP cassette is served in-process, so its whole lifecycle is real. A stdio replay owns `process.stdin` and `process.stdout` and would fight vitest for them, so a stdio cassette hands back `tape.command` — argv for your client to spawn:
+
+```ts
+const tape = useCassette("tests/cassettes/tools.jsonl"); // transport: stdio
+// tape.command -> [node, <mcp-cassette cli>, "replay", <cassette>]
+```
+
+A process spawned by the client is a process the adapter does not own, so misses on that path arrive only as the JSON-RPC error the client receives: `onMiss` cannot fail the test for you, and there is nothing to drain. HTTP cassettes do not have this limitation.
+
+`vitest` is an optional peer dependency — it stays out of the dependency graph of anyone not using the adapter, and the CLI's three runtime dependencies are unchanged.
+
 ## Commands
 
 | Command | What it does |
