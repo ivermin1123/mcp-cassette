@@ -7,4 +7,7 @@ worktrees/
 *.tar.gz
 *.tgz
 _to_delete/
+# Session reports, handoffs and scratch notes. Deliberately not tracked — see
+# "Where decisions get written down" in CONTRIBUTING.md. Anything that must
+# survive a fresh clone goes in BACKLOG.md, RELEASING.md, or docs/.
 plans/

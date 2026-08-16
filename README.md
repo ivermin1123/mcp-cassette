@@ -399,6 +399,8 @@ The hash is not a security boundary. It is an unsalted, truncated SHA-256 of the
 
 Configurable redaction rules · `vitest`/`jest` + `pytest` adapters · GitHub Action · smarter replay matching (custom matchers, volatile-field config) · server-initiated flows (tasks/MRTR) · scenario `state`/`seq` · `Last-Event-ID` resumability · contributed scenarios for the official conformance suite. Issues and PRs welcome.
 
+Changes that need an argument before they need code — anything that could turn a passing gate red — are worked out in [BACKLOG.md](BACKLOG.md) first.
+
 ## What a cassette is not
 
 A cassette pins **one recorded session** so it can be replayed exactly. That makes it a good regression fixture and a good way to keep CI offline, and a poor instrument for anything else. In particular it cannot compare models or servers: a replay answers from the recording, so every "result" it produces is the one already written in the file. Two runs against the same cassette agree because they read the same bytes, not because anything was verified. To find out whether a live server still behaves the way it did, use `verify` — it re-fires the recorded requests at the real thing and diffs the answers. To find out whether its contract changed, use `snapshot --check`.
