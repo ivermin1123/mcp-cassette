@@ -165,7 +165,7 @@ jobs:
   # it exists to catch.
   #
   # The other half, proving GitHub still accepts what we emit, is the weekly
-  # `sarif-canary` job in foundation-canary.yml. It uploads for real, and blocks
+  # `sarif-ingest` job in foundation-canary.yml. It uploads for real, and blocks
   # nothing.
   sarif:
     name: sarif (findings anchored where code scanning keeps them)
