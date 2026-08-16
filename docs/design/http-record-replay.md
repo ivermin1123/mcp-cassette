@@ -412,10 +412,11 @@ The v2 sketch's principles are commitments; v0.3 implements them:
    entries unchanged. Every existing test fixture stays green byte-for-byte.
 2. **Additive only.** No v1 field is renamed, removed, or re-typed. `origin:
    "live"` keeps riding as-is.
-3. **Unknown is skippable** — with one deliberate boundary: unknown *fields*
-   and unknown *entry types* are skipped with a warning by v2 readers, but a
-   v2 *file* is refused by v1 readers at the version gate (already their
-   behavior). That refusal is correct: an 0.1.x binary cannot replay HTTP or
+3. **Unknown is skippable** — with one deliberate boundary: unknown *entry
+   types* are skipped with a warning by v2 readers (as implemented in
+   `readCassette`), unknown *fields* ride along untouched because the reader
+   never enumerates them, but a v2 *file* is refused by v1 readers at the
+   version gate (already their behavior). That refusal is correct: an 0.1.x binary cannot replay HTTP or
    chunks, and a loud "recorded with a newer mcp-cassette" beats a silent
    wrong replay. Teams pinning 0.1.x simply keep their v1 cassettes.
 4. **JSONL, append-only, header-first stays.** The deferred-header writer

@@ -94,6 +94,8 @@ function streamIndex(cassette: Cassette): {
   pools: Map<string, ChunksEntry[]>;
   recorded: Map<string, number>;
   standalone?: ChunksEntry;
+  /** Standalone streams beyond the first. Only one endpoint exists to serve them from. */
+  extraStandalone: number;
 } {
   const requests = new Map<string, JsonRpcRequest>();
   for (const entry of cassette.entries) {
@@ -103,9 +105,11 @@ function streamIndex(cassette: Cassette): {
   }
   const pools = new Map<string, ChunksEntry[]>();
   let standalone: ChunksEntry | undefined;
+  let extraStandalone = 0;
   for (const entry of cassette.entries) {
     if (entry.type !== "chunks") continue;
     if (entry.id === undefined) {
+      if (standalone) extraStandalone++;
       standalone ??= entry;
       continue;
     }
@@ -117,21 +121,32 @@ function streamIndex(cassette: Cassette): {
   }
   const recorded = new Map<string, number>();
   for (const [fp, pool] of pools) recorded.set(fp, pool.length);
-  return { pools, recorded, standalone };
+  return { pools, recorded, standalone, extraStandalone };
 }
 
 /** §3.3: one `data:` line per frame, blank-line delimited. */
 const sseLine = (frame: JsonRpcFrame) => `data: ${JSON.stringify(frame)}\n\n`;
 
-/** What version the recording spoke: the legacy era states it in the initialize result, the modern era in `_meta`. */
+/**
+ * What version the recording spoke. The legacy era states it in the `initialize`
+ * result and the modern era in each request's `_meta`, so only those two are
+ * consulted: a `tools/call` result that happens to carry a `protocolVersion`
+ * field of its own is the server's data, not the protocol's.
+ */
 function recordedProtocolVersion(cassette: Cassette): string | undefined {
+  const answers = new Map<string, string>(); // request id -> method it asked
   for (const entry of cassette.entries) {
     if (entry.type !== "frame") continue;
-    const frame = entry.frame as {
-      result?: { protocolVersion?: string };
-      params?: { _meta?: Record<string, unknown> };
-    };
-    const stated = frame.result?.protocolVersion ?? frame.params?._meta?.["io.modelcontextprotocol/protocolVersion"];
+    if (entry.dir === "c2s" && isRequest(entry.frame)) {
+      answers.set(String(entry.frame.id), entry.frame.method);
+      const meta = (entry.frame.params as { _meta?: Record<string, unknown> } | undefined)?._meta;
+      const declared = meta?.["io.modelcontextprotocol/protocolVersion"];
+      if (typeof declared === "string") return declared;
+      continue;
+    }
+    const asked = answers.get(String((entry.frame as { id?: unknown }).id));
+    if (asked !== "initialize" && asked !== "server/discover") continue;
+    const stated = (entry.frame as { result?: { protocolVersion?: string } }).result?.protocolVersion;
     if (typeof stated === "string") return stated;
   }
   return undefined;
@@ -383,6 +398,11 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       const bound = `http://${host}:${(server.address() as { port: number }).port}/`;
       warn(`serving ${cassettePath} as a ${era} server at ${bound}`);
       if (streamCount > 0) warn(`${streamCount} streamed answer(s) in the cassette`);
+      // One GET endpoint, so one standalone stream. Serving the first is a
+      // choice, not an accident, and a cassette with more should hear about it.
+      if (standalone && streams.extraStandalone > 0) {
+        warn(`${streams.extraStandalone + 1} standalone GET stream(s) recorded — only the first is served`);
+      }
       resolve({
         url: bound,
         misses: () => misses,

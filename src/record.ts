@@ -93,8 +93,14 @@ export function runRecord(opts: RecordOptions): Promise<number> {
     });
 
     child.on("error", (err) => {
-      void writer.close();
-      reject(new Error(`record: failed to start server command: ${err.message}`));
+      // A server that never started must not leave a cassette behind for the
+      // next `--mode once` run to trip over. The stdio writer puts its header on
+      // disk immediately, so discarding the buffer is not enough — the file that
+      // this run created, and already truncated, goes with it.
+      void writer.discard().then(() => {
+        fs.rmSync(opts.out, { force: true });
+        reject(new Error(`record: failed to start server command: ${err.message}`));
+      });
     });
 
     const finish = (code: number) => {
