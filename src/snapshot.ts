@@ -362,11 +362,26 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
     return;
   }
 
-  // A `$ref` means the shape being compared is not the shape in front of us.
-  // Resolving references is not implemented, so say that plainly and stay
-  // conservative rather than emitting a specific rule ID that would read as an
-  // authoritative finding about a schema this engine did not actually inspect.
-  if (containsRef(canonOld) || containsRef(canonNew)) {
+  // A `$ref` means the shape being compared is not the shape in front of us, so
+  // whatever this diff does find cannot be trusted to be the whole story. Say
+  // that, and say it *in addition to* everything that could still be classified:
+  // returning early here would hide a removed parameter simply because a `$ref`
+  // sat somewhere else in the schema — a guard against silent drift causing it.
+  // The generic per-node fallback is suppressed instead, because this rule is
+  // the same statement with a reason attached.
+  const unresolvedRef = containsRef(canonOld) || containsRef(canonNew);
+
+  diffSchemaNode(
+    tool,
+    "",
+    canonOld as Record<string, unknown>,
+    canonNew as Record<string, unknown>,
+    changes,
+    true,
+    unresolvedRef
+  );
+
+  if (unresolvedRef) {
     changes.push({
       kind: "breaking",
       rule: CONTRACT_RULES.inputSchemaRefUnclassified,
@@ -375,10 +390,7 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
         "inputSchema changed and uses $ref — reference resolution is not implemented, " +
         "so the change is unclassified and treated as breaking",
     });
-    return;
   }
-
-  diffSchemaNode(tool, "", canonOld as Record<string, unknown>, canonNew as Record<string, unknown>, changes, true);
 }
 
 /**
@@ -394,7 +406,8 @@ function diffSchemaNode(
   o: Record<string, unknown>,
   n: Record<string, unknown>,
   changes: ContractChange[],
-  isRoot: boolean
+  isRoot: boolean,
+  unresolvedRef: boolean
 ): void {
   const emitted = changes.length;
   // `enum` and `default` on a non-root node were already classified by the
@@ -486,7 +499,7 @@ function diffSchemaNode(
     diffDefault(tool, key, op, np, changes);
     diffEnum(tool, key, op, np, changes);
     if (stableStringify(op) !== stableStringify(np)) {
-      diffSchemaNode(tool, `${pointer}/properties/${key}`, op, np, changes, false);
+      diffSchemaNode(tool, `${pointer}/properties/${key}`, op, np, changes, false, unresolvedRef);
     }
   }
 
@@ -500,12 +513,12 @@ function diffSchemaNode(
     if (!oc || !nc) continue;
     delegated.push(key);
     if (stableStringify(oc) === stableStringify(nc)) continue;
-    diffSchemaNode(tool, childPointer, oc, nc, changes, false);
+    diffSchemaNode(tool, childPointer, oc, nc, changes, false, unresolvedRef);
   }
 
   // This node differs in a keyword nothing above classified → say so, here,
   // rather than letting a sibling's finding stand in for it.
-  if (changes.length === emitted && shallowShape(o, delegated) !== shallowShape(n, delegated)) {
+  if (!unresolvedRef && changes.length === emitted && shallowShape(o, delegated) !== shallowShape(n, delegated)) {
     changes.push({
       kind: "breaking",
       rule: CONTRACT_RULES.inputSchemaChangedUnclassified,

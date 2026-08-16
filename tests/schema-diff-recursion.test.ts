@@ -181,6 +181,28 @@ describe("$ref guard", () => {
     expect(changes[0]!.message).toContain("$ref");
   });
 
+  it("still reports what it could classify alongside the guard", () => {
+    // The guard used to return early, so a `$ref` anywhere in the schema hid
+    // every concrete finding — a removed parameter went unreported because a
+    // reference sat in a sibling property. A guard against silent drift cannot
+    // be the thing causing it.
+    const changes = diff(
+      {
+        type: "object",
+        properties: { gone: { type: "string" }, u: { $ref: "#/$defs/U" } },
+        $defs: { U: { type: "object" } },
+      },
+      {
+        type: "object",
+        properties: { u: { $ref: "#/$defs/U" } },
+        $defs: { U: { type: "object" } },
+      }
+    );
+    const found = changes.map((c) => c.rule);
+    expect(found).toContain(CONTRACT_RULES.inputPropertyRemoved);
+    expect(found).toContain(CONTRACT_RULES.inputSchemaRefUnclassified);
+  });
+
   it("guards even when the $ref appears only on the new side", () => {
     const changes = diff(
       { type: "object", properties: { a: { type: "string" } } },
