@@ -6,6 +6,128 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [0.3.0] — 2026-08-16
+
+Testing and safety. A first-party `vitest` adapter so a suite can talk to a
+cassette instead of a server, and a safety lint that doubled in size, cites the
+standard behind every rule, and can hand its findings to GitHub code scanning.
+
+This is a minor bump rather than a patch for one reason: two of the changes
+below can turn a previously green build red without anyone changing their
+server. Nobody should meet those by way of `^0.2.0` resolving on its own.
+
+### BREAKING
+
+- **Deep imports into the package are closed.** `mcp-cassette` now declares an
+  `exports` map with exactly three entries: `.`, `./vitest`, and
+  `./package.json`.
+
+  *What you see:* `import … from "mcp-cassette/dist/replay.js"` fails with
+  `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+
+  *What to do:* import from `mcp-cassette` — the public API re-exports the
+  engine, and the surface has only grown. If something you relied on is not
+  reachable from the entry point, open an issue and it gets exported
+  deliberately. The build layout was never a contract, and a tool whose job is
+  catching silent contract drift should not ship its own file paths as one.
+
+- **`check` can now fail a server you did not change.** Eight new lint rules
+  land, three of them at `error` level (`CAS-L009`, `CAS-L010`, `CAS-L013`),
+  and the lint reads more of the schema than before — `title`, `default`,
+  `const`, the string members of `enum` and `examples`, and tool `annotations`,
+  in addition to every `description`.
+
+  *What you see:* `check` exits 1 on a tool that passed under 0.2.0.
+
+  *What to do:* read the rule id in the output and look it up in the README
+  table. The three new `error` rules are `shape`-class — they fire on a
+  bidirectional override, a variation-selector data channel, or an instruction
+  telling the model to assume a role, none of which belong in an honest
+  description, so a hit is worth fixing rather than muting. The five new `warn`
+  rules never fail the build on their own: the default gate is still
+  error-level only, and `--fail-on warn` is opt-in. If a finding is a false
+  positive, please report it — the rules ship with paired fixtures precisely so
+  legitimate tools stay quiet.
+
+### Added
+
+- **`mcp-cassette/vitest`** — one `useCassette()` call wraps a `describe` block
+  with a replay server, and a fingerprint miss **fails the test that caused
+  it** instead of arriving as a JSON-RPC error the assertion never inspects.
+  Misses surface as `CassetteMissError` or `CassetteMismatchError`, so "never
+  recorded" and "recorded, but the arguments drifted" are told apart by type,
+  and the mismatch carries the diff. `vitest` is an optional peer dependency
+  and stays out of the dependency graph of anyone not using the adapter.
+  This subpath is a **public surface from now on**, and will be treated as one.
+
+  HTTP cassettes are served in-process. A stdio cassette hands back
+  `tape.command` for your client to spawn, because a stdio replay owns
+  `process.stdin`/`process.stdout` and would fight vitest for them — misses on
+  that path can only arrive as the JSON-RPC error the client sees.
+
+- **Sixteen safety-lint rules, each citing its standard.** Every rule carries
+  the [OWASP MCP Top 10](https://owasp.org/www-project-mcp-top-10/) risk and the
+  [SAFE-MCP](https://github.com/fkautz/safe-mcp) technique it implements, as
+  data rather than prose. New: Trojan Source bidi overrides, variation-selector
+  data channels, cross-tool shadowing, declared command execution, role
+  impersonation, credential solicitation, homoglyph obfuscation, and unpinned
+  remote fetches.
+
+  Each rule also declares whether text alone can separate an attack from a
+  legitimate tool. `shape` rules can, so a legitimate tool produces nothing —
+  ordinary Arabic, Chinese and emoji descriptions are silent by construction.
+  `intent` rules cannot: a terminal server really does describe running
+  commands, so those are always `warn` and say what was declared instead of
+  accusing.
+
+- **`check --format text|json|sarif`** — SARIF 2.1.0 output for GitHub code
+  scanning. Rule ids are the ones the CLI prints, the OWASP and SAFE-MCP
+  mapping travels as tags, and `partialFingerprints` are built so that
+  rewording a description does not resurrect a triaged alert. Findings carry
+  logical locations rather than invented line numbers, because `check` inspects
+  a live server and there is no file to point at. `--json` remains, permanently,
+  as an alias for `--format json`.
+
+- **`check --fail-on error|warn`** — opt into failing on warnings, the same way
+  `snapshot --fail-on` works. The default is unchanged.
+
+- **Structured miss diagnostics.** `diagnoseMissReason()` returns a
+  `MissReason` discriminated union and `formatMiss()` renders it, so a consumer
+  can act on *why* a replay missed without parsing English. `diagnoseMiss()`
+  keeps its signature and its exact wording. `ReplayServer.takeMisses()` drains
+  the misses since the last call, which is what lets the vitest adapter blame
+  the test that caused one.
+
+- **A CI gate proving every lint pattern free of super-linear backtracking.**
+  Lint input is text an attacker wrote, so a pattern with catastrophic
+  backtracking would be a denial of service against the job inspecting the
+  attacker. Every rule publishes its pattern and
+  [recheck](https://github.com/makenowjust/recheck) analyses it; the gate also
+  fails when a rule matches by regex without publishing one.
+
+### Changed
+
+- **The action's `version` input now defaults to `0.3.0`** (it still said
+  `0.1.2`, so consumers of `ivermin1123/mcp-cassette@v0` who did not pass
+  `version` were running a two-release-old CLI). Note that `@v0` floats: those
+  consumers pick this up on their next run, including the lint changes under
+  BREAKING above. Pin `version:` explicitly to control when that happens.
+- `CAS-L004` is rewritten to scan from the URL with a bounded look-back instead
+  of `(send|post|…)[^.]{0,60}https?://`, which `recheck` would not certify.
+  Behaviour is unchanged; the rule is now linear by construction.
+- The rule catalogue moved to `src/lint-rules.ts`; `src/lint.ts` keeps the
+  machinery that applies it. A pure move — every public name is still importable
+  from where it was.
+
+### Compatibility
+
+- **Cassettes are untouched.** No format change in this release; v1 and v2 files
+  read exactly as they did under 0.2.0.
+- **The CLI's three runtime dependencies are unchanged** (`ajv`, `ajv-formats`,
+  `commander`). The vitest adapter adds an *optional peer*, not a dependency.
+- Every existing import from `mcp-cassette` still resolves. Only paths *into*
+  the build output are closed — see BREAKING.
+
 ## [0.2.0] — 2026-08-16
 
 Record and replay a **Streamable HTTP** MCP session, in either lifecycle era.
@@ -79,6 +201,7 @@ Packaging fixes for the first release.
 First public release: stdio record/replay, contract snapshots, safety checks,
 secrets redaction, and the `verify` command.
 
+[0.3.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.2.0
 [0.1.2]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.1.2
 [0.1.1]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.1.1
