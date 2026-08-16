@@ -5,9 +5,22 @@
 
 # mcp-cassette
 
-**Record a real MCP session once, replay it forever.**
+**The cassette is itself an MCP server, so any client in any language connects to it exactly as it connects to the live one: no library to import, no product code to change, no transport to wrap.**
 
-VCR-style record/replay, contract snapshots, and safety checks for [Model Context Protocol](https://modelcontextprotocol.io) servers. Test your MCP integrations in CI: deterministic, offline, no live APIs, no tokens, no flakes.
+Record one session against a real [Model Context Protocol](https://modelcontextprotocol.io) server, then run your agent tests against the recording: no credentials, no rate limits, no network. The same binary gates your tool contract against breaking changes and lints tool descriptions for poisoning.
+
+```bash
+npx mcp-cassette check --stdio "npx -y @modelcontextprotocol/server-everything stdio"
+```
+
+```
+server: mcp-servers/everything@2.0.0  protocol: 2025-06-18
+surface: 13 tools, 7 resources, 4 prompts
+
+[OK] no findings
+
+result: PASS (0 error(s), 0 warning(s))
+```
 
 ```
 ┌────────┐   record    ┌──────────────┐   real    ┌────────────┐
@@ -22,13 +35,45 @@ VCR-style record/replay, contract snapshots, and safety checks for [Model Contex
 └────────┘
 ```
 
-## Why
+## What it does, and the command that does it
 
-- **CI without the world.** Your MCP server wraps GitHub/Postgres/Stripe. Your agent tests shouldn't need live credentials, rate limits, or network. Record once against the real thing, replay in every CI run.
-- **No more silent breaking changes.** `snapshot --check` fails the PR that removes a tool, adds a required parameter, or changes a type, before your users' agents break at 3am.
-- **Catch poisoned tools.** `check` lints tool descriptions for the known shapes of tool-poisoning attacks (instruction overrides, concealment directives, exfiltration URLs, invisible Unicode) and validates every schema (draft-07 and 2020-12).
+Each block below is a command and the output it printed. Nothing here is a claim you cannot reproduce.
 
-Works at the transport level: any server, any SDK, any language, any spec revision.
+**Your tests run offline, against the recording.** `check` is an ordinary MCP client and cannot tell a cassette from a live server, which is the point: whatever your client is, it connects the same way.
+
+```bash
+mcp-cassette check --stdio "mcp-cassette replay session.cassette.jsonl"
+```
+
+```
+server: tiny-server@1.0.0  protocol: 2025-06-18
+surface: 3 tools
+
+[OK] no findings
+
+result: PASS (0 error(s), 0 warning(s))
+```
+
+**A breaking contract change fails the build.**
+
+```bash
+mcp-cassette snapshot --check --stdio "node dist/my-server.js"
+```
+
+```
+[BREAKING] slugify: tool removed (tool-removed)
+[BREAKING] add: parameter "precision" is now required (input-property-became-required)
+[DANGEROUS] add: parameter "mode" added (input-property-added-optional)
+result: FAIL (2 breaking, 1 dangerous, 0 minor, 0 info; gate: breaking)
+```
+
+**A poisoned tool description is a finding, not a surprise.** Sixteen rules, each citing the OWASP MCP Top 10 risk and SAFE-MCP technique it implements.
+
+```bash
+mcp-cassette check --stdio "node dist/my-server.js" --format sarif --sarif-location mcp-contract.snapshot.json > mcp-cassette.sarif
+```
+
+Findings land in GitHub's Security tab, anchored to the line of the tool they describe. What each command does not cover is written down too: see [Where this stops](#where-this-stops) and [What a cassette is not](#what-a-cassette-is-not).
 
 ## Quickstart
 
@@ -36,18 +81,7 @@ Works at the transport level: any server, any SDK, any language, any spec revisi
 npm install -g mcp-cassette   # or: npx mcp-cassette ...
 ```
 
-**1. Health-check any server**
-
-```bash
-mcp-cassette check --stdio "npx -y @modelcontextprotocol/server-everything stdio"
-```
-
-```
-server: mcp-servers/everything@2.0.0  protocol: 2025-06-18
-surface: 13 tools, 7 resources, 4 prompts
-[OK] no findings
-result: PASS (0 error(s), 0 warning(s))
-```
+**1. Health-check any server.** The command at the top of this page, against any server you can start.
 
 **2. Record a session.** Put the proxy between your client and the server:
 
@@ -70,19 +104,12 @@ mcp-cassette snapshot --stdio "npx -y my-server"            # writes mcp-contrac
 mcp-cassette snapshot --check --stdio "npx -y my-server"    # CI: fails on breaking changes
 ```
 
-```
-[BREAKING] slugify: tool removed (tool-removed)
-[BREAKING] add: parameter "precision" is now required (input-property-became-required)
-[DANGEROUS] add: parameter "mode" added (input-property-added-optional)
-result: FAIL (2 breaking, 1 dangerous, 0 minor, 0 info; gate: breaking)
-```
-
-Every finding carries a stable rule ID in parentheses. Match on those, not on the wording: the prose can be reworded in a patch release, the IDs cannot.
+The failing output is at the top of this page. Every finding carries a stable rule ID in parentheses. Match on those, not on the wording: the prose can be reworded in a patch release, the IDs cannot.
 
 ## CI in three lines
 
 ```yaml
-- uses: ivermin1123/mcp-cassette@v0.3
+- uses: ivermin1123/mcp-cassette@v0.4
   with:
     server-command: node dist/my-server.js
 ```
@@ -111,7 +138,7 @@ jobs:
           node-version: '22.x'
       - run: npm ci && npm run build      # your server must exist before it can be started
 
-      - uses: ivermin1123/mcp-cassette@v0.3
+      - uses: ivermin1123/mcp-cassette@v0.4
         with:
           server-command: node dist/my-server.js
           snapshot-file: mcp-contract.snapshot.json
@@ -144,13 +171,13 @@ A pull request from a fork gets a read-only `GITHUB_TOKEN`, so the comment is sk
 
 | Pin | Follows | Use it when |
 |---|---|---|
-| `@v0.3` | patches within 0.3 only: `0.3.1`, `0.3.2`, and so on | **Recommended.** Bug fixes and new rules that were already `warn` reach you; a minor with a breaking change does not. |
+| `@v0.4` | patches within 0.4 only: `0.4.1`, `0.4.2`, and so on | **Recommended.** Bug fixes and new rules that were already `warn` reach you; a minor with a breaking change does not. |
 | `@v0` | every `0.x` release, **breaking minors included** | You want each release as it lands and have decided that a gate turning red on an unchanged server is acceptable. |
-| `@v0.3.0` | nothing; an immutable tag | You need the gate frozen: reproducing an old run, or holding a release while you work through findings. |
+| `@v0.4.0` | nothing; an immutable tag | You need the gate frozen: reproducing an old run, or holding a release while you work through findings. |
 
-While the major version is `0`, a minor release may carry a breaking change, and [semver](https://semver.org/spec/v2.0.0.html#spec-item-4) permits it and this project uses it. That is the whole difference between `@v0` and `@v0.3`: `0.3.0` added eight safety-lint rules, three at `error`, and `@v0` carried them onto servers whose owners had changed nothing. `@v0.3` would not have.
+While the major version is `0`, a minor release may carry a breaking change, and [semver](https://semver.org/spec/v2.0.0.html#spec-item-4) permits it and this project uses it. That is the whole difference between `@v0` and a minor pin. Twice now a minor has done it: `0.3.0` added eight safety-lint rules, three at `error`, and `0.4.0` made `snapshot --check` walk nested schemas, which reports breaking changes that were previously hidden. Both reached `@v0` users who had changed nothing on their side. A minor pin holds them back until you move it.
 
-The two floating tags are force-moved onto each release commit, and only after npm and the GitHub Release have both succeeded, so neither can point at a version that failed to ship. Because they move, a checkout's local copy goes stale silently, and `git ls-remote --tags origin` is the only honest answer to "where does `@v0.3` point right now".
+The two floating tags are force-moved onto each release commit, and only after npm and the GitHub Release have both succeeded, so neither can point at a version that failed to ship. Because they move, a checkout's local copy goes stale silently, and `git ls-remote --tags origin` is the only honest answer to "where does `@v0.4` point right now".
 
 **Do not use `@main`.** It is a development branch, not a release channel: its `action.yml` names the version *being prepared*, which may not be on npm yet, and a workflow pointed at it fails with `ETARGET` for reasons that have nothing to do with your server.
 

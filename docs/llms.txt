@@ -1,0 +1,43 @@
+# mcp-cassette
+
+> The cassette is itself an MCP server, so any client in any language connects to it exactly as it connects to the live one: no library to import, no product code to change, no transport to wrap.
+
+Record one session against a real Model Context Protocol server, then run agent
+tests against the recording with no credentials, no rate limits and no network.
+The same binary gates a tool contract against breaking changes and lints tool
+descriptions for poisoning.
+
+## Install
+
+```
+npm install -g mcp-cassette
+```
+
+Or run without installing: `npx mcp-cassette <command>`. Node.js >= 20.
+
+## Commands
+
+- `record -o <file> -- <server command>`: sit between a client and a live server, write every message to a cassette.
+- `replay <cassette>`: serve the cassette as a real MCP server on stdio, or over Streamable HTTP with `--listen <host:port>`.
+- `check --stdio "<server command>"`: validate handshake and schemas, lint tool descriptions for poisoning. `--format text|json|sarif`. Exit 1 on a finding at or above `--fail-on`.
+- `snapshot --stdio "<server command>"`: write the tool contract to a file. With `--check`, diff a live server against it and exit 1 on a breaking change.
+- `verify <cassette> -- <server command>`: re-fire recorded requests at a live server and diff the answers.
+- `redact <cassette>`: redact secrets in an existing cassette, or `--scan` to audit without writing.
+- `lint <cassette>`: check a cassette header against its own frames.
+
+Every finding carries a stable rule id in parentheses. Match on the id, not the wording.
+
+## Docs
+
+- [README](https://github.com/ivermin1123/mcp-cassette#readme): full reference, CI workflow, safety rules, SARIF output.
+- [Site](https://mcpcassette.dev/): the same material as a page.
+- [Cassette format v2](https://github.com/ivermin1123/mcp-cassette/blob/main/docs/cassette-format-v2.md): the on-disk format.
+- [CHANGELOG](https://github.com/ivermin1123/mcp-cassette/blob/main/CHANGELOG.md): what changed and what breaks.
+
+## What it does not do
+
+- A replay answers from the recording, so it cannot compare models or servers and cannot tell you whether a live server still behaves that way. Use `verify` for that.
+- `snapshot --check` does not resolve `$ref`, and does not cover `anyOf`/`oneOf`/`allOf`, constraint direction (`minimum`, `pattern`, `format`), or `outputSchema`. It reports an unresolved reference plainly instead of guessing.
+- The safety lint reads text, so `intent` rules cannot separate a hostile description from a legitimate one that really does describe running commands. Those stay `warn`.
+- `check --url` and `snapshot --url` against Streamable HTTP are marked experimental; stdio is the supported path.
+- Replay is a test double, not a conformance checker. A missing session id or a mismatched protocol header is a warning on stderr, never a protocol error.
