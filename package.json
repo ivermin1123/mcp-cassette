@@ -71,6 +71,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "ajv-draft-04": "^1.0.0",
     "fast-check": "4.9.0",
     "recheck": "^4.5.0",
     "typescript": "^5.5.0",

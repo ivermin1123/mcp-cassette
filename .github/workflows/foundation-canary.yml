@@ -42,6 +42,25 @@ jobs:
   # thing it records cannot notice that implementation drifting — but it means
   # nothing in the test suite reacts when the official SDK changes how a client
   # behaves on the wire. This job is that missing sensor.
+  # The SARIF schema lives in schemas/ as a byte-identical copy so the test
+  # suite never touches the network. The cost of a copy is that it goes stale
+  # quietly; this is the counterweight. It warns and stays green — a schema
+  # moving upstream is news to read, not a reason to break every branch.
+  vendored-schemas:
+    name: vendored-schemas (local copies vs. upstream)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+
+      - name: Compare each vendored schema with its source
+        run: node scripts/vendored-schema-canary.mjs | tee "$GITHUB_STEP_SUMMARY"
+
   sdk-next:
     name: sdk-next (latest official SDK against the fixture server)
     runs-on: ubuntu-latest

@@ -19,6 +19,7 @@ import { runReplay, type OnMissMode } from "./replay.js";
 import { runHttpReplay } from "./http-replay.js";
 import { printVerifyReport, verifyAgainstServer, verifyFailed } from "./verify.js";
 import { runCheck, printReport } from "./check.js";
+import { toSarif } from "./sarif.js";
 import { readCassette, writeCassette } from "./cassette.js";
 import { redactCassette, scanCassette } from "./redact.js";
 import { lintCassette } from "./lint.js";
@@ -240,24 +241,35 @@ program
   .option("--stdio <command>", "stdio server command, e.g. \"npx -y @modelcontextprotocol/server-everything\"")
   .option("--url <url>", "Streamable HTTP server URL (experimental)")
   .option("--era <era>", ERA_HELP, "auto")
-  .option("--json", "machine-readable JSON output")
+  .option("--format <format>", "output format: text | json | sarif", "text")
+  // Kept permanently, not deprecated: it predates --format, it is in every
+  // README and workflow written so far, and an alias costs one line.
+  .option("--json", "alias for --format json")
   .option("--fail-on <level>", "lowest finding level that fails the run: error | warn", "error")
-  .action(async (opts: { stdio?: string; url?: string; era: string; json?: boolean; failOn: string }) => {
+  .action(
+    async (opts: { stdio?: string; url?: string; era: string; json?: boolean; format: string; failOn: string }) => {
     try {
       if (opts.failOn !== "error" && opts.failOn !== "warn") {
         process.stderr.write(`check: --fail-on must be error or warn (got '${opts.failOn}')\n`);
         process.exit(2);
       }
+      const format = opts.json ? "json" : opts.format;
+      if (format !== "text" && format !== "json" && format !== "sarif") {
+        process.stderr.write(`check: --format must be text, json or sarif (got '${opts.format}')\n`);
+        process.exit(2);
+      }
       const { target, label } = resolveTarget(opts);
       const report = await runCheck(target, label, resolveEra(opts.era), opts.failOn);
-      if (opts.json) process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+      if (format === "sarif") process.stdout.write(JSON.stringify(toSarif(report), null, 2) + "\n");
+      else if (format === "json") process.stdout.write(JSON.stringify(report, null, 2) + "\n");
       else printReport(report);
       process.exit(report.ok ? 0 : 1);
     } catch (err) {
       process.stderr.write(`check failed: ${(err as Error).message}\n`);
       process.exit(2);
     }
-  });
+  }
+  );
 
 program
   .command("snapshot")
