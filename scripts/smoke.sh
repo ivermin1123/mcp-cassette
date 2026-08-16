@@ -37,7 +37,7 @@ SERVER_PKG="${SERVER_PKG:-@modelcontextprotocol/server-everything@2026.7.4}"
 SERVER="npx -y $SERVER_PKG stdio"
 
 if [ ! -f "$CLI" ]; then
-  echo "smoke: $CLI not found — run 'npm run build' first" >&2
+  echo "smoke: $CLI not found. Run 'npm run build' first" >&2
   exit 1
 fi
 

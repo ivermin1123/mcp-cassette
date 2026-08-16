@@ -201,7 +201,7 @@ export async function runCheck(
 export function printReport(report: CheckReport): void {
   const line = (s = "") => process.stdout.write(s + "\n");
   line();
-  line(`mcp-cassette check — ${report.target}`);
+  line(`mcp-cassette check: ${report.target}`);
   line(
     `server: ${report.server?.name ?? "unknown"}@${report.server?.version ?? "?"}  protocol: ${
       report.protocolVersion ?? "?"

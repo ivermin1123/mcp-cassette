@@ -66,7 +66,7 @@ export function missesToError(misses: MissEvent[]): ReplayError {
   const first = misses[0]!;
   const rest = misses.length > 1 ? `\n(and ${misses.length - 1} further miss(es) in this test)` : "";
   const message =
-    `mcp-cassette: no recorded answer for "${first.method}" — ${formatMiss(first.reason)}.` +
+    `mcp-cassette: no recorded answer for "${first.method}", ${formatMiss(first.reason)}.` +
     ` Re-record the cassette or adjust the interaction.${rest}`;
   return isMismatch(first.reason)
     ? new CassetteMismatchError(message, misses)

@@ -152,7 +152,7 @@ export class CassetteWriter {
   /** Deferred-header mode only: record the decided era and flush header + buffered entries. */
   setEra(era: Era): void {
     if (this.pending === null) {
-      throw new Error("cassette header already written — the era can no longer change");
+      throw new Error("cassette header already written; the era can no longer change");
     }
     this.header.era = era;
     this.flushPending();
@@ -272,7 +272,7 @@ export function readCassette(
     const supported = SUPPORTED_VERSIONS.join(", ");
     throw new Error(
       typeof version === "number" && version > CASSETTE_VERSION
-        ? `Cassette version ${version} was recorded with a newer mcp-cassette (this build supports ${supported}) — upgrade mcp-cassette to read ${path}`
+        ? `Cassette version ${version} was recorded with a newer mcp-cassette (this build supports ${supported}). Upgrade mcp-cassette to read ${path}`
         : `Unsupported cassette version ${version} (supported: ${supported})`
     );
   }

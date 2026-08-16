@@ -32,7 +32,7 @@ for (const entry of schemas) {
   if (localHash !== entry.sha256) {
     // The copy was edited. That breaks the comparison itself, so it is louder
     // than drift: nothing downstream can be trusted to mean what it says.
-    console.log(`::error::${entry.file} does not match the sha256 recorded in vendored.json — the vendored copy was modified`);
+    console.log(`::error::${entry.file} does not match the sha256 recorded in vendored.json; the vendored copy was modified`);
     drifted++;
     continue;
   }
@@ -50,13 +50,13 @@ for (const entry of schemas) {
 
   const upstreamHash = createHash("sha256").update(upstream).digest("hex");
   if (upstreamHash === localHash) {
-    console.log(`${entry.file}: up to date (${localHash.slice(0, 12)}…)`);
+    console.log(`${entry.file}: up to date (${localHash.slice(0, 12)}...)`);
     continue;
   }
 
   drifted++;
   console.log(
-    `::warning::${entry.file} has drifted from upstream — vendored ${localHash.slice(0, 12)}…, upstream ${upstreamHash.slice(0, 12)}…. ` +
+    `::warning::${entry.file} has drifted from upstream: vendored ${localHash.slice(0, 12)}..., upstream ${upstreamHash.slice(0, 12)}.... ` +
       `Re-download from ${entry.source}, update schemas/vendored.json, and check whether our output still validates.`
   );
 }

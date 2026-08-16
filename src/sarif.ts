@@ -96,7 +96,7 @@ function toResult(finding: CheckFinding) {
   return {
     ruleId: finding.code,
     level: LEVELS[finding.level],
-    message: { text: finding.excerpt ? `${finding.message} — ${finding.excerpt}` : finding.message },
+    message: { text: finding.excerpt ? `${finding.message}: ${finding.excerpt}` : finding.message },
     partialFingerprints: { mcpCassetteFindingV1: fingerprintOf(finding) },
     locations: [
       {

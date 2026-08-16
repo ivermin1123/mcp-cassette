@@ -387,7 +387,7 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
       rule: CONTRACT_RULES.inputSchemaRefUnclassified,
       subject: tool,
       message:
-        "inputSchema changed and uses $ref — reference resolution is not implemented, " +
+        "inputSchema changed and uses $ref: reference resolution is not implemented, " +
         "so the change is unclassified and treated as breaking",
     });
   }
@@ -523,7 +523,7 @@ function diffSchemaNode(
       kind: "breaking",
       rule: CONTRACT_RULES.inputSchemaChangedUnclassified,
       subject: tool,
-      message: `inputSchema changed structurally${at(pointer)} (unclassified — treated as breaking)`,
+      message: `inputSchema changed structurally${at(pointer)} (unclassified, treated as breaking)`,
     });
   }
 }

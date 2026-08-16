@@ -71,5 +71,5 @@ export function diffValues(recorded: unknown, live: unknown, path = ""): DiffEnt
 /** Short single-line excerpt of a value for human-facing diff output. */
 export function formatValue(value: unknown, maxLength = 60): string {
   const text = value === undefined ? "(absent)" : JSON.stringify(value);
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
 }

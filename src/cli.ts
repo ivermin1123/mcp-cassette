@@ -84,7 +84,7 @@ const program = new Command();
 
 program
   .name("mcp-cassette")
-  .description("Record a real MCP session once — replay it forever. VCR + contract tests for MCP servers.")
+  .description("Record a real MCP session once, replay it forever. VCR + contract tests for MCP servers.")
   .version(VERSION);
 
 program
@@ -108,7 +108,7 @@ program
         process.exit(httpCode);
       }
       if (command.length === 0) {
-        throw new Error("record: missing target — pass a server command after -- , or --http <url>");
+        throw new Error("record: missing target. Pass a server command after -- , or --http <url>");
       }
       const code = await runRecord({ out: opts.out, command, redact: opts.redact, mode });
       process.exit(code);
@@ -120,7 +120,7 @@ program
 
 program
   .command("replay")
-  .description("Serve a recorded cassette as a deterministic MCP server — stdio, or Streamable HTTP with --listen")
+  .description("Serve a recorded cassette as a deterministic MCP server: stdio, or Streamable HTTP with --listen")
   .argument("<cassette>", "path to a .cassette.jsonl file")
   .option("--listen <host:port>", `serve an HTTP cassette over Streamable HTTP (default ${DEFAULT_LISTEN})`)
   .option("--timing <mode>", "streamed answers: none (default, emit back to back) or recorded (honor recorded offsets)", "none")
@@ -149,7 +149,7 @@ program
       }
       // Pacing only means something for a streamed answer, and only HTTP serves those.
       if (opts.timing !== "none") {
-        throw new Error("replay --timing applies to streamed answers, which only --listen serves — add --listen or drop --timing");
+        throw new Error("replay --timing applies to streamed answers, which only --listen serves. Add --listen or drop --timing");
       }
       await runReplay(cassette, { onMiss: opts.onMiss as OnMissMode, serverCommand: command });
     } catch (err) {
@@ -194,7 +194,7 @@ program
     collect,
     []
   )
-  .option("--allow-all-changes", "let every CHANGED pair pass — the explicit waive-everything switch")
+  .option("--allow-all-changes", "let every CHANGED pair pass: the explicit waive-everything switch")
   .option("--url <url>", "verify against a Streamable HTTP server instead of a spawned command")
   .option("--era <era>", ERA_HELP, "auto")
   .argument("[command...]", "server command (prefix with -- ); omit when using --url")
@@ -215,7 +215,7 @@ program
       // This heads the report so it's read next to the drift it explains.
       if (parsed.header.redaction?.applied) {
         process.stdout.write(
-          "⚠ cassette was recorded with redaction — recorded request params contain placeholders,\n" +
+          "⚠ cassette was recorded with redaction: recorded request params contain placeholders,\n" +
             "  so credential-bearing calls may drift against the live server. Consider --ignore for\n" +
             "  the affected paths, or keep a separate --no-redact recording just for verify.\n"
         );
@@ -324,7 +324,7 @@ program
 
         if (fs.existsSync(opts.file) && !opts.update) {
           process.stderr.write(
-            `snapshot: ${opts.file} already exists — use --check to compare or --update to overwrite\n`
+            `snapshot: ${opts.file} already exists. Use --check to compare or --update to overwrite\n`
           );
           process.exit(2);
         }
@@ -347,7 +347,7 @@ program
   .action((cassettePath: string, opts: { out?: string; scan?: boolean }) => {
     try {
       if (opts.scan && opts.out) {
-        process.stderr.write("redact: --scan writes nothing — drop -o, or drop --scan\n");
+        process.stderr.write("redact: --scan writes nothing. Drop -o, or drop --scan\n");
         process.exitCode = 2;
         return;
       }

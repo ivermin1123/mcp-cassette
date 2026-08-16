@@ -97,14 +97,14 @@ function portHolder(port: number): string {
  */
 export function bindFailure(command: string, host: string, port: number, err: NodeJS.ErrnoException): Error {
   return err.code === "EADDRINUSE"
-    ? new Error(`${command}: ${host}:${port} is already in use by ${portHolder(port)} — stop it or pass --listen`)
+    ? new Error(`${command}: ${host}:${port} is already in use by ${portHolder(port)}. Stop it or pass --listen`)
     : new Error(`${command}: could not listen on ${host}:${port}: ${err.message}`);
 }
 
 /** Non-loopback binds are reachable beyond this machine; the operator typed it, but should hear it. */
 export function warnIfExposed(command: string, host: string): void {
   if (host !== "127.0.0.1" && host !== "localhost") {
-    process.stderr.write(`mcp-cassette ${command}: WARNING listening on ${host} — reachable beyond this machine\n`);
+    process.stderr.write(`mcp-cassette ${command}: WARNING listening on ${host}: reachable beyond this machine\n`);
   }
 }
 

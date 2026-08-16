@@ -238,7 +238,7 @@ const NEW_RULES: LintRule[] = [
     id: "CAS-L011",
     evidence: "intent",
     severity: "warn",
-    describe: "tool declares priority over another tool — verify intended",
+    describe: "tool declares priority over another tool, verify intended",
     owasp: ["MCP02:2025", "MCP06:2025"],
     safeMcp: ["SAFE-T1301"],
     pattern: /\b(instead of|rather than|in place of)\s+(the\s+)?[\w.-]{1,40}\s+(tool|server|function)\b|\balways\s+(use|call|prefer|invoke)\s+this\b/i,
@@ -247,7 +247,7 @@ const NEW_RULES: LintRule[] = [
     id: "CAS-L012",
     evidence: "intent",
     severity: "warn",
-    describe: "tool declares command execution — verify intended",
+    describe: "tool declares command execution, verify intended",
     owasp: ["MCP05:2025"],
     safeMcp: ["SAFE-T1102"],
     pattern: /\b(exec|eval|subprocess|child_process|shell)\b|\brm\s+-rf\b|\|\s*(sh|bash)\b/i,
@@ -265,7 +265,7 @@ const NEW_RULES: LintRule[] = [
     id: "CAS-L014",
     evidence: "intent",
     severity: "warn",
-    describe: "tool asks for a credential in its input — verify intended",
+    describe: "tool asks for a credential in its input, verify intended",
     owasp: ["MCP01:2025", "MCP07:2025"],
     safeMcp: ["SAFE-T1001"],
     pattern: /\b(include|attach|provide|supply|pass|paste)\s+(your\s+|the\s+)?(api[_ -]?key|access[_ -]?token|password|secret|credentials?)\b/i,
@@ -293,7 +293,7 @@ const NEW_RULES: LintRule[] = [
       id: "CAS-L016",
       evidence: "intent",
       severity: "warn",
-      describe: "tool declares a fetch from an unpinned remote source — verify intended",
+      describe: "tool declares a fetch from an unpinned remote source, verify intended",
       owasp: ["MCP04:2025"],
       safeMcp: ["SAFE-T1201"],
     },
@@ -326,7 +326,7 @@ const TAIL_RULES: LintRule[] = [
     pattern: OPAQUE_BLOB,
     find: (text) => {
       const m = OPAQUE_BLOB.exec(text);
-      return m ? `${m[0]!.slice(0, 40)}… (${m[0]!.length} chars)` : null;
+      return m ? `${m[0]!.slice(0, 40)}... (${m[0]!.length} chars)` : null;
     },
   },
   {

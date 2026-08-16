@@ -125,13 +125,13 @@ export function lintCassette(cassette: Cassette): CassetteFinding[] {
     // The modern era has no handshake at all, so recorded handshake traffic
     // means the header is lying about one of the two.
     if (asked("initialize")) {
-      add("era-handshake", 'era is "modern" but the cassette records an `initialize` request — the modern era has no handshake');
+      add("era-handshake", 'era is "modern" but the cassette records an `initialize` request; the modern era has no handshake');
     }
     if (header.sessioned) {
-      add("era-sessioned", 'era is "modern" but the header says `sessioned` — the modern era removed sessions entirely');
+      add("era-sessioned", 'era is "modern" but the header says `sessioned`; the modern era removed sessions entirely');
     }
     if (entries.some((e) => e.type === "chunks" && e.via === "get")) {
-      add("era-get-stream", 'era is "modern" but a stream is recorded as `via:"get"` — the modern era removed the standalone GET stream');
+      add("era-get-stream", 'era is "modern" but a stream is recorded as `via:"get"`; the modern era removed the standalone GET stream');
     }
   }
 
@@ -139,7 +139,7 @@ export function lintCassette(cassette: Cassette): CassetteFinding[] {
     // stdio has no URL and no SSE; either field means the header's transport is wrong.
     if (header.url) add("transport-url", 'transport is "stdio" but the header carries a `url`');
     if (entries.some((e) => e.type === "chunks")) {
-      add("transport-chunks", 'transport is "stdio" but the cassette records a streamed answer — `chunks` entries only come from HTTP');
+      add("transport-chunks", 'transport is "stdio" but the cassette records a streamed answer; `chunks` entries only come from HTTP');
     }
   } else if (header.command) {
     add("transport-command", 'transport is "http" but the header carries a spawn `command`');

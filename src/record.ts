@@ -38,10 +38,10 @@ export interface RecordOptions {
 export function ensureWritable(out: string, mode: RecordMode): void {
   if (mode !== "once" || !fs.existsSync(out)) return;
   if (cassetteExists(out)) {
-    throw new Error(`record: ${out} already exists — replay it, or pass --mode all to re-record over it`);
+    throw new Error(`record: ${out} already exists. Replay it, or pass --mode all to re-record over it`);
   }
   process.stderr.write(
-    `mcp-cassette: ${out} exists but holds no cassette header (a recording that never flushed) — re-recording over it\n`
+    `mcp-cassette: ${out} exists but holds no cassette header (a recording that never flushed); re-recording over it\n`
   );
 }
 

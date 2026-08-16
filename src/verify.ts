@@ -198,7 +198,7 @@ export async function verifyAgainstServer(
   // open that valve. The explicit switch for it is --allow-all-changes.
   if ((opts.allowChangedPaths ?? []).includes("")) {
     throw new Error(
-      "empty --allow-changed-paths would waive every change — pass --allow-all-changes if that is what you mean"
+      "empty --allow-changed-paths would waive every change; pass --allow-all-changes if that is what you mean"
     );
   }
   // A malformed pointer must fail here, before any recorded request is
@@ -255,9 +255,9 @@ export function printVerifyReport(results: VerifyResult[], write = (s: string) =
       for (const c of r.changes.slice(0, 10)) {
         lines.push(`    ${c.path || "/"}: ${formatValue(c.recorded)} → ${formatValue(c.live)}\n`);
       }
-      if (r.changes.length > 10) lines.push(`    … ${r.changes.length - 10} more path(s)\n`);
+      if (r.changes.length > 10) lines.push(`    ... ${r.changes.length - 10} more path(s)\n`);
     } else {
-      lines.push(`✗ ${r.status} ${r.label}${r.detail ? ` — ${r.detail}` : ""}\n`);
+      lines.push(`✗ ${r.status} ${r.label}${r.detail ? `: ${r.detail}` : ""}\n`);
     }
   }
   const count = (s: VerifyStatus) => results.filter((r) => r.status === s).length;

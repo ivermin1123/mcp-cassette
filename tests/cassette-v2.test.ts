@@ -81,7 +81,7 @@ describe("version gate", () => {
     const p = write("future.cassette.jsonl", [
       '{"type":"header","cassetteVersion":3,"recorder":"mcp-cassette@9.9.9","startedAt":"2026-08-15T00:00:00Z","transport":"stdio"}',
     ]);
-    expect(() => readCassette(p)).toThrow(/version 3.*newer mcp-cassette.*supports 1, 2.*upgrade/s);
+    expect(() => readCassette(p)).toThrow(/version 3.*newer mcp-cassette.*supports 1, 2.*Upgrade/s);
   });
 
   it("a 0.1.x-style reader refuses a file this version writes, with a clear error", async () => {

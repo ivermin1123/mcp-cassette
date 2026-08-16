@@ -149,7 +149,7 @@ describe("more standalone streams than there are endpoints to serve them", () =>
     expect(body).not.toContain("stream-2");
 
     const stderr = await stderrOf(() => startHttpReplay(file, { listen: "127.0.0.1:0" }));
-    expect(stderr).toContain("2 standalone GET stream(s) recorded — only the first is served");
+    expect(stderr).toContain("2 standalone GET stream(s) recorded; only the first is served");
   });
 
   it("stays quiet when there is only one", async () => {

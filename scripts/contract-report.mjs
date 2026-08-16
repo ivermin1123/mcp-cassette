@@ -61,7 +61,7 @@ function fence(text, lang = "") {
 }
 
 function truncate(text, limit) {
-  return text.length <= limit ? text : `${text.slice(0, limit)}\n… (truncated)`;
+  return text.length <= limit ? text : `${text.slice(0, limit)}\n... (truncated)`;
 }
 
 /** Markdown table cells cannot hold a raw pipe or newline. */
@@ -74,7 +74,7 @@ function renderCheck(status) {
   const log = readIfPresent(path.join(tmp, "mcp-cassette-check.log")) ?? "(no output captured)";
   const verdict = status === 0 ? "✅ passed" : "❌ failed";
   return [
-    `**Safety check** — ${verdict}`,
+    `**Safety check**: ${verdict}`,
     "",
     "<details><summary>check output</summary>",
     "",
@@ -86,7 +86,7 @@ function renderCheck(status) {
 
 function renderDiff(status) {
   if (status === null) return "";
-  const heading = `**Contract drift** — \`${env.SNAPSHOT_FILE ?? "mcp-contract.snapshot.json"}\` (gate: \`${failOn}\`)`;
+  const heading = `**Contract drift**: \`${env.SNAPSHOT_FILE ?? "mcp-contract.snapshot.json"}\` (gate: \`${failOn}\`)`;
 
   if (status >= 2) {
     const err = readIfPresent(path.join(tmp, "mcp-cassette-diff.err"));
@@ -114,7 +114,7 @@ function renderDiff(status) {
   }
 
   const { counts, changes } = report;
-  const tally = `${counts.breaking} breaking · ${counts.dangerous} dangerous · ${counts.minor} minor · ${counts.info} info`;
+  const tally = `${counts.breaking} breaking, ${counts.dangerous} dangerous, ${counts.minor} minor, ${counts.info} info`;
 
   if (changes.length === 0) {
     return [heading, `✅ contract unchanged (${tally})`].join("\n\n");
@@ -128,7 +128,7 @@ function renderDiff(status) {
 
   return [
     heading,
-    `${report.ok ? "✅ within the gate" : "❌ blocked by the gate"} — ${tally}`,
+    `${report.ok ? "✅ within the gate" : "❌ blocked by the gate"}: ${tally}`,
     ["| Tier | Rule | Tool | Change |", "| --- | --- | --- | --- |", ...rows].join("\n"),
   ].join("\n\n");
 }
@@ -137,10 +137,10 @@ function render(checkStatus, snapshotStatus) {
   const failed = [checkStatus, snapshotStatus].some((s) => s !== null && s !== 0);
   const body = [
     MARKER,
-    `### mcp-cassette — ${failed ? "❌ FAIL" : "✅ PASS"}`,
+    `### mcp-cassette: ${failed ? "❌ FAIL" : "✅ PASS"}`,
     renderCheck(checkStatus),
     renderDiff(snapshotStatus),
-    `<sub>mode: \`${mode}\` · gate: \`${failOn}\` · rule IDs are stable — match on those, not on the wording.</sub>`,
+    `<sub>mode: \`${mode}\`, gate: \`${failOn}\`. Rule IDs are stable, so match on those rather than on the wording.</sub>`,
   ]
     .filter((part) => part !== "")
     .join("\n\n");
@@ -161,7 +161,7 @@ function upsertComment(body) {
   const repo = env.GITHUB_REPOSITORY;
   const pr = env.PR_NUMBER;
   if (!repo || !pr) {
-    console.log("mcp-cassette: no pull-request context — skipping the comment.");
+    console.log("mcp-cassette: no pull-request context, skipping the comment.");
     return;
   }
 

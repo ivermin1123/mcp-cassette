@@ -241,7 +241,7 @@ describe("near-miss diagnostics", () => {
   it("names the missing method and lists recorded ones", () => {
     const index = buildReplayIndex(cassetteWith([[req(1, "resources/read", { uri: "a" }), res(1, {})]]));
     expect(diagnoseMiss(index, req(2, "prompts/get", { name: "x" }))).toBe(
-      'no recorded request has method "prompts/get" — recorded methods: resources/read'
+      'no recorded request has method "prompts/get". Recorded methods: resources/read'
     );
   });
 
@@ -253,7 +253,7 @@ describe("near-miss diagnostics", () => {
       ])
     );
     expect(diagnoseMiss(index, call(9, "slugify", { title: "t" }))).toBe(
-      'no recorded tools/call for tool "slugify" — recorded tools: add, echo'
+      'no recorded tools/call for tool "slugify". Recorded tools: add, echo'
     );
   });
 
