@@ -217,6 +217,23 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
 
   const emitted = changes.length;
 
+  // A `$ref` moves the contract somewhere this diff does not follow. Two schemas
+  // can carry byte-identical `{"$ref": "#/$defs/User"}` while `User` itself
+  // changed from a string field to an integer one — so every comparison below
+  // reads "unchanged" on a schema that changed completely.
+  //
+  // This is not hypothetical: FastMCP hands Pydantic the argument model, and
+  // Pydantic emits `$defs`/`$ref` for any nested model, reused model, or Enum.
+  // See tests/fixtures/contracts/ for the frozen shape.
+  //
+  // Until references are resolved, presence of one means the change cannot be
+  // localised, and an unlocalisable change to a contract is not evidence of
+  // safety. Deliberately *not* folded into the fallback at the end of this
+  // function: that one only fires when nothing else was reported, and a root
+  // change of any kind — even a `minor` one — would otherwise suppress it and
+  // return the exact silence this guard exists to prevent.
+  const unresolvedRef = containsRef(o) || containsRef(n);
+
   // type change at root
   if (o.type !== undefined && n.type !== undefined && stableStringify(o.type) !== stableStringify(n.type)) {
     changes.push({
@@ -304,15 +321,30 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
     diffEnum(tool, key, op, np, changes);
   }
 
-  // schemas differ but nothing specific detected → be conservative
-  if (changes.length === emitted) {
+  // Schemas differ and either nothing specific was detected, or a `$ref` means
+  // what was detected cannot be trusted to be the whole story. Same rule id in
+  // both cases — the id is the contract consumers match on, and both are the
+  // same statement: this diff does not know what changed.
+  if (changes.length === emitted || unresolvedRef) {
     changes.push({
       kind: "breaking",
       rule: CONTRACT_RULES.inputSchemaChangedUnclassified,
       subject: tool,
-      message: "inputSchema changed structurally (unclassified — treated as breaking)",
+      message: unresolvedRef
+        ? "inputSchema changed and contains a $ref this diff does not resolve, " +
+          "so the change cannot be localised (unclassified — treated as breaking)"
+        : "inputSchema changed structurally (unclassified — treated as breaking)",
     });
   }
+}
+
+/** Does this schema carry a `$ref` anywhere, at any depth? */
+function containsRef(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(containsRef);
+  const obj = asObj(node);
+  if (!obj) return false;
+  if (typeof obj.$ref === "string") return true;
+  return Object.values(obj).some(containsRef);
 }
 
 /**

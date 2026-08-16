@@ -1,0 +1,92 @@
+{
+  "mcpCassetteContract": 1,
+  "capturedAt": "2026-08-16T10:30:08.317Z",
+  "server": {
+    "name": "nested-probe",
+    "version": "1.9.4"
+  },
+  "protocolVersion": "2025-03-26",
+  "tools": [
+    {
+      "name": "create_user",
+      "description": "Create a user from a nested model.",
+      "inputSchema": {
+        "$defs": {
+          "Address": {
+            "properties": {
+              "street": {
+                "title": "Street",
+                "type": "string"
+              },
+              "city": {
+                "title": "City",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "street",
+              "city"
+            ],
+            "title": "Address",
+            "type": "object"
+          },
+          "Priority": {
+            "enum": [
+              "low",
+              "high"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "User": {
+            "properties": {
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "address": {
+                "$ref": "#/$defs/Address"
+              },
+              "backup": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Address"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "priority": {
+                "$ref": "#/$defs/Priority",
+                "default": "low"
+              }
+            },
+            "required": [
+              "name",
+              "address"
+            ],
+            "title": "User",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "user": {
+            "$ref": "#/$defs/User"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user"
+        ],
+        "title": "create_userArguments",
+        "type": "object"
+      }
+    }
+  ]
+}
