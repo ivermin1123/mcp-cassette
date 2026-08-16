@@ -56,7 +56,24 @@ export interface CheckReport {
 
 const TOOL_NAME_RE = /^[a-zA-Z0-9_.-]{1,128}$/;
 
-export async function runCheck(target: Target, targetLabel: string, era: EraOption = "auto"): Promise<CheckReport> {
+/**
+ * The lowest finding level that makes the run fail.
+ *
+ * `error` is the default because the warn tier is mostly `intent`-class lint —
+ * findings that are true about a tool without being wrong (a terminal server
+ * really does run commands). Turning those red by default would teach everyone
+ * to pass a mute flag, which is the one outcome worse than not reporting them.
+ * `warn` is there for anyone who wants the stricter gate deliberately, and it
+ * reads the same way as `snapshot --fail-on`.
+ */
+export type CheckFailOn = "error" | "warn";
+
+export async function runCheck(
+  target: Target,
+  targetLabel: string,
+  era: EraOption = "auto",
+  failOn: CheckFailOn = "error"
+): Promise<CheckReport> {
   const findings: CheckFinding[] = [];
   const { client, init } = await MiniClient.connect(target, undefined, era);
 
@@ -164,7 +181,8 @@ export async function runCheck(target: Target, targetLabel: string, era: EraOpti
       }
     }
 
-    const ok = !findings.some((f) => f.level === "error");
+    const fails = failOn === "warn" ? ["error", "warn"] : ["error"];
+    const ok = !findings.some((f) => fails.includes(f.level));
     return {
       target: targetLabel,
       server: init.serverInfo,

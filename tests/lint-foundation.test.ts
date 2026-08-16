@@ -47,7 +47,7 @@ describe("rules cite the standard they implement", () => {
     }
   });
 
-  it("maps the eight rules to the risks the design settled on", () => {
+  it("maps every rule to the risks the design settled on", () => {
     const mapping = Object.fromEntries(LINT_RULES.map((r) => [r.id, r.owasp]));
     expect(mapping).toEqual({
       "CAS-L001": ["MCP06:2025"], // intent flow subversion
@@ -58,6 +58,14 @@ describe("rules cite the standard they implement", () => {
       "CAS-L006": ["MCP03:2025"],
       "CAS-L007": ["MCP03:2025"],
       "CAS-L008": ["MCP10:2025"],
+      "CAS-L009": ["MCP03:2025"], // Trojan Source
+      "CAS-L010": ["MCP03:2025"], // variation-selector channel
+      "CAS-L011": ["MCP02:2025", "MCP06:2025"], // cross-tool shadowing
+      "CAS-L012": ["MCP05:2025"], // command injection & execution
+      "CAS-L013": ["MCP06:2025"],
+      "CAS-L014": ["MCP01:2025", "MCP07:2025"],
+      "CAS-L015": ["MCP03:2025"], // homoglyph obfuscation
+      "CAS-L016": ["MCP04:2025"], // supply chain
     });
   });
 });

@@ -241,10 +241,15 @@ program
   .option("--url <url>", "Streamable HTTP server URL (experimental)")
   .option("--era <era>", ERA_HELP, "auto")
   .option("--json", "machine-readable JSON output")
-  .action(async (opts: { stdio?: string; url?: string; era: string; json?: boolean }) => {
+  .option("--fail-on <level>", "lowest finding level that fails the run: error | warn", "error")
+  .action(async (opts: { stdio?: string; url?: string; era: string; json?: boolean; failOn: string }) => {
     try {
+      if (opts.failOn !== "error" && opts.failOn !== "warn") {
+        process.stderr.write(`check: --fail-on must be error or warn (got '${opts.failOn}')\n`);
+        process.exit(2);
+      }
       const { target, label } = resolveTarget(opts);
-      const report = await runCheck(target, label, resolveEra(opts.era));
+      const report = await runCheck(target, label, resolveEra(opts.era), opts.failOn);
       if (opts.json) process.stdout.write(JSON.stringify(report, null, 2) + "\n");
       else printReport(report);
       process.exit(report.ok ? 0 : 1);

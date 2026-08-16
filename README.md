@@ -230,18 +230,39 @@ An unrecognized structural change lands in `input-schema-changed-unclassified` a
 
 Heuristics distilled from tool-poisoning research and the MCP security literature (SAFE-MCP, OWASP Agentic Top 10). They scan tool descriptions *and* schema-level descriptions:
 
-| Rule | Catches |
-|---|---|
-| CAS-L001 | instruction-override phrasing ("ignore previous instructions…") |
-| CAS-L002 | hidden-instruction markers (`<IMPORTANT>`, `<system>`, HTML comments) |
-| CAS-L003 | concealment directives ("do not tell the user…") |
-| CAS-L004 | exfiltration-shaped directives (send/post/upload … to a URL) |
-| CAS-L005 | references to sensitive local material (`~/.ssh`, `.env`, credentials) |
-| CAS-L006 | invisible/steganographic Unicode (zero-width chars, Unicode tags) |
-| CAS-L007 | large opaque base64-like blobs |
-| CAS-L008 | oversized descriptions (context-window bloat) |
+Each rule cites the [OWASP MCP Top 10](https://owasp.org/www-project-mcp-top-10/) risk and the [SAFE-MCP](https://github.com/fkautz/safe-mcp) technique it implements, and both travel with the finding in `--json`.
+
+The **evidence** column is the one to read first. It says whether text alone can tell an attack from a legitimate tool:
+
+- **shape** — it can. The finding *is* the attack, and a legitimate tool produces none. A rule here that fires on ordinary Arabic or Chinese prose is broken, not strict.
+- **intent** — it cannot. The finding is *true* — this tool really does describe running a shell command — but only you know whether that is meant to be there. A terminal server is not lying. These are always `warn`, and they say what was declared instead of accusing.
+
+| Rule | Catches | Evidence | Sev | OWASP | SAFE-MCP |
+|---|---|---|---|---|---|
+| CAS-L001 | instruction-override phrasing ("ignore previous instructions…") | shape | error | MCP06 | T1102 |
+| CAS-L002 | hidden-instruction markers (`<IMPORTANT>`, `<system>`, HTML comments) | shape | error | MCP03 | T1001 |
+| CAS-L003 | concealment directives ("do not tell the user…") | shape | error | MCP03 | T1001 |
+| CAS-L004 | exfiltration-shaped directives (send/post/upload … to a URL) | shape | error | MCP10 | T1910 |
+| CAS-L005 | references to sensitive local material (`~/.ssh`, `.env`, credentials) | shape | error | MCP01 | T1001 |
+| CAS-L006 | invisible/steganographic Unicode (zero-width chars, Unicode tags) | shape | error | MCP03 | T1402 |
+| CAS-L007 | large opaque base64-like blobs | shape | warn | MCP03 | T1402 |
+| CAS-L008 | oversized descriptions (context-window bloat) | shape | warn | MCP10 | — |
+| CAS-L009 | bidi override or unbalanced embedding (Trojan Source) | shape | error | MCP03 | T1402 |
+| CAS-L010 | variation selectors used as a data channel | shape | error | MCP03 | T1402 |
+| CAS-L011 | declared priority over another tool | intent | warn | MCP02, MCP06 | T1301 |
+| CAS-L012 | declared command execution | intent | warn | MCP05 | T1102 |
+| CAS-L013 | role or authority impersonation aimed at the model | shape | error | MCP06 | T1102 |
+| CAS-L014 | asks for a credential in its input | intent | warn | MCP01, MCP07 | T1001 |
+| CAS-L015 | mixed-script word (homoglyph obfuscation) | shape | warn | MCP03 | T1405 |
+| CAS-L016 | declared fetch from an unpinned remote source | intent | warn | MCP04 | T1201 |
+
+They scan the tool's `description` and `title`, its `annotations`, and — because an attacker writes the whole schema, not just its prose ([SAFE-T1501](https://github.com/fkautz/safe-mcp), full-schema poisoning) — every `description`, `title`, `default`, `const`, `enum` and `examples` string at any depth of the input schema.
+
+`check` fails on error-level findings only. `check --fail-on warn` opts into the stricter gate, the same way `snapshot --fail-on` works.
 
 Heuristics, not proofs — treat findings as review triggers, and pair with a dedicated security scanner for depth.
+
+Every pattern in the rule set is proven free of super-linear backtracking by [recheck](https://github.com/makenowjust/recheck) in CI, because lint input is text an attacker wrote.
 
 ## Cassette format (open, v2)
 
