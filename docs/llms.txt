@@ -42,3 +42,4 @@ Every finding carries a stable rule id in parentheses. Match on the id, not the 
 - The safety lint reads text, so `intent` rules cannot separate a hostile description from a legitimate one that really does describe running commands. Those stay `warn`.
 - `check --url` and `snapshot --url` against Streamable HTTP are marked experimental; stdio is the supported path.
 - Replay is a test double, not a conformance checker. A missing session id or a mismatched protocol header is a warning on stderr, never a protocol error.
+- Replay answers requests from the client. Requests and notifications the server initiated are recorded but not replayed in v1, and replay prints how many it skipped to stderr.
