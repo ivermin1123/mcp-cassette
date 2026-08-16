@@ -116,3 +116,49 @@ classify what it cannot resolve. See the Unreleased section of
 The design's four open questions go with them; none needs an answer now. The
 feature that exists keeps working and keeps being maintained — this cancels
 further investment, not the command.
+
+### Where the fence is
+
+Frozen does not mean nothing may be touched. It means one thing, and this is the
+line:
+
+> **Fixing so it is NO WORSE than 0.3.0 — inside the fence.
+> Making it BETTER than 0.3.0 ever was — outside the fence, not done.**
+
+The rule was written after the first thing to hit it. The recursive walk shipped
+with a `$ref` guard that returned early, so a removed parameter went unreported
+whenever a reference sat anywhere in the schema. 0.3.0 reports that finding.
+Shipping `main` as it stood would have been a **regression against a released
+version**, and a freeze is a decision to stop investing, never a licence to ship
+one. So it was fixed (#51).
+
+Per-node `$ref` reporting is the other side of the line. The guard reports once
+per tool, having scanned the whole schema; now that the walk is recursive it
+could report at the node holding the `$ref`, with a JSON Pointer, which would be
+a more useful message than 0.3.0 or anything before it ever gave. That is better
+rather than not-worse, so it stays undone — and it would change how many findings
+a diff produces, which is a real change for anyone counting them in CI. Recorded
+so the next reader knows the current shape was chosen, not overlooked.
+
+### Reference data kept out of the tree
+
+`tests/fixtures/contracts/` on the closed #49/#50 holds a small contract corpus
+captured from a **real FastMCP server** (`pydantic-nested-server.py` plus three
+`.contract.json` snapshots taken across schema edits). Pydantic emits
+`$defs`/`$ref` for any nested model, so this is the empirical answer to "do real
+MCP servers actually emit references?" — and it is the only contract data in
+this project not written by hand. `main` proves the `$ref` guard with
+hand-written schemas instead.
+
+It was not merged because schema-diff is closed, not because it was judged
+unnecessary. Branches get deleted and PR comments are not a durable home, so it
+is anchored to tags, which survive branch cleanup:
+
+| Tag | What it holds |
+|---|---|
+| `corpus/pydantic-2026-08-16` | #50 head — the corpus and the tests written against it |
+| `corpus/pydantic-guard-2026-08-16` | #49 head — the corpus and the original guard implementation |
+
+Fetch with `git fetch origin --tags`, then `git show corpus/pydantic-2026-08-16`.
+Whoever reopens contract diffing should start from that data rather than
+inventing fixtures again.

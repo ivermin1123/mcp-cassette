@@ -236,11 +236,28 @@ A process spawned by the client is a process the adapter does not own, so misses
 | **breaking** | `tool-removed`, `input-property-removed`, `input-property-became-required`, `input-property-added-required`, `input-property-type-changed`, `input-schema-type-changed`, `input-enum-value-removed`, `input-schema-replaced`, `input-schema-changed-unclassified` | A call that used to work now fails. |
 | **dangerous** | `input-enum-value-added`, `input-property-default-changed`, `input-property-added-optional` | Everything still validates. An agent that switch-cases over the enum meets a value it has no branch for; a caller that relied on a default silently gets a different one; a newly-added optional parameter is a surface nothing was tested against. |
 | **minor** | `tool-added`, `input-property-became-optional` | Strictly additive or strictly relaxing. |
-| **info** | `tool-description-changed`, `tool-annotations-changed` | Prose and hints. Worth reading — a description is [attack surface](#safety-lint-rules) — never a gate. |
+| **info** | `tool-description-changed`, `tool-annotations-changed`, `input-annotation-changed` | Prose and hints. Worth reading — a description is [attack surface](#safety-lint-rules) — never a gate. Rewording a parameter's `description` is a typo fix, not a contract change. |
 
 `dangerous` is reported always and gated only with `--fail-on dangerous`, so upgrading does not turn anyone's CI red on its own.
 
-An unrecognized structural change lands in `input-schema-changed-unclassified` and counts as breaking. That is deliberate: an unknown change to a contract is not evidence of safety.
+Two rules exist to say "I do not know", and both count as breaking, because an unknown change to a contract is not evidence of safety:
+
+| Rule | When |
+|---|---|
+| `input-schema-changed-unclassified` | the schema changed in a way no rule above recognises |
+| `input-schema-ref-unclassified` | the schema changed and uses `$ref`. Reference resolution is not implemented, so the diff will not emit a precise rule ID about a shape it never inspected. |
+
+They are separate ids on purpose: "we could not classify this" and "we could not follow this" are different problems, and a CI policy may reasonably treat them differently.
+
+### Where this stops
+
+**`snapshot --check` is finished, not in progress.** It gates one server against one committed file and classifies the diff into the tiers above. That is the whole intended scope, and no further rule families are planned — not `outputSchema`, not constraint direction, not `anyOf`/`oneOf`, not resolving `$ref`. Bugs in what exists still get fixed.
+
+The reason is worth stating plainly rather than leaving you to discover it: **[`@kryptosai/mcp-observatory`](https://github.com/KryptosAI/mcp-observatory) already covers this ground, and covers more of it.** It is MIT, five months older, and its `lock create` / `lock verify` pair is the same one-command-against-one-committed-file workflow, with `test` and `diff --fail-on-schema-drift` alongside. Installed clean and run against three deliberately planted changes, it caught all three at sensible severities and gated correctly. If contract drift is your main problem, look there first — you will get more of it, maintained by people who are treating it as the product rather than as one command among several.
+
+What remains true here: the tier vocabulary and stable rule ids above are a gate policy you can write CI rules against, and they sit next to `record`/`replay` and the [safety lint](#safety-lint-rules) in one binary. That is the reason to use this one, and it is a narrower reason than "it is the best contract differ".
+
+The measurements behind this decision, including where they contradict claims made earlier in this project's own planning, are in [`docs/research/01-reality-check.md`](docs/research/01-reality-check.md). One caveat from that document belongs here too: the comparison established that mcp-observatory does the same job, not that its output is better or worse. Nobody diffed the two tools' findings against each other.
 
 ### Safety lint rules
 
