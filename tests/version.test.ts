@@ -1,6 +1,6 @@
 /**
  * The package version is declared once, in package.json. Anything that reports a
- * version — the CLI, the cassette header, the client handshake — has to derive
+ * version, whether the CLI, the cassette header or the client handshake, has to derive
  * it from there, or a bump to the manifest alone leaves recordings stamped with
  * a recorder that never wrote them.
  *

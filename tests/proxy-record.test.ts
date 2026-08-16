@@ -3,7 +3,7 @@
  *
  * Two properties carry the design (§1, §2, §4.1): what the client and the
  * upstream exchange must be untouched by the proxy, and what lands in the file
- * must be narrower than what crossed the wire — frames, redacted, and never a
+ * must be narrower than what crossed the wire: frames, redacted, and never a
  * header value. The secret checks grep the raw bytes rather than the parsed
  * cassette, because a leak that a parser hides is still a leak.
  */

@@ -1,19 +1,19 @@
-# HTTP record/replay and dual-era support — v0.3 design
+# HTTP record/replay and dual-era support: the v0.3 design
 
 Status: **accepted design, not implemented**. This document locks the design
 for the two headline features of v0.3: (1) record/replay for the Streamable
-HTTP transport, and (2) dual-era support — the classic lifecycle (protocol
-revisions ≤ 2025-11-25) and the stateless lifecycle (revision 2026-07-28).
+HTTP transport, and (2) dual-era support, covering the classic lifecycle
+(protocol revisions ≤ 2025-11-25) and the stateless lifecycle (revision 2026-07-28).
 Every section states a decision and the alternatives that were considered and
 rejected. Implementation follows the PR sequence in the last section.
 
 Sources this design is grounded in (all read 2026-08-15):
 
-- `docs/cassette-format-v2.md` — the v2 format sketch (era, `chunks[]`, state).
-- `src/record.ts`, `src/replay.ts`, `src/client.ts`, `src/cassette.ts` — v1 behavior.
-- [MCP 2025-11-25 — Transports (Streamable HTTP)](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
-- [MCP 2026-07-28 — Changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)
-- [MCP 2026-07-28 — Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
+- `docs/cassette-format-v2.md`: the v2 format sketch (era, `chunks[]`, state).
+- `src/record.ts`, `src/replay.ts`, `src/client.ts`, `src/cassette.ts`: v1 behavior.
+- [MCP 2025-11-25: Transports (Streamable HTTP)](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+- [MCP 2026-07-28: Changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)
+- [MCP 2026-07-28: Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
 
 ## The two eras, in one table
 
@@ -22,11 +22,11 @@ sketch. The differences that matter to a recorder/replayer:
 
 | | `legacy` (≤ 2025-11-25) | `modern` (2026-07-28) |
 |---|---|---|
-| Handshake | `initialize` → `notifications/initialized` | none; every request carries `_meta` (`io.modelcontextprotocol/protocolVersion`, `…/clientCapabilities`, `…/clientInfo`) |
+| Handshake | `initialize` → `notifications/initialized` | none; every request carries `_meta` (`io.modelcontextprotocol/protocolVersion`, `.../clientCapabilities`, `.../clientInfo`) |
 | Discovery | `initialize` result | `server/discover` RPC (servers MUST implement) |
 | Sessions | server MAY mint `Mcp-Session-Id`; client MUST echo; DELETE ends it | removed entirely; GET/DELETE → 405 |
 | Standalone server stream | HTTP GET opens SSE stream; server may send requests + notifications | removed; `subscriptions/listen` POST returns a long-lived SSE response stream (opted-in notifications only) |
-| Server→client requests | allowed on SSE streams (sampling, elicitation, roots) | removed; MRTR — server returns `resultType: "input_required"` with `inputRequests`, client retries with `inputResponses` |
+| Server→client requests | allowed on SSE streams (sampling, elicitation, roots) | removed; under MRTR the server returns `resultType: "input_required"` with `inputRequests`, client retries with `inputResponses` |
 | SSE resumability | `Last-Event-ID` + SSE event ids | removed; broken stream ⇒ re-issue with a new request id |
 | Required POST headers | `Accept`, `MCP-Protocol-Version` (after init) | `Accept`, `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` (for `tools/call`/`resources/read`/`prompts/get`), optional `Mcp-Param-*` |
 | Header/body mismatch | n/a | HTTP 400 + JSON-RPC `-32020` `HeaderMismatch` |
@@ -59,7 +59,7 @@ is not derivable, and streamed (SSE) responses.
 ```
 
 **Decision.** `cassetteVersion` bumps to 2 in the first v0.3 PR (the "one
-version bump, once" rule from the v2 sketch — `era` is the first v2-only
+version bump, once" rule from the v2 sketch, since `era` is the first v2-only
 field). The recorder always writes v2 from then on, for stdio recordings too.
 Readers accept 1 and 2.
 
@@ -74,7 +74,7 @@ Rejected alternatives:
 
 ### 1.2 HTTP exchange representation
 
-**Decision.** Frames stay the unit of record — no per-exchange envelope.
+**Decision.** Frames stay the unit of record, with no per-exchange envelope.
 A simple JSON POST exchange is recorded exactly like stdio: one `c2s` frame
 entry (the request or notification), one `s2c` frame entry (the response).
 Correlation is by JSON-RPC id, as in v1. Entries gain one optional field:
@@ -85,7 +85,7 @@ Correlation is by JSON-RPC id, as in v1. Entries gain one optional field:
 ```
 
 Derivable defaults (not written): request → 200, notification → 202, SSE →
-200. `http.status` is written only for deviations — the modern era makes some
+200. `http.status` is written only for deviations, because the modern era makes some
 JSON-RPC errors travel with meaningful HTTP statuses (`UnsupportedProtocolVersionError`
 and `HeaderMismatch` on 400, unknown method on 404) and replay must reproduce
 them faithfully.
@@ -103,7 +103,7 @@ Rejected alternatives:
   the same information.
 - *Store a redacted full header map per exchange.* All value it adds is
   secret-leak risk and diff noise; no consumer reads it. The one header fact
-  replay needs beyond bodies — "did the server run sessions?" — is one boolean
+  replay needs beyond bodies, "did the server run sessions?", is one boolean
   in the cassette header (`sessioned`).
 - *Store the `Mcp-Session-Id` value (redacted).* The value is volatile per
   session and replay mints its own; storing even a placeholder invites
@@ -131,11 +131,11 @@ firmed up as:
 ```
 
 - Each chunk stores the JSON-RPC frame **as it appeared on the wire** (after
-  redaction) — transcript, not interpretation. `t` is the ms offset from
+  redaction): transcript, not interpretation. `t` is the ms offset from
   session start, so replay can optionally honor recorded pacing.
 - The legacy standalone GET stream is one `chunks` entry with no `id` and
   `via: "get"`. A modern `subscriptions/listen` stream is an ordinary
-  `chunks` entry (it answers a real request id) — no special casing.
+  `chunks` entry (it answers a real request id), with no special casing.
 - Verify treats the final chunk of an id-bearing `chunks` entry as the
   response payload for diffing, and may compare chunk counts as a shape check
   (as sketched).
@@ -143,11 +143,11 @@ firmed up as:
   recorded**. Rejected because: the modern era deleted event ids and
   resumability outright; in the legacy era replaying someone else's event-id
   scheme would only matter for `Last-Event-ID` resumption, which is out of
-  scope (§7 non-goals) — replay emits streams whole. Comment lines are
+  scope (§7 non-goals), and replay emits streams whole. Comment lines are
   defined by the SSE spec as data-free.
 
 Backward-compatibility note: `chunks` is a new entry type, so an 0.1.x/0.2.x
-reader refuses the file at the version gate with a clear error — which is the
+reader refuses the file at the version gate with a clear error, which is the
 correct failure, not a silent skip (those versions cannot replay HTTP at all).
 
 ## 2. Recording HTTP: a reverse proxy
@@ -162,7 +162,7 @@ The proxy exposes one local MCP endpoint; the client is pointed at
 `http://127.0.0.1:6402/mcp`. Every request is forwarded to the upstream URL
 essentially verbatim (body untouched; hop-by-hop headers stripped per RFC
 9110; `Host` rewritten) and the response is relayed back streaming. Frames are
-captured on the way through, redacted before writing — exactly the stdio
+captured on the way through, redacted before writing, exactly like the stdio
 recorder's philosophy: record at the transport level, work with any SDK,
 either era, because the proxy never interprets the session, it only observes
 it.
@@ -171,7 +171,7 @@ Rejected alternatives:
 
 - *An SDK-level recorder (wrap the official client/server SDK).* Ties
   recording to one SDK and one era; the transport-level proxy records any
-  client against any server, including non-SDK ones — the property that made
+  client against any server, including non-SDK ones, which is the property that made
   the stdio recorder universally applicable.
 - *A forward (CONNECT/system) proxy that MITMs arbitrary traffic.* Requires
   installing a trust root and TLS interception; MCP clients universally accept
@@ -182,13 +182,13 @@ Rejected alternatives:
 
 **Decision.** Bind `127.0.0.1` only, default port `6402`, overridable with
 `--listen host:port`. On "address in use" the recorder fails loudly and names
-the owning process — it never silently increments to a free port (a
+the owning process. It never silently increments to a free port (a
 deterministic endpoint is part of the client's configuration). Non-localhost
-binds require the user to type them explicitly (`--listen 0.0.0.0:…`), and the
+binds require the user to type them explicitly (`--listen 0.0.0.0:<port>`), and the
 recorder prints a warning when they do.
 
 The proxy validates `Origin` on every request and answers 403 for a present,
-non-local Origin — the DNS-rebinding protection the spec mandates for anything
+non-local Origin, which is the DNS-rebinding protection the spec mandates for anything
 listening on localhost.
 
 Rejected: binding `0.0.0.0` by default (spec security warning, rebinding
@@ -200,7 +200,7 @@ URL).
 
 **Decision.** Forward both directions verbatim, live. `Mcp-Session-Id` minted
 by the upstream flows back to the client untouched and is echoed by the client
-through the proxy untouched — the proxy must not break live sessions.
+through the proxy untouched, because the proxy must not break live sessions.
 `MCP-Protocol-Version` likewise. Into the *cassette*, per §1.2: session id
 values are never written; the header records `sessioned: true` when the
 upstream minted one; protocol version is already visible in the recorded
@@ -208,7 +208,7 @@ frames (`initialize` result in the legacy era, `_meta` in the modern era).
 
 `Authorization` and all other unrecognized headers are forwarded verbatim and
 never written to the cassette (allowlist model: nothing is stored unless this
-design names it). This is stricter than redaction — a header that never
+design names it). This is stricter than redaction: a header that never
 reaches the file cannot leak through a redaction gap.
 
 ### 2.4 TLS
@@ -218,7 +218,7 @@ Node's `fetch`/`undici` handles it; a private CA is supported via Node's
 standard `NODE_EXTRA_CA_CERTS`. Inbound TLS (client → proxy over `https`) is
 **out of scope for v0.3**: the proxy serves plain HTTP on localhost.
 
-Rejected: terminating TLS locally with a generated cert — every client would
+Rejected: terminating TLS locally with a generated cert, because every client would
 need to trust it (per-client trust-store surgery), for zero fidelity gain on a
 loopback hop. Revisit only if a real client refuses `http://127.0.0.1`.
 
@@ -236,8 +236,8 @@ id-less `via: "get"` entry.
 ### 3.1 Matching: reuse v1 wholesale
 
 **Decision.** `fingerprint()`, `buildReplayIndex()`, `matchResponse()`, and
-`diagnoseMiss()` are transport-independent — they operate on JSON-RPC request
-frames — and are reused unchanged in shape. Two additive extensions:
+`diagnoseMiss()` are transport-independent, operating on JSON-RPC request
+frames, and are reused unchanged in shape. Two additive extensions:
 
 - The index maps a fingerprint to a recorded *answer* that is now either a
   single response frame (v1) or a `chunks` sequence; the pool/fallback
@@ -255,7 +255,7 @@ semantics; passthrough forwards through the era-aware MiniClient (§5) and
 appends v2 entries (`origin: "live"`), including `chunks` entries when the
 live answer streamed.
 
-Rejected: fingerprinting on HTTP artifacts (path, headers, `Mcp-Name`) — they
+Rejected: fingerprinting on HTTP artifacts (path, headers, `Mcp-Name`), because they
 duplicate body fields, and matching on bodies keeps stdio and HTTP cassettes
 symmetrical (a future "replay a stdio cassette over HTTP" needs nothing new).
 
@@ -270,7 +270,7 @@ Origin check). Behavior by method, era-aware:
 | POST request (matched, recorded JSON) | recorded status (default 200), `application/json`, recorded body re-keyed to incoming id | same |
 | POST request (matched, recorded `chunks`) | 200, `text/event-stream`, chunks emitted in order, stream closes after final | same |
 | POST notification | 202, empty | same |
-| POST request (miss) | per `--on-miss`, JSON-RPC error body with near-miss diagnostics (status 200 — the transport worked; the *protocol* answer is the error) | same |
+| POST request (miss) | per `--on-miss`, JSON-RPC error body with near-miss diagnostics (status 200: the transport worked; the *protocol* answer is the error) | same |
 | GET | recorded `via:"get"` stream exists → 200 SSE, emit chunks, hold open; else 405 | 405 |
 | DELETE | `sessioned` → 200 empty (session "terminated"); else 405 | 405 |
 
@@ -279,7 +279,7 @@ Origin check). Behavior by method, era-aware:
 Faithful (tests assert these):
 
 - HTTP status per the table above, including recorded non-default statuses
-  (`http.status`) — a client's 400-handling path (`UnsupportedProtocolVersionError`,
+  (`http.status`), so a client's 400-handling path (`UnsupportedProtocolVersionError`,
   `HeaderMismatch`) only gets exercised if replay reproduces the 400.
 - `Content-Type` (`application/json` vs `text/event-stream`), 202-with-no-body
   for notifications, 405 for methods the era forbids.
@@ -292,26 +292,26 @@ Faithful (tests assert these):
 Deliberately not faithful:
 
 - The session id **value**, SSE event ids, `retry` fields, keep-alive
-  comments, `Date`/`Server`/connection headers — all volatile, no client
+  comments, `Date`/`Server`/connection headers: all volatile, no client
   behavior worth testing depends on them.
 - Chunk pacing: chunks are emitted back-to-back by default; `--timing
   recorded` replays the recorded `t` offsets for tests that need pacing.
 - Strict header enforcement. Replay does **not** return 400 for a missing
   session id (legacy) or missing/mismatched `Mcp-Method`/`MCP-Protocol-Version`
   (modern). It warns on stderr instead. Rationale: replay is a deterministic
-  test double — its job is answering, not conformance-testing the client;
+  test double; its job is answering, not conformance-testing the client;
   strictness there would couple test-suite health to header trivia. The
   conformance check against a real server is `verify`'s job. Rejected:
-  `--strict-headers` flag — deferred until someone asks (scope discipline).
+  `--strict-headers` flag, deferred until someone asks (scope discipline).
 - Client disconnect mid-stream stops emission (modern-era cancellation
-  semantics) but consumes the recorded answer either way — replay does not
+  semantics) but consumes the recorded answer either way, because replay does not
   attempt "un-consume on cancel" (non-deterministic under races).
 
 ## 4. Era detection
 
 Three distinct places need an era answer; they get three distinct mechanisms.
 
-### 4.1 When recording (passive — the proxy decides from observed traffic)
+### 4.1 When recording (passive: the proxy decides from observed traffic)
 
 The proxy cannot ask; it watches. **Rule:** era is decided by the first
 *successful* lifecycle evidence, not by probes:
@@ -350,7 +350,7 @@ guidance:
   `_meta`. A 2xx modern result ⇒ `modern` (and version selection from its
   `supported` list). A 400 whose body is a recognized modern JSON-RPC error
   (`-32020` HeaderMismatch, `-32021` MissingRequiredClientCapability,
-  `-32022` UnsupportedProtocolVersion) ⇒ `modern` — correct and retry, do not
+  `-32022` UnsupportedProtocolVersion) ⇒ `modern`, so correct and retry, do not
   fall back. Anything else (400/404/405 without a modern body, 200 with a
   legacy-style `-32601`, network-level SSE `endpoint` event, timeouts) ⇒ fall
   back to `initialize`; success ⇒ `legacy`. Both failing ⇒ report both
@@ -358,7 +358,7 @@ guidance:
 - **stdio: legacy-first.** `initialize` first; only if it errors or times out,
   probe `server/discover`. Deployed stdio servers are overwhelmingly classic,
   and classic servers receiving an unknown pre-initialize request may log,
-  error, or stall — probing them first buys hangs for no information. The
+  error, or stall, so probing them first buys hangs for no information. The
   asymmetry is deliberate and documented.
 
 Rejected: sniffing capabilities from `tools/list` behavior (ambiguous);
@@ -378,28 +378,28 @@ confusingly at replay time.
 `src/client.ts` currently interleaves three concerns: process/HTTP transport
 mechanics, the classic handshake, and the request API. v0.3 splits it:
 
-- **`src/transport.ts`** — `StdioTransport` and `HttpTransport` with one job:
+- **`src/transport.ts`**: `StdioTransport` and `HttpTransport` with one job:
   deliver a JSON-RPC frame, return the response frames (buffered SSE is
   acceptable here; MiniClient consumers need answers, not pacing).
   `HttpTransport` owns header assembly (`Accept`, `MCP-Protocol-Version`,
   session echo, and in modern mode `Mcp-Method`/`Mcp-Name` with the Base64
   sentinel encoding for non-header-safe values).
-- **`src/client.ts`** — `MiniClient` keeps its public API (`connect`,
+- **`src/client.ts`**: `MiniClient` keeps its public API (`connect`,
   `request`, `notify`, `listAll`, `close`) and gains an era strategy chosen by
   §4.2:
-  - *legacy*: today's behavior — `initialize` handshake,
+  - *legacy*: today's behavior, meaning the `initialize` handshake,
     `notifications/initialized`, session echo, negotiated version.
   - *modern*: no handshake; inject `_meta` (`protocolVersion`, `clientInfo`,
     `clientCapabilities`) into every request; `server/discover` supplies what
     `initialize` used to (serverInfo, capabilities, version) so `check` and
     `snapshot` render the same report for both eras; treat a missing
     `resultType` as `"complete"`; surface `resultType: "input_required"`
-    (MRTR) as a structured error — `check`/`snapshot`/`verify` are
+    (MRTR) as a structured error, because `check`/`snapshot`/`verify` are
     non-interactive by design and cannot answer elicitation.
 
 Rejected: a second `ModernClient` class (duplicates `listAll`, timeout, and
 close logic; the API surface is identical, only the wire dialect differs);
-teaching every consumer about eras (the strategy stays inside MiniClient —
+teaching every consumer about eras (the strategy stays inside MiniClient;
 `check.ts`, `snapshot.ts`, `verify.ts` pass `--era` through and otherwise do
 not change).
 
@@ -412,7 +412,7 @@ The v2 sketch's principles are commitments; v0.3 implements them:
    entries unchanged. Every existing test fixture stays green byte-for-byte.
 2. **Additive only.** No v1 field is renamed, removed, or re-typed. `origin:
    "live"` keeps riding as-is.
-3. **Unknown is skippable** — with one deliberate boundary: unknown *entry
+3. **Unknown is skippable**: with one deliberate boundary: unknown *entry
    types* are skipped with a warning by v2 readers (as implemented in
    `readCassette`), unknown *fields* ride along untouched because the reader
    never enumerates them, but a v2 *file* is refused by v1 readers at the
@@ -422,7 +422,7 @@ The v2 sketch's principles are commitments; v0.3 implements them:
 4. **JSONL, append-only, header-first stays.** The deferred-header writer
    (§4.1) buffers before first flush but the resulting file is
    indistinguishable from one written eagerly.
-5. **One version bump, once** — spent on `era` in PR 1; `chunks`, `http`,
+5. **One version bump, once**: spent on `era` in PR 1; `chunks`, `http`,
    `url`, `sessioned`, `via` all ride the same bump.
 
 ## 7. Delivery plan: PR sequence for the implementing session
@@ -435,7 +435,7 @@ transport, `Last-Event-ID` resumability, interactive MRTR in MiniClient, the
 tasks extension, scenario `state`/`seq` (separate v2 feature), recording
 OAuth flows.
 
-1. **`feat(cassette): format v2 — era, http fields, chunks`**
+1. **`feat(cassette): format v2 with era, http fields, chunks`**
    `CASSETTE_VERSION = 2`; header `era`/`url`/`sessioned`/`transport:"http"`;
    `chunks` + `via` entry; `http.status` on entries; reader accepts {1,2};
    deferred-header writer mode.
@@ -443,60 +443,60 @@ OAuth flows.
    unknown entry type skipped with warning; chunks round-trip via
    `writeCassette`; deferred writer produces header-first output; empty-session
    file omits era.
-   Risk: old binaries refuse new files — release-note it; deferred buffer lost
+   Risk: old binaries refuse new files. Release-note it; deferred buffer lost
    on hard crash before first flush (accepted: partial recordings were already
    unusable).
-2. **`refactor(client): extract transport layer`** — pure refactor, zero
+2. **`refactor(client): extract transport layer`**: pure refactor, zero
    behavior change; `transport.ts` with stdio/HTTP transports.
    Tests: existing check/snapshot/replay-passthrough suites unchanged and
    green; new unit tests per transport (timeout, 202, SSE response parse).
-   Risk: subtle regression in process cleanup — keep the kill/timeout logic
+   Risk: subtle regression in process cleanup. Keep the kill/timeout logic
    verbatim.
-3. **`feat(client): modern era + auto-detection`** — `_meta` injection,
+3. **`feat(client): modern era + auto-detection`**: `_meta` injection,
    `server/discover`, `Mcp-Method`/`Mcp-Name` + sentinel encoding, the §4.2
    probe matrix, `--era` flag on `check`/`snapshot`/`verify`.
-   Tests (mock servers for both eras): full detection matrix — modern 2xx;
+   Tests (mock servers for both eras): full detection matrix, covering modern 2xx;
    400+`-32022` body; 400 empty body → fallback; 404 legacy; stdio
    legacy-first ordering; timeout fallback; version selection from
    `supported`; `resultType` missing ⇒ complete; `input_required` ⇒ structured
    error.
-   Risk: misdetection against quirky servers — every probe outcome is logged
+   Risk: misdetection against quirky servers. Every probe outcome is logged
    on stderr so a wrong guess is diagnosable; hang risk bounded by probe
    timeout.
-4. **`feat(record): HTTP reverse proxy (JSON exchanges)`** — `--http <url>`,
+4. **`feat(record): HTTP reverse proxy (JSON exchanges)`**: `--http <url>`,
    `--listen`, verbatim forwarding with hop-by-hop stripping, Origin → 403,
    passive era detection, allowlist capture, redaction.
    Tests (e2e against stub upstreams, both eras): round-trip fidelity;
    `Authorization` and `Mcp-Session-Id` values never in the file (grep the
    raw file, not the parsed form); `sessioned` recorded; 202 forwarded;
    probe-then-fallback traffic classified `legacy`; port-in-use fails loudly.
-   Risk: forwarding fidelity (streaming bodies, status passthrough) — assert
+   Risk: forwarding fidelity (streaming bodies, status passthrough). Assert
    byte equality client↔upstream in tests.
-5. **`feat(record): SSE capture → chunks[]`** — incremental SSE parser,
+5. **`feat(record): SSE capture → chunks[]`**: incremental SSE parser,
    POST-SSE and legacy GET capture, keep-alive/comment/`retry` handling.
    Tests: multi-chunk with progress notifications before the response; events
    split across TCP reads; comment-only keep-alives ignored; GET stream
    captured id-less `via:"get"`; stream open at shutdown flushed.
-   Risk: SSE parser edge cases — table-driven parser tests against the
+   Risk: SSE parser edge cases. Table-driven parser tests against the
    WHATWG examples.
-6. **`feat(replay): HTTP server (JSON + lifecycle)`** — POST endpoint reusing
+6. **`feat(replay): HTTP server (JSON + lifecycle)`**: POST endpoint reusing
    the v1 engine; era table from §3.2; faithful statuses incl. `http.status`;
    session minting; `--on-miss error|warn`.
    Tests (MiniClient from PR 3 as the client, both eras): matched JSON;
    recorded-400 fidelity; 202; 405 matrix; fresh session minted ≠ recorded
    placeholder; miss diagnostics arrive over HTTP; lenient header warnings on
    stderr.
-   Risk: status-fidelity drift — encode §3.2/§3.3 as a table-driven test.
-7. **`feat(replay): SSE emission`** — chunks → SSE, close-after-final, GET /
+   Risk: status-fidelity drift. Encode §3.2/§3.3 as a table-driven test.
+7. **`feat(replay): SSE emission`**: chunks → SSE, close-after-final, GET /
    `subscriptions/listen` streams held open, `--timing recorded|none`,
    disconnect stops emission.
    Tests: streaming e2e (client consumes progress then result); stream closes
    after final chunk; listen stream stays open and delivers opted-in
    notifications; disconnect mid-stream stops writes and does not crash the
    session.
-   Risk: dangling sockets keeping the process alive — every stream owns a
+   Risk: dangling sockets keeping the process alive. Every stream owns a
    close path, asserted with handle-leak checks in tests.
-8. **`feat(replay): HTTP passthrough + docs`** — `--on-miss passthrough` over
+8. **`feat(replay): HTTP passthrough + docs`**: `--on-miss passthrough` over
    the era-aware MiniClient, appending v2 entries (`chunks` for streamed live
    answers); README + docs sweep; `lint` era/transport consistency checks;
    retire the "stateless support is coming" message in `client.ts`.
@@ -504,13 +504,13 @@ OAuth flows.
    preserved on append; re-run of the appended cassette replays clean (the
    passthrough-idempotence property v1 already guarantees); lint flags a
    modern cassette containing `initialize`.
-   Risk: append interleaving with concurrent serving — keep v1's synchronous
+   Risk: append interleaving with concurrent serving. Keep v1's synchronous
    append discipline.
 
 Sequencing rationale: the format lands first because everything writes or
-reads it; the client split (2–3) precedes record/replay because passthrough,
+reads it; the client split (2-3) precedes record/replay because passthrough,
 verify, and the replay tests all consume the era-aware MiniClient; record
-(4–5) precedes replay (6–7) so replay tests run against genuinely recorded
+(4-5) precedes replay (6-7) so replay tests run against genuinely recorded
 fixtures rather than hand-built ones; SSE is split from JSON on both sides
 because the parsers/emitters are the riskiest 400 lines and deserve their own
 review.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * mcp-cassette — record a real MCP session once, replay it forever.
+ * mcp-cassette: record a real MCP session once, replay it forever.
  *
  *   record    transparent stdio proxy that captures a session into a cassette
  *   replay    serve a cassette as a deterministic mock MCP server

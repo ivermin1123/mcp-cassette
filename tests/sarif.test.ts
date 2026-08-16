@@ -3,14 +3,14 @@
  * own idea of it.
  *
  * The schema is the official OASIS one, vendored under schemas/ so the suite
- * never touches the network — a fetch here would turn somebody else's outage
+ * never touches the network; a fetch here would turn somebody else's outage
  * into our red build, and offline CI is the thing this project exists to
  * provide. A weekly canary warns if the copy drifts; see
  * scripts/vendored-schema-canary.mjs.
  *
  * Schema validity is necessary and nowhere near sufficient: a document can be
  * perfectly well-formed and still say the wrong thing. So the assertions below
- * split in two — the schema decides the shape, and the rest decide the meaning.
+ * split in two: the schema decides the shape, and the rest decide the meaning.
  */
 
 import { createHash } from "node:crypto";

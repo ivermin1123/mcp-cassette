@@ -4,13 +4,13 @@
  * SARIF is what GitHub code scanning reads, so this is the format that turns a
  * safety finding into a row in the Security tab instead of a line in a log
  * nobody opens. The rule ids are the same `CAS-Lxxx` / `CAS-Cxxx` the CLI
- * prints — one identifier, wherever you meet it.
+ * prints: one identifier, wherever you meet it.
  *
  * One thing is deliberately absent: `physicalLocation`. `check` inspects a
  * *live server*, reached by spawning a command or opening a URL; there is no
  * file in the repository the finding sits at, and inventing a line number for
  * one would be a lie a reader would act on. Findings carry `logicalLocations`
- * instead — the tool the finding is about — which is what SARIF provides for
+ * instead, the tool the finding is about, which is what SARIF provides for
  * exactly this case; the field the text was found in stays in the message.
  * GitHub shows such results against the repository rather than against a line.
  */

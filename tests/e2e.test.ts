@@ -36,7 +36,7 @@ describe("check against a live server", () => {
       { kind: "stdio", command: ["node", TINY], },
       "tiny-evil"
     ).catch(() => null);
-    // env can't be passed through Target yet — spawn via env wrapper instead
+    // env can't be passed through Target yet, so spawn via env wrapper instead
     const evilReport = await runCheck(
       { kind: "stdio", command: [process.execPath, "-e",
         `process.env.TINY_EVIL="1";import(${JSON.stringify(TINY)})`] },
@@ -82,7 +82,7 @@ describe("record → replay round trip", () => {
     expect(methods).toContain("initialize");
     expect(methods).toContain("tools/call");
 
-    // 2) Replay: the "server" is now just the cassette — tiny-server never runs.
+    // 2) Replay: the "server" is now just the cassette; tiny-server never runs.
     const replayTarget = {
       kind: "stdio" as const,
       command: ["node", CLI, "replay", cassettePath],
@@ -114,7 +114,7 @@ describe("secrets redaction end to end", () => {
     process.execPath,
     "-e",
     `process.env.TINY_SECRETS="1";import(${JSON.stringify(TINY)})`,
-    // a token passed as a CLI argument — the server ignores it, the header records it
+    // a token passed as a CLI argument: the server ignores it, the header records it
     "--",
     `--token=${FAKE_GITHUB_TOKEN}`,
   ];
@@ -137,7 +137,7 @@ describe("secrets redaction end to end", () => {
     const cassettePath = path.join(tmpDir, "redacted.cassette.jsonl");
     await recordSession(cassettePath);
 
-    // 1) Nothing on disk carries the credential — request, response, or header.
+    // 1) Nothing on disk carries the credential: request, response, or header.
     const onDisk = fs.readFileSync(cassettePath, "utf8");
     expect(onDisk).not.toContain(FAKE_GITHUB_TOKEN);
     expect(onDisk).toContain("[REDACTED:github:"); // the token in the server's reply
@@ -181,10 +181,10 @@ describe("secrets redaction end to end", () => {
     await client.close();
     await new Promise((r) => setTimeout(r, 400));
 
-    // The server echoes back what it actually parsed — proof it got the original.
+    // The server echoes back what it actually parsed, proof it got the original.
     const text = JSON.stringify(call.result);
     expect(text).toContain(`received:${FAKE_GITHUB_TOKEN}`);
-    // …and the client got the server's own token through the proxy untouched.
+    // ...and the client got the server's own token through the proxy untouched.
     expect(text).toContain(`server token: ${FAKE_GITHUB_TOKEN}`);
     // Only the file is redacted.
     expect(fs.readFileSync(cassettePath, "utf8")).not.toContain(FAKE_GITHUB_TOKEN);
@@ -271,7 +271,7 @@ describe("secrets redaction end to end", () => {
     // and letting stdout drain rather than calling process.exit(), which can drop
     // queued output on platforms where a piped stdout is asynchronous. That
     // truncation does not reproduce on macOS/node 24 at any size tried, so this
-    // pins the contract — a complete report — rather than the platform bug.
+    // pins the contract, a complete report, rather than the platform bug.
     const many = path.join(tmpDir, "many.cassette.jsonl");
     const header = {
       type: "header",
@@ -321,7 +321,7 @@ describe("snapshot contract diff across server versions", () => {
       breaking.some((c) => c.subject === "add" && c.message.includes('"precision"'))
     ).toBe(true);
     // v2 also adds an optional `mode` parameter: valid for every existing
-    // caller, and still a behaviour change an agent can trip over — dangerous.
+    // caller, and still a behaviour change an agent can trip over, so dangerous.
     expect(
       changes.some(
         (c) =>

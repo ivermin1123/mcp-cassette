@@ -52,7 +52,7 @@ export type Timing = "none" | "recorded";
 export interface HttpReplayOptions {
   /** "host:port" to bind; defaults to 127.0.0.1:6402. */
   listen?: string;
-  /** "error" (default), "warn", or "passthrough" — which needs `serverCommand`. */
+  /** "error" (default), "warn", or "passthrough", which needs `serverCommand`. */
   onMiss?: OnMissMode;
   timing?: Timing;
   /** The real server to forward misses to, for `--on-miss passthrough`. */
@@ -61,7 +61,7 @@ export interface HttpReplayOptions {
 
 export interface ReplayServer {
   url: string;
-  /** Fingerprint misses so far — what decides the session's exit code. */
+  /** Fingerprint misses so far: what decides the session's exit code. */
   misses(): number;
   /**
    * Take the misses recorded since the last call, and forget them. Unlike
@@ -195,7 +195,7 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
   // Two separate things on purpose. `misses` is cumulative and decides the
   // session's exit code, so nothing may reset it. `missLog` is drainable: a
   // caller that wants to attribute misses to whatever it was doing at the time
-  // — a single test, say — has to be able to take them and start clean.
+  // (a single test, say) has to be able to take them and start clean.
   const missLog: MissEvent[] = [];
   let appended = 0;
   let forwardFailures = 0;
@@ -208,7 +208,7 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
   /**
    * What follows `--`: a lone http(s) URL is a live HTTP endpoint, anything else
    * is a command to spawn. An HTTP cassette is usually recorded against an HTTP
-   * server, and only an HTTP answer can stream — a `chunks` append is
+   * server, and only an HTTP answer can stream, so a `chunks` append is
    * unreachable through a stdio target.
    */
   const liveTarget = (): Target => {
@@ -232,7 +232,7 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
    *
    * Chunks go out back to back unless `--timing recorded`, which spaces them by
    * the offsets the recorder stamped. Either way a client that walked away
-   * stops the emission — the answer stays consumed, because un-consuming on
+   * stops the emission; the answer stays consumed, because un-consuming on
    * cancel is racy and §3.3 rejected it.
    */
   const emit = async (
@@ -351,8 +351,8 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
 
   /**
    * A miss becomes a live call, and the live call becomes cassette. The client
-   * gets the answer in the shape the live server gave it — streamed answers stay
-   * streamed — while the file gains the pair re-keyed to its own `live-N` id.
+   * gets the answer in the shape the live server gave it (streamed answers stay
+   * streamed) while the file gains the pair re-keyed to its own `live-N` id.
    */
   const forwardMiss = async (res: http.ServerResponse, frame: JsonRpcRequest): Promise<void> => {
     try {
@@ -394,13 +394,13 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
         return;
       }
       // The legacy standalone stream: recorded once, opened by GET, and held
-      // open — it never answered a request, so it never completes one either.
+      // open: it never answered a request, so it never completes one either.
       if (req.method === "GET" && standalone) {
         void emit(res, standalone.chunks, { terminate: false });
         return;
       }
       // A sessioned legacy cassette can end its session; everything else the
-      // era forbids — the modern GET and DELETE included — is a 405.
+      // era forbids, the modern GET and DELETE included, is a 405.
       if (req.method === "DELETE" && sessioned) {
         sessionId = undefined;
         send(res, 200);

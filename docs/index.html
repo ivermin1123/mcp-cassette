@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mcp-cassette — record a real MCP session once, replay it forever</title>
+<title>mcp-cassette: record a real MCP session once, replay it forever</title>
 <meta name="description" content="VCR-style record/replay, contract snapshots, and safety checks for Model Context Protocol servers. Test MCP integrations in CI: deterministic, offline, no live APIs, no tokens, no flakes.">
 <link rel="canonical" href="https://mcpcassette.dev/">
 <meta name="color-scheme" content="light dark">
@@ -11,7 +11,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://mcpcassette.dev/">
 <meta property="og:title" content="mcp-cassette">
-<meta property="og:description" content="Record a real MCP session once — replay it forever. VCR-style record/replay, contract snapshots, and safety checks for Model Context Protocol servers.">
+<meta property="og:description" content="Record a real MCP session once, replay it forever. VCR-style record/replay, contract snapshots, and safety checks for Model Context Protocol servers.">
 
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23111'/><rect x='2.5' y='5' width='11' height='6' rx='1' fill='none' stroke='%23fff' stroke-width='1.2'/><circle cx='6' cy='8' r='1.3' fill='%23fff'/><circle cx='10' cy='8' r='1.3' fill='%23fff'/></svg>">
 
@@ -178,14 +178,14 @@ footer {
 
 <header>
   <h1>mcp-cassette</h1>
-  <p class="pitch">Record a real MCP session once — replay it forever.</p>
+  <p class="pitch">Record a real MCP session once, replay it forever.</p>
   <p class="sub">VCR-style record/replay, contract snapshots, and safety checks for
   <a href="https://modelcontextprotocol.io">Model Context Protocol</a> servers. Test your MCP
   integrations in CI: deterministic, offline, no live APIs, no tokens, no flakes.</p>
 
   <div class="note">
-    <p><strong>mcp-cassette is on npm.</strong> <code>npm install -g mcp-cassette</code> — or run any
-    command below without installing, via <code>npx mcp-cassette …</code>. Published with
+    <p><strong>mcp-cassette is on npm.</strong> <code>npm install -g mcp-cassette</code>, or run any
+    command below without installing, via <code>npx mcp-cassette ...</code>. Published with
     <a href="https://github.com/ivermin1123/mcp-cassette/releases">build provenance</a>
     from the tagged release workflow.</p>
   </div>
@@ -199,7 +199,7 @@ footer {
                     session.cassette.jsonl
                               │
 ┌────────┐   replay           ▼
-│   CI   │ ◄────────── deterministic mock — the real server never runs
+│   CI   │ ◄────────── deterministic mock: the real server never runs
 └────────┘</code></pre>
 
 <h2>Why it exists</h2>
@@ -210,17 +210,17 @@ footer {
   the real thing, replay in every CI run.</li>
 
   <li><strong>No more silent breaking changes.</strong> <code>snapshot --check</code> fails the PR
-  that removes a tool, adds a required parameter, or changes a type — before your users' agents
+  that removes a tool, adds a required parameter, or changes a type, before your users' agents
   break at 3am.</li>
 
   <li><strong>Catch poisoned tools.</strong> <code>check</code> lints tool descriptions for the
-  known shapes of tool-poisoning attacks — instruction overrides, concealment directives,
-  exfiltration URLs, invisible Unicode — and validates every schema (draft-07 and 2020-12).
+  known shapes of tool-poisoning attacks (instruction overrides, concealment directives,
+  exfiltration URLs, invisible Unicode) and validates every schema (draft-07 and 2020-12).
   Heuristics, not proofs: treat findings as review triggers, and pair with a dedicated security
   scanner for depth.</li>
 </ul>
 
-<p>Works at the transport level — any server, any SDK, any language, any spec revision.</p>
+<p>Works at the transport level: any server, any SDK, any language, any spec revision.</p>
 
 <h2>The five commands</h2>
 
@@ -238,14 +238,14 @@ result: PASS (0 error(s), 0 warning(s))</code></pre>
 <h3>record</h3>
 <p>A transparent stdio proxy. Put it between your client and the server; it captures every
 JSON-RPC frame in both directions into an open JSONL cassette. Bytes are forwarded verbatim, so
-recording is invisible to both sides — and <a href="#secrets-redaction">secrets are redacted</a>
+recording is invisible to both sides, and <a href="#secrets-redaction">secrets are redacted</a>
 before they hit the file.</p>
 
 <pre><code># wherever your client config points at the server command, wrap it:
 mcp-cassette record -o session.cassette.jsonl -- npx -y @modelcontextprotocol/server-github</code></pre>
 
 <h3>replay</h3>
-<p>Serves the cassette as a stdio MCP server — the cassette <em>is</em> the server now. Requests
+<p>Serves the cassette as a stdio MCP server. The cassette <em>is</em> the server now. Requests
 match on method plus arguments, repeated identical calls replay in recorded order, and anything
 unrecorded gets a clear JSON-RPC error.</p>
 
@@ -269,7 +269,7 @@ result: FAIL (2 breaking, 1 minor, 0 info)</code></pre>
 <p>Cleans a cassette you already have, or audits one without touching it.
 <code>--scan</code> writes nothing and exits non-zero if it finds anything, so it drops into CI
 as a tripwire on committed fixtures. New recordings are
-<a href="#secrets-redaction">redacted by default</a> — this is for the ones that came before.</p>
+<a href="#secrets-redaction">redacted by default</a>; this is for the ones that came before.</p>
 
 <pre><code>mcp-cassette redact session.cassette.jsonl -o session.redacted.jsonl   # clean a recording
 mcp-cassette redact session.cassette.jsonl --scan                      # audit only, exit 1 on a hit</code></pre>
@@ -307,7 +307,7 @@ so other tools can consume it.</p>
 <h2 id="secrets-redaction">Secrets redaction</h2>
 
 <p>A cassette is only useful if you can commit it, and you can only commit it if it has no
-credentials in it. <strong><code>record</code> redacts by default</strong> — every string in every
+credentials in it. <strong><code>record</code> redacts by default</strong>. Every string in every
 captured frame, plus the server command in the header where tokens often arrive as CLI flags, is
 scanned on the way to disk. The bytes forwarded to your client and to the real server are
 untouched, so the live session behaves exactly as if the proxy weren't there.</p>
@@ -322,7 +322,7 @@ same response.</p>
 <p>Rules cover bearer tokens, JWTs, URL credentials in connection strings, GitHub / OpenAI /
 Anthropic / Slack / AWS / Google key shapes, and any JSON value under a key that looks like a
 credential. There is also a <code>redact</code> command to clean or audit a cassette you already
-recorded — <code>--scan</code> writes nothing and exits non-zero if it finds anything.</p>
+recorded. <code>--scan</code> writes nothing and exits non-zero if it finds anything.</p>
 
 <div class="note">
   <p>Redaction is pattern-based, so treat it as a strong default rather than a guarantee: a
@@ -334,13 +334,13 @@ recorded — <code>--scan</code> writes nothing and exits non-zero if it finds a
 
 <ul class="links">
   <li><a href="https://github.com/ivermin1123/mcp-cassette">Source, issues, and the full README on GitHub</a></li>
-  <li><a href="https://www.npmjs.com/package/mcp-cassette">npm package</a> — <code>mcp-cassette</code></li>
+  <li><a href="https://www.npmjs.com/package/mcp-cassette">npm package</a>, <code>mcp-cassette</code></li>
   <li><a href="https://modelcontextprotocol.io">Model Context Protocol</a></li>
 </ul>
 
 <footer>
-  <p>Apache-2.0 licensed. Built by <a href="https://github.com/ivermin1123">ivermin1123</a>
-  — <a href="https://github.com/sponsors/ivermin1123">Sponsor</a>.</p>
+  <p>Apache-2.0 licensed. Built by <a href="https://github.com/ivermin1123">ivermin1123</a>.
+  <a href="https://github.com/sponsors/ivermin1123">Sponsor</a>.</p>
 </footer>
 
 </div>

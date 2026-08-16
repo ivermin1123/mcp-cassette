@@ -11,7 +11,7 @@
  * The second is that splitting the answer from its rendering did not move a
  * single byte of what people already read in their terminals. `diagnoseMiss` is
  * now `formatMiss ∘ diagnoseMissReason`, and the round-trip test below is what
- * keeps those two from drifting apart later — a second formatter growing
+ * keeps those two from drifting apart later, because a second formatter growing
  * somewhere else is exactly the failure this refactor exists to prevent.
  */
 

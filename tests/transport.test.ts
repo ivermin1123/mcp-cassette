@@ -1,7 +1,7 @@
 /**
  * Transports, unit by unit: what a frame does on the way out and what the
  * answer has to look like on the way back. The last case is the one that
- * matters most — `verify` never mentions a transport, so pointing it at an
+ * matters most, because `verify` never mentions a transport, so pointing it at an
  * HTTP server must work with no verify-side change at all. That invariant is
  * the whole point of the split; it is pinned here before anything is built on
  * top of it.
@@ -68,7 +68,7 @@ describe("StdioTransport", () => {
 
   it("closes the child process it spawned", async () => {
     const t = new StdioTransport(["node", "-e", "process.stdin.resume()"]);
-    await t.close(); // resolves only once the process is gone — a hang here is the regression
+    await t.close(); // resolves only once the process is gone; a hang here is the regression
   });
 });
 

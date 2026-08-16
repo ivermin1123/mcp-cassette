@@ -27,13 +27,13 @@ Helpful things to include:
 ## What to expect
 
 - **Acknowledgement within 3 business days.** If you don't hear back, please
-  send a follow-up — assume the mail was lost rather than ignored.
+  send a follow-up. Assume the mail was lost rather than ignored.
 - **An initial assessment within 7 days**, saying whether the report is
   accepted, needs more information, or is out of scope, and why.
 - **A fix or a documented mitigation for accepted reports**, released as a
   patch version. Timing depends on severity; I'll keep you updated on progress.
 - **Credit in the release notes** for the fix, unless you'd rather stay
-  anonymous — just say so.
+  anonymous. Just say so.
 
 Please give me a reasonable window to ship a fix before disclosing publicly.
 
@@ -52,9 +52,9 @@ vulnerability here:
   limitation, not a vulnerability report.
 - **The safety lint is a heuristic tripwire, not a security boundary.** The
   `CAS-L*` rules catch known *shapes* of tool-poisoning attacks. A crafted
-  description that evades them is expected and not itself a vulnerability —
-  though a report showing a common evasion the rules should catch is a very
-  welcome bug report, and a good candidate for a public issue.
+  description that evades them is expected and not itself a vulnerability. A
+  report showing a common evasion the rules should catch is very welcome
+  though, and a good candidate for a public issue.
 - **`record` and `check` execute the server command you give them.** That's the
   intended design, the same as any process runner. Passing an untrusted command
   string is a misuse, not a vulnerability.

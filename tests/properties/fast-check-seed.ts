@@ -1,6 +1,6 @@
 /**
  * One seed for every property run, so a failure found on a runner reproduces on
- * a laptop from the log alone — `fast-check` prints the seed, but only a run
+ * a laptop from the log alone. `fast-check` prints the seed, but only a run
  * that used the same one replays the same cases.
  *
  * Override to widen the search:

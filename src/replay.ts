@@ -3,7 +3,7 @@
  *
  * Serves a recorded cassette as a stdio MCP server: incoming requests are
  * matched against recorded (request → response) pairs and answered with the
- * recorded response — deterministic, offline, no real server involved.
+ * recorded response: deterministic, offline, no real server involved.
  *
  * Matching strategy (v1):
  *   - `initialize` and other parameterless lifecycle calls match by method.
@@ -67,7 +67,7 @@ export function fingerprint(req: { method: string; params?: unknown }): string {
 export interface ReplayIndex {
   byFingerprint: Map<string, JsonRpcResponse[]>;
   byMethod: Map<string, JsonRpcResponse[]>;
-  /** Every answered c2s request as recorded — the corpus near-miss diagnostics search. */
+  /** Every answered c2s request as recorded: the corpus near-miss diagnostics search. */
   recordedRequests: JsonRpcRequest[];
   /** How many responses each fingerprint had before any were consumed. */
   recordedCountByFingerprint: Map<string, number>;
@@ -155,7 +155,7 @@ function consumeFromFingerprintPools(index: ReplayIndex, res: JsonRpcResponse): 
 }
 
 /**
- * Why a request found no recorded answer — as data, not as a sentence.
+ * Why a request found no recorded answer, as data rather than as a sentence.
  *
  * A miss is the one thing a caller most often needs to *act* on, and the
  * difference between "you never recorded this tool" and "you recorded it but
@@ -334,7 +334,7 @@ export type OnMissMode = "error" | "warn" | "passthrough";
  * than reimplemented.
  *
  * Two disciplines travel with it. Appends go out synchronously, one line at a
- * time, to an already-written file — never through a writer that would truncate
+ * time, to an already-written file, never through a writer that would truncate
  * it. And a live pair is re-keyed to a fresh `live-N` id, which keeps request
  * and response paired on re-read and cannot collide with an id the original
  * recording, an earlier passthrough session, or a future client used.
@@ -464,7 +464,7 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
 
   const buf = new LineBuffer();
   // Frames are handled strictly in arrival order even when passthrough awaits
-  // the live server — a later match must not overtake an in-flight forward.
+  // the live server: a later match must not overtake an in-flight forward.
   // Each line carries its own error boundary: one bad frame must not poison
   // the chain and silently drop everything after it.
   let queue: Promise<void> = Promise.resolve();

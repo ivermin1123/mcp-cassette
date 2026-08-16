@@ -2,8 +2,8 @@
  * Capturing a streamed answer: the parser, then the proxy around it.
  *
  * The parser half is measured against WHATWG HTML's own worked examples for
- * "interpreting an event stream" — if the spec says a stream fires two events
- * with these exact data strings, so must we — plus the property the spec's
+ * "interpreting an event stream". If the spec says a stream fires two events
+ * with these exact data strings, so must we, plus the property the spec's
  * prose implies but never illustrates: where the reads fall must not matter.
  *
  * The proxy half asserts the two things §1.3 and §2.5 promise. What reaches

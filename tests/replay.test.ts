@@ -113,7 +113,7 @@ describe("replay matching after redaction", () => {
   const callWith = (id: number, token: string): JsonRpcRequest =>
     req(id, "tools/call", { name: "deploy", arguments: { token } });
 
-  /** Two calls that differ only by the secret — so a wrong match is visible. */
+  /** Two calls that differ only by the secret, so a wrong match is visible. */
   const redactedCassette = () =>
     cassetteWith(
       [

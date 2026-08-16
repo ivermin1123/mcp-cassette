@@ -1,8 +1,8 @@
 /**
- * MiniClient — a deliberately small MCP client used by `check`, `snapshot`,
+ * MiniClient: a deliberately small MCP client used by `check`, `snapshot`,
  * and `verify`.
  *
- * Speaks both eras and knows nothing about how frames travel — that is the
+ * Speaks both eras and knows nothing about how frames travel; that is the
  * Transport's job (see transport.ts):
  *
  *   legacy (≤ 2025-11-25): initialize → notifications/initialized → requests.
@@ -65,7 +65,7 @@ export type EraOption = Era | "auto";
 const MODERN_ERROR_CODES = new Set([-32020, -32021, -32022]);
 const UNSUPPORTED_PROTOCOL_VERSION = -32022;
 
-/** What `server/discover` answers with — the modern stand-in for `initialize`'s result. */
+/** What `server/discover` answers with: the modern stand-in for `initialize`'s result. */
 interface DiscoverResult {
   supportedVersions?: string[];
   capabilities?: Record<string, unknown>;
@@ -212,7 +212,7 @@ export class MiniClient {
       res = await this.request("server/discover");
     } catch (err) {
       const modern = modernErrorOf(err);
-      if (!modern) throw err; // not a modern answer — the caller may fall back
+      if (!modern) throw err; // not a modern answer; the caller may fall back
       if (modern.code !== UNSUPPORTED_PROTOCOL_VERSION) {
         throw new ModernServerError(modern.code, `server/discover rejected: ${modern.message}`);
       }
@@ -240,7 +240,7 @@ export class MiniClient {
     };
   }
 
-  /** Keep the version in `_meta` and the version in the header in lockstep — a mismatch is -32020. */
+  /** Keep the version in `_meta` and the version in the header in lockstep; a mismatch is -32020. */
   private useVersion(version: string): void {
     this.protocolVersion = version;
     this.transport.setProtocolVersion(version);

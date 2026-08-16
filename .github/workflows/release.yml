@@ -7,7 +7,7 @@ on:
   # Release infrastructure that can only be exercised by cutting a release is
   # infrastructure nobody can fix safely: the v0.2.0 job shipped two defects
   # that a single dry run would have caught. This dispatch reads the registry
-  # and nothing else — the publish job below is gated off, so no dispatch can
+  # and nothing else. The publish job below is gated off, so no dispatch can
   # publish, tag, or touch OIDC.
   workflow_dispatch:
     inputs:
@@ -33,8 +33,8 @@ jobs:
 
       # No `registry-url`: it makes setup-node write
       # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into ~/.npmrc
-      # unconditionally. With no token set — the intended state for trusted
-      # publishing — that expands to an empty string, npm reads it as "auth is
+      # unconditionally. With no token set, which is the intended state for trusted
+      # publishing, that expands to an empty string, npm reads it as "auth is
       # already configured", never performs the OIDC exchange, and the publish
       # dies with ENEEDAUTH or E404 (npm/cli#8513, still open). Without the
       # option no .npmrc is written and npm falls back to its default registry,
@@ -68,7 +68,7 @@ jobs:
       - run: npm test
 
       # Authentication is the OIDC exchange against the trusted publisher
-      # configured for this package on npm — no token, no secret, nothing to
+      # configured for this package on npm: no token, no secret, nothing to
       # rotate or leak. `prepublishOnly` rebuilds and re-tests before the
       # tarball is created.
       #
@@ -93,7 +93,7 @@ jobs:
       # major version is 0 a minor may break, so `@v0` cannot be recommended to
       # anyone who does not want that: on 0.3.0 it carried eight new lint rules
       # onto servers nobody had touched. `@v0.<minor>` is the pin the README
-      # recommends — it only ever gains patches — and `@v0` remains for people
+      # recommends, because it only ever gains patches, and `@v0` remains for people
       # who want every release and have said so.
       #
       # Last on purpose: this runs only once npm and the GitHub Release have
@@ -104,7 +104,7 @@ jobs:
           set -euo pipefail
           # A prerelease must not become what either float resolves to. Checked
           # before the names are derived, because `%.*` on v0.4.0-rc.1 yields
-          # `v0.4.0-rc` — a string that is nobody's float and should not appear
+          # `v0.4.0-rc`, a string that is nobody's float and should not appear
           # in a log line either.
           case "$GITHUB_REF_NAME" in
             *-*) echo "prerelease $GITHUB_REF_NAME — leaving the floats where they are"; exit 0 ;;
@@ -124,7 +124,7 @@ jobs:
   # proves the artifact that actually reached consumers works *there*: a clean
   # runner, no checkout on the module path, no node_modules, nothing but what
   # `npx` pulls from the registry. It catches the failure mode local CI cannot
-  # see — a bad `files` list, a missing shebang or bin bit, a dependency that
+  # see: a bad `files` list, a missing shebang or bin bit, a dependency that
   # only ever resolved because it was hoisted in this repo.
   #
   # It runs after publish because it can only run after publish, which is the
@@ -133,14 +133,14 @@ jobs:
   # were not told to look at.
   #
   # A failure here goes red and stops. It does NOT unpublish, deprecate, or
-  # move any tag back — an automated rollback of a release the world may
+  # move any tag back. An automated rollback of a release the world may
   # already have installed is a worse outcome than a loud alert. Read the log,
   # then decide.
   verify-publish:
     name: verify the published package from npm
     needs: release
     # On a tag push this gates on the publish having succeeded. On a dispatch
-    # `release` is skipped, and `needs` alone would skip this too — hence the
+    # `release` is skipped, and `needs` alone would skip this too, hence the
     # explicit result check rather than a bare `needs:`.
     if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.release.result == 'success') }}
     runs-on: ubuntu-latest
@@ -178,7 +178,7 @@ jobs:
 
       # A publish is not instantly readable from every registry edge, so the
       # retry loop is not optional. What matters is *what* gets retried: this
-      # used to be two steps — poll `npm view`, then assert with `npx` — and
+      # used to be two steps (poll `npm view`, then assert with `npx`) and
       # those are different resolvers reading different caches. On the v0.2.0
       # release the poll went green on its first attempt and the very next line
       # died with `ETARGET No matching version found for mcp-cassette@0.2.0`,
@@ -197,7 +197,7 @@ jobs:
       #
       # Deliberately no `npm ci`, no global install, and run from an empty
       # directory: `npx pkg@<exact>` will happily run an already-present
-      # binary of another version instead of the pin — observed locally, where
+      # binary of another version instead of the pin, observed locally, where
       # a global mcp-cassette@0.1.1 answered a `npx -y mcp-cassette@0.1.2
       # --version` with "0.1.1". A runner has neither, and this keeps it that
       # way, so a mismatch here means the tarball really is wrong.
@@ -223,7 +223,7 @@ jobs:
           exit 1
 
       # `version:` is the released number, not `local`, so the action pulls its
-      # CLI from the registry — the same path a consumer's workflow takes.
+      # CLI from the registry, the same path a consumer's workflow takes.
       # `comment` is off: a tag push has no pull request to comment on.
       #
       # This step is also the only place the action's registry path is ever

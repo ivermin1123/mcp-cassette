@@ -1,5 +1,5 @@
 /**
- * Cassette format v2 — an open, append-only JSONL file.
+ * Cassette format v2: an open, append-only JSONL file.
  *
  * Line 1:   { "type": "header", ... }
  * Line 2+:  { "type": "frame",  "t": <ms offset>, "dir": "c2s"|"s2c", "frame": {...} }
@@ -11,7 +11,7 @@
  * "chunks" entries hold a streamed (SSE) response, frame by frame as it
  * appeared on the wire, because a merged payload never existed there.
  *
- * v2 is v1 plus optional fields — nothing renamed, removed, or re-typed.
+ * v2 is v1 plus optional fields; nothing is renamed, removed, or re-typed.
  * v1 files read forever; a missing `era` means `"legacy"`. Unknown entry types
  * are skipped with a warning; a future-version file is refused, not half-read.
  */
@@ -37,11 +37,11 @@ export interface CassetteHeader {
   command?: string[];
   /** HTTP recordings only: the upstream URL, redacted like command args. */
   url?: string;
-  /** Absent on v1 cassettes and undecided sessions — treat as "legacy". */
+  /** Absent on v1 cassettes and undecided sessions; treat as "legacy". */
   era?: Era;
   /** Legacy-era HTTP only: the recorded server minted an Mcp-Session-Id. The value itself is never stored. */
   sessioned?: boolean;
-  /** Absent on cassettes written before redaction existed — treat as not applied. */
+  /** Absent on cassettes written before redaction existed; treat as not applied. */
   redaction?: { applied: boolean };
 }
 
@@ -59,7 +59,7 @@ export interface FrameEntry {
   origin?: "live";
   /**
    * Only when the HTTP status is not the derivable default (request → 200,
-   * notification → 202, SSE → 200) — e.g. a modern-era 400 that replay must
+   * notification → 202, SSE → 200), for example a modern-era 400 that replay must
    * reproduce faithfully.
    */
   http?: { status: number };
@@ -104,8 +104,8 @@ export interface CassetteWriterOptions {
   era?: Era;
   sessioned?: boolean;
   /**
-   * Buffer entries in memory so the era — decided only by the first successful
-   * exchange — can still make it into line 1. `setEra()` flushes; an undecided
+   * Buffer entries in memory so the era, decided only by the first successful
+   * exchange, can still make it into line 1. `setEra()` flushes; an undecided
    * session flushes at close with `era` omitted (readers default to "legacy").
    */
   deferHeader?: boolean;
@@ -201,7 +201,7 @@ export class CassetteWriter {
     });
   }
 
-  /** Milliseconds since the session started — the stamp every entry carries. */
+  /** Milliseconds since the session started: the stamp every entry carries. */
   elapsed(): number {
     return Date.now() - this.start;
   }
@@ -214,7 +214,7 @@ export class CassetteWriter {
   /**
    * Abandon the recording: drop whatever is buffered and close without writing
    * a header. A session that never started must not leave a valid-looking
-   * cassette behind — the next run would refuse to overwrite it. In deferred
+   * cassette behind, and the next run would refuse to overwrite it. In deferred
    * mode nothing has reached disk yet, so the file is left at zero bytes, which
    * `cassetteExists` reads as "no cassette here". Anything already written
    * stays written; this cannot unwrite it.
@@ -227,7 +227,7 @@ export class CassetteWriter {
 
 /**
  * Is there a cassette at this path? An empty file, or one whose first line is
- * not a header, is a recording that died before its header reached disk — not
+ * not a header, is a recording that died before its header reached disk, not
  * a cassette worth protecting. Anything we cannot prove broken counts as real.
  */
 export function cassetteExists(path: string): boolean {

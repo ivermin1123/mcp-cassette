@@ -1,7 +1,7 @@
 /**
  * The adapter, proved the only way that means anything: by running vitest.
  *
- * Every claim this adapter makes is a claim about what a *test run* does — a
+ * Every claim this adapter makes is a claim about what a *test run* does, so a
  * miss fails the test, the failure names the right cause, a drained miss does
  * not leak into the next test. None of that can be asserted from inside the
  * same process that would have to fail. So a fixture project under

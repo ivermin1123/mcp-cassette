@@ -2,7 +2,7 @@
  * End-to-end for the `snapshot --check` gate: the built CLI, a real child
  * process, and the exit codes CI (and the GitHub Action) depend on.
  *
- * Kept out of e2e.test.ts on purpose — the gate's contract is exit codes and
+ * Kept out of e2e.test.ts on purpose: the gate's contract is exit codes and
  * JSON shape, and those deserve to fail on their own line.
  */
 import { afterAll, describe, expect, it } from "vitest";
@@ -25,7 +25,7 @@ afterAll(() => {
 /**
  * A launcher for the v2 fixture on disk. `--stdio` takes a single command
  * string that the CLI tokenizes with quote handling but no backslash escapes,
- * so an inline `node -e "…"` program would not survive the round trip.
+ * so an inline `node -e "..."` program would not survive the round trip.
  */
 const V2_LAUNCHER = path.join(tmpDir, "v2-server.mjs");
 fs.writeFileSync(

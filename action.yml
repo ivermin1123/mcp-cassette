@@ -97,7 +97,7 @@ runs:
           # mcp-cassette itself, this package.json's `bin.mcp-cassette` makes
           # npx discard the `@$VERSION` pin entirely. On a runner with no
           # node_modules that is `sh: 1: mcp-cassette: not found` (exit 127);
-          # on a machine that has a stale build it is worse — the wrong
+          # on a machine that has a stale build it is worse: the wrong
           # version answers and exits 0, so a release nobody tested reads as
           # verified.
           #
@@ -106,7 +106,7 @@ runs:
           # against the caller's checkout. Those two directories are separate
           # on purpose and must not be collapsed back into one.
           #
-          # Harmless for consumers, whose repo is not named mcp-cassette — but
+          # Harmless for consumers, whose repo is not named mcp-cassette, but
           # it is exactly how this repo dogfoods the action against its own
           # published tarball in the release workflow's verify-publish job.
           CLI_PREFIX="$RUNNER_TEMP/mcp-cassette-cli-$VERSION"
@@ -157,8 +157,8 @@ runs:
         fi
         echo "status=$STATUS" >> "$GITHUB_OUTPUT"
 
-    # One render, three destinations: the job log, the step summary, and — on a
-    # pull request — a single comment that is edited in place on every re-run
+    # One render, three destinations: the job log, the step summary, and, on a
+    # pull request, a single comment that is edited in place on every re-run
     # rather than appended to.
     - name: Report
       shell: bash

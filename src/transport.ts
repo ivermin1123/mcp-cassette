@@ -1,5 +1,5 @@
 /**
- * Transports — how a JSON-RPC frame reaches a server and how its answer comes
+ * Transports: how a JSON-RPC frame reaches a server and how its answer comes
  * back. One job only: deliver a frame, return the response frame.
  *
  * Everything above this file (the lifecycle handshake, the request API,
@@ -45,7 +45,7 @@ export interface Transport {
   /** The era the wire speaks. Only HTTP changes shape between eras. */
   setEra(era: Era): void;
   /**
-   * Every frame of the last answer, when it arrived as a stream — undefined
+   * Every frame of the last answer, when it arrived as a stream; undefined
    * when it was plain JSON. MiniClient's own callers want the answer and
    * nothing else, but a passthrough recording has to write down what actually
    * crossed the wire, notifications included (§1.3).
@@ -55,19 +55,19 @@ export interface Transport {
 }
 
 // A header value may hold visible ASCII, space, and tab, but not lead or trail
-// with whitespace (RFC 9110 § field values). Anything else — and any value that
-// would be mistaken for the sentinel — travels Base64.
+// with whitespace (RFC 9110 § field values). Anything else, and any value that
+// would be mistaken for the sentinel, travels Base64.
 const HEADER_SAFE = /^[\x21-\x7e](?:[\x20\x09\x21-\x7e]*[\x21-\x7e])?$/;
 const SENTINEL = /^=\?base64\?.*\?=$/;
 
-/** Modern-era header values, per the spec's `=?base64?…?=` sentinel encoding. */
+/** Modern-era header values, per the spec's `=?base64?...?=` sentinel encoding. */
 export function encodeHeaderValue(value: string): string {
   return HEADER_SAFE.test(value) && !SENTINEL.test(value)
     ? value
     : `=?base64?${Buffer.from(value, "utf8").toString("base64")}?=`;
 }
 
-/** Session teardown is a courtesy, not a result — it gets a short leash. */
+/** Session teardown is a courtesy, not a result, so it gets a short leash. */
 const CLOSE_TIMEOUT_MS = 2000;
 
 /** Methods whose `Mcp-Name` header mirrors a body field, and which field it is. */
@@ -167,8 +167,8 @@ export class StdioTransport implements Transport {
 }
 
 /**
- * Streamable HTTP. Owns header assembly — `Accept`, `MCP-Protocol-Version`,
- * and the session id the server minted — and accepts either a JSON body or an
+ * Streamable HTTP. Owns header assembly (`Accept`, `MCP-Protocol-Version`,
+ * and the session id the server minted) and accepts either a JSON body or an
  * SSE stream as the answer. SSE is buffered whole here: MiniClient's consumers
  * need answers, not pacing (recorded pacing is a cassette concern).
  */

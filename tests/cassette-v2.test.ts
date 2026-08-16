@@ -1,7 +1,7 @@
 /**
- * Cassette format v2 — the compatibility commitments, pinned as tests: v1
+ * Cassette format v2: the compatibility commitments, pinned as tests: v1
  * files read forever, a missing era means "legacy", unknown entry types are
- * skipped (not fatal), and files from a future format are refused loudly —
+ * skipped (not fatal), and files from a future format are refused loudly,
  * including by the published 0.1.x reader meeting a file written today.
  */
 

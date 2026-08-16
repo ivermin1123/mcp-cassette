@@ -1,5 +1,5 @@
 /**
- * `mcp-cassette snapshot` — contract snapshots & breaking-change detection.
+ * `mcp-cassette snapshot`: contract snapshots & breaking-change detection.
  *
  * Captures the server's tool surface (names + schemas + annotations) into a
  * canonical snapshot file. `--check` diffs the live server against the stored
@@ -7,25 +7,25 @@
  *
  *   breaking  : removed tool, removed property, newly-required property,
  *               type change, narrowed enum, other structural schema change
- *   dangerous : compiles everywhere, changes behaviour somewhere — widened
+ *   dangerous : compiles everywhere, changes behaviour somewhere, such as widened
  *               enum, changed default, newly-added optional property
  *   minor     : added tool, relaxed requirement
  *   info      : description/annotation changes
  *
  * The `dangerous` tier is GraphQL-Inspector's trichotomy applied to JSON
  * Schema. An agent that switch-cases over an enum, or a caller that relied on
- * a default, keeps type-checking and starts behaving differently — which is
+ * a default, keeps type-checking and starts behaving differently, which is
  * exactly the class of drift a snapshot gate exists to surface. It is reported
  * always and gated on demand (`--fail-on dangerous`), so the default exit-code
  * contract is unchanged.
  *
  * Every change also carries a stable `rule` ID (oasdiff-style, e.g.
  * `tool-removed`, `input-enum-value-added`). Rule IDs are part of the public
- * contract: they are what a downstream policy — a CI allowlist, a PR bot, a
- * review checklist — matches on, and they must stay stable across releases
+ * contract: they are what a downstream policy (a CI allowlist, a PR bot, a
+ * review checklist) matches on, and they must stay stable across releases
  * even when the human-readable message is reworded.
  *
- * Exit code 1 when the configured tier is reached — wire it into CI and no PR
+ * Exit code 1 when the configured tier is reached, so wire it into CI and no PR
  * silently breaks the agents that depend on your server.
  */
 
@@ -89,7 +89,7 @@ export type ContractRule = (typeof CONTRACT_RULES)[keyof typeof CONTRACT_RULES];
 
 export interface ContractChange {
   kind: ChangeKind;
-  /** Stable rule ID from `CONTRACT_RULES` — match on this, not on `message`. */
+  /** Stable rule ID from `CONTRACT_RULES`: match on this, not on `message`. */
   rule: ContractRule;
   subject: string;
   message: string;
@@ -205,7 +205,7 @@ function asObj(v: unknown): Record<string, unknown> | null {
 /**
  * Keys that carry prose for a reader, not obligation for a caller. Changing one
  * cannot break anybody, so they are lifted out before structural comparison and
- * reported on their own at `info` — otherwise every reworded description lands
+ * reported on their own at `info`; otherwise every reworded description lands
  * in the conservative-breaking bucket and turns a consumer's CI red for a typo
  * fix.
  */
@@ -214,8 +214,8 @@ const ANNOTATION_KEYS = new Set(["description", "title", "$comment", "examples"]
 /**
  * Keywords every node accounts for itself: `type` and `required` are classified
  * here, and `properties` is fully covered by the add/remove/recurse pass. What
- * is left after removing these — and whatever else the caller reports having
- * delegated — is a keyword this engine cannot classify yet, which is exactly
+ * is left after removing these, and whatever else the caller reports having
+ * delegated, is a keyword this engine cannot classify yet, which is exactly
  * what should trip the conservative fallback.
  */
 const NODE_OWN_KEYS = ["type", "required", "properties"];
@@ -223,7 +223,7 @@ const NODE_OWN_KEYS = ["type", "required", "properties"];
 /**
  * Normalise the ways one meaning can be spelled, so that only real differences
  * survive to the rules. This emits nothing; it *prevents* findings. Deliberately
- * NOT normalised: `items: [X]` (draft-04 tuple) against `items: X` — those mean
+ * NOT normalised: `items: [X]` (draft-04 tuple) against `items: X`, because those mean
  * different things, and folding them would be inventing agreement.
  */
 function canonicalizeSchema(value: unknown): unknown {
@@ -283,7 +283,7 @@ function canonicalizeSchema(value: unknown): unknown {
 /**
  * The prose of a schema, with its structure discarded. Two schemas that
  * canonicalize the same may still differ here (a reworded description) or not
- * at all (a reordered `required`) — and only the first is worth a line of
+ * at all (a reordered `required`), and only the first is worth a line of
  * output. Without this split, every reordering would be announced as a
  * description change.
  */
@@ -314,7 +314,7 @@ function containsRef(value: unknown): boolean {
 
 /**
  * What is left of a node once the keywords somebody has already accounted for
- * are removed. A key is only dropped when it was genuinely handled — an `items`
+ * are removed. A key is only dropped when it was genuinely handled; an `items`
  * that could not be recursed into (a tuple against a single schema, say) stays,
  * so the difference still surfaces instead of disappearing.
  */
@@ -348,7 +348,7 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
 
   // The raw schemas differ but nothing a caller is bound by does. That is either
   // reworded prose, which is worth one info line, or a difference of spelling
-  // only — a reordered `required`, `additionalProperties` written three ways —
+  // only: a reordered `required`, or `additionalProperties` written three ways,
   // which is worth nothing at all.
   if (stableStringify(canonOld) === stableStringify(canonNew)) {
     if (stableStringify(annotationShape(o)) !== stableStringify(annotationShape(n))) {
@@ -366,7 +366,7 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
   // whatever this diff does find cannot be trusted to be the whole story. Say
   // that, and say it *in addition to* everything that could still be classified:
   // returning early here would hide a removed parameter simply because a `$ref`
-  // sat somewhere else in the schema — a guard against silent drift causing it.
+  // sat somewhere else in the schema, a guard against silent drift causing it.
   // The generic per-node fallback is suppressed instead, because this rule is
   // the same statement with a reason attached.
   const unresolvedRef = containsRef(canonOld) || containsRef(canonNew);
@@ -397,7 +397,7 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
  * One schema node, then its children. The fallback is per node, not per tool:
  * the earlier version only asked whether the *whole tool* had produced any
  * finding, so a single `minor` at the root swallowed every breaking change
- * nested underneath it — a contract-drift detector silently dropping contract
+ * nested underneath it, a contract-drift detector silently dropping contract
  * drift.
  */
 function diffSchemaNode(
@@ -464,7 +464,7 @@ function diffSchemaNode(
     if (key in oldProps) continue;
     // An added *optional* parameter is dangerous, not minor: a caller that
     // rejects unknown fields, or a schema with additionalProperties:false one
-    // level up, meets a surface it was never validated against — and an agent
+    // level up, meets a surface it was never validated against, and an agent
     // choosing arguments from the schema starts sending a parameter the server
     // may treat as significant. Reported, not gated, unless --fail-on dangerous.
     changes.push(
@@ -531,7 +531,7 @@ function diffSchemaNode(
 /**
  * A moved default is the textbook dangerous change: every existing call still
  * validates, and the ones that omitted the parameter silently get different
- * behaviour. Adding or removing a default is the same hazard — the value a
+ * behaviour. Adding or removing a default is the same hazard: the value a
  * caller ends up with changes without the caller changing.
  */
 function diffDefault(
@@ -561,7 +561,7 @@ function diffDefault(
 }
 
 /**
- * Narrowing an enum rejects arguments that used to work — breaking. Widening
+ * Narrowing an enum rejects arguments that used to work, so that is breaking. Widening
  * one is dangerous: the schema still accepts everything it did, but a caller
  * that exhaustively handles the old members now meets a value it has no branch
  * for, and that failure surfaces at runtime rather than at validation.

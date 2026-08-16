@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Renders the results of `action.yml` — the safety check and the classified
- * contract diff — into one Markdown report, and delivers it to the job log,
+ * Renders the results of `action.yml`, the safety check and the classified
+ * contract diff, into one Markdown report, and delivers it to the job log,
  * the step summary, and (on a pull request) a single comment.
  *
  * The comment carries a hidden marker. Every re-run finds the marker and edits
@@ -108,7 +108,7 @@ function renderDiff(status) {
   } catch {
     report = null;
   }
-  // A missing file parses to `null`, not to a throw — guard on the value too.
+  // A missing file parses to `null`, not to a throw, so guard on the value too.
   if (!report?.counts || !Array.isArray(report.changes)) {
     return [heading, "❌ could not parse the contract diff."].join("\n\n");
   }

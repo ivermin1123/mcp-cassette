@@ -1,9 +1,9 @@
 /**
- * `mcp-cassette check` — one-shot health & safety check of an MCP server.
+ * `mcp-cassette check`: one-shot health & safety check of an MCP server.
  *
  * Connects, performs the lifecycle handshake, lists tools/resources/prompts,
  * validates every tool inputSchema as JSON Schema 2020-12 (ajv), and runs the
- * description safety lint. Exit code 1 if any error-level finding exists —
+ * description safety lint. Exit code 1 if any error-level finding exists,
  * built for CI.
  */
 
@@ -59,7 +59,7 @@ const TOOL_NAME_RE = /^[a-zA-Z0-9_.-]{1,128}$/;
 /**
  * The lowest finding level that makes the run fail.
  *
- * `error` is the default because the warn tier is mostly `intent`-class lint —
+ * `error` is the default because the warn tier is mostly `intent`-class lint,
  * findings that are true about a tool without being wrong (a terminal server
  * really does run commands). Turning those red by default would teach everyone
  * to pass a mute flag, which is the one outcome worse than not reporting them.

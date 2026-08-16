@@ -7,7 +7,7 @@ provenance, creates the GitHub Release with generated notes, and moves the
 floating `v0` and `v0.<minor>` tags onto the new release.
 
 Nothing is published from a laptop. If you find yourself running `npm publish`
-locally, something has gone wrong — fix the workflow instead.
+locally, something has gone wrong. Fix the workflow instead.
 
 ## How the publish authenticates
 
@@ -40,8 +40,8 @@ it is undone:
 
 The repository ships a GitHub Action as well as an npm package, and the two are
 distributed on completely different mechanisms. npm resolves `mcp-cassette@0.1.2`
-from the registry. `uses: ivermin1123/mcp-cassette@v0.3` resolves a **git ref** —
-a tag, not a range. Nothing about `@v0.3` means "the latest 0.3.x"; it means
+from the registry. `uses: ivermin1123/mcp-cassette@v0.3` resolves a **git ref**,
+a tag rather than a range. Nothing about `@v0.3` means "the latest 0.3.x"; it means
 "whatever commit the tag `v0.3` currently names".
 
 So the last step of `release.yml` force-moves both floats onto the commit just
@@ -53,7 +53,7 @@ git tag -f v0.3 "$GITHUB_SHA" && git push -f origin refs/tags/v0.3
 ```
 
 Two floats, because one cannot express both promises. While the major version is
-`0` a minor may break, so `@v0` cannot be the recommended pin — 0.3.0 moved it
+`0` a minor may break, so `@v0` cannot be the recommended pin: 0.3.0 moved it
 onto eight new lint rules, three at `error`, and consumers who had changed
 nothing saw a red gate. `@v0.<minor>` only ever gains patches, which is what
 [the README recommends](README.md#which-tag-to-pin); `@v0` stays for people who
@@ -67,14 +67,14 @@ Four properties of that step are deliberate:
   nothing needs editing at v1 or at any new minor. The step keeps working across
   both bumps.
 - **Prereleases are skipped**, and the check happens *before* the names are
-  derived. A `v0.2.0-rc.1` tag leaves both floats where they are — a release
-  candidate must not become what a consumer's pin points at — and `%.*` on such
+  derived. A `v0.2.0-rc.1` tag leaves both floats where they are, because a
+  release candidate must not become what a consumer's pin points at, and `%.*` on such
   a tag would yield `v0.2.0-rc`, which is nobody's float and should not reach a
   log line.
 - **The floats move by force-push, which does not re-trigger this workflow.**
   Pushes made with `GITHUB_TOKEN` do not start new runs, so the step cannot
   recurse. A float pushed *by hand* does start a run, and that run fails at the
-  version check — see [BACKLOG.md](BACKLOG.md).
+  version check. See [BACKLOG.md](BACKLOG.md).
 
 Without this step the action is not broken in any way CI would catch: the floats
 simply stay frozen at the release they were cut from, consumers pin to them
@@ -83,8 +83,8 @@ why the mechanism is written down here rather than left to whoever cut the tag.
 
 A floating tag is mutable by design, which is the trade GitHub's own actions
 make. Anyone who wants immutability pins a full version (`@v0.1.2`) or a commit
-SHA, and both keep working — moving a float never rewrites the tag it moved
-from. The same mutability is why a local checkout lies about them: `git fetch`
+SHA, and both keep working, because moving a float never rewrites the tag it
+moved from. The same mutability is why a local checkout lies about them: `git fetch`
 will not clobber an existing local tag ref, so `git rev-parse v0` keeps
 answering with the SHA from whenever you last force-fetched. Use
 `git ls-remote --tags origin` when the answer has to be true.
@@ -102,7 +102,7 @@ package:
    environment blank, allowed actions **`npm publish`**.
 4. Save and reload to confirm it is listed.
 
-The package must already exist on npm — trusted publishing cannot create a
+The package must already exist on npm. Trusted publishing cannot create a
 package from nothing, so the very first version of any new package still needs a
 manual or token-based publish.
 
@@ -118,7 +118,7 @@ Provenance needs all of the following, or the publish fails:
 Trusted publishing attaches provenance on its own, so `--provenance` is
 technically redundant. It stays in the command on purpose: it turns a missing
 OIDC context into a loud failure instead of a quietly unattested tarball. Don't
-drop the flag to work around an error — fix the cause.
+drop the flag to work around an error. Fix the cause.
 
 ### Rollback: going back to a token
 
@@ -139,7 +139,7 @@ reattach it to the publish step:
        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
    ```
 
-Leave the rest alone. In particular **do not re-add `registry-url`** — with a
+Leave the rest alone. In particular **do not re-add `registry-url`**. With a
 real token present npm reads `NODE_AUTH_TOKEN` from the environment on its own,
 and re-adding the option only re-arms the empty-`.npmrc` trap for whoever
 removes the token later.
@@ -167,7 +167,7 @@ block again and revoke the token.
    ```
 
    This produces a `v0.1.1`-style tag matching `package.json`. If you edit the
-   version by hand instead, tag it yourself with the exact same string — the
+   version by hand instead, tag it yourself with the exact same string. The
    workflow fails the release if the tag and `package.json` disagree.
 
    > `package.json` is the only place the version is written. The CLI's
@@ -215,15 +215,15 @@ block again and revoke the token.
    no local state to be right.
 
    They will disagree if the release run stopped before its last step. Fix it by
-   moving the tags by hand — `git tag -f v0 v0.1.2 && git push -f origin
-   refs/tags/v0`, and the same for `v0.1` — rather than by cutting another
+   moving the tags by hand (`git tag -f v0 v0.1.2 && git push -f origin
+   refs/tags/v0`, and the same for `v0.1`) rather than by cutting another
    release. Expect each hand push to leave one failed Release run behind; that
    is the version gate doing its job, not a broken release.
 
 ## If a release fails
 
-The workflow steps run in order — tag check, tests, publish, GitHub Release — so
-where it stopped tells you what to do.
+The workflow steps run in order: tag check, tests, publish, GitHub Release. Where
+it stopped tells you what to do.
 
 - **Failed before `npm publish`.** Nothing was published. Delete the tag, fix
   the problem, and start over:
@@ -237,7 +237,7 @@ where it stopped tells you what to do.
   reused. Do not try to republish the same number. Create the GitHub Release by
   hand (`gh release create v0.1.1 --generate-notes`) if that was the step that
   failed, or ship a patch release if the published artifact is actually broken.
-  Either way check `v0` afterwards — it is the last step, so anything that
+  Either way check `v0` afterwards. It is the last step, so anything that
   stopped the run left it behind. See step 8 above.
 
 - **`npm publish` failed with `ENEEDAUTH`, `E404`, or an OIDC exchange error.**
@@ -250,8 +250,8 @@ where it stopped tells you what to do.
      produces exactly this error.
   2. **A stray `.npmrc`.** Did `registry-url` come back to the `setup-node`
      step, or did some other step write an `_authToken` line? An empty token
-     value stops npm from ever trying OIDC. `cat ~/.npmrc` in a debug step —
-     for a working OIDC run the file should not exist.
+     value stops npm from ever trying OIDC. `cat ~/.npmrc` in a debug step: for
+     a working OIDC run the file should not exist.
   3. **The npm version on the runner.** The `npm --version` line in the install
      step must print ≥ 11.5.1. If the pinned version ever disappears from the
      registry, the step fails silently early and the publish fails later with
@@ -260,5 +260,5 @@ where it stopped tells you what to do.
   E404 in particular reads like "no such package" but here means "npm did not
   recognize you, so it will not admit the package exists."
 
-- **Provenance error.** Re-read the requirements above — a private repo is the
+- **Provenance error.** Re-read the requirements above; a private repo is the
   usual cause.

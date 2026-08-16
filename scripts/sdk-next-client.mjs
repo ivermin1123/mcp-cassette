@@ -3,7 +3,7 @@
  * Minimal MCP client built on the *official* SDK, used only by the weekly
  * foundation-canary workflow.
  *
- * mcp-cassette speaks the wire protocol itself — it has no SDK dependency, by
+ * mcp-cassette speaks the wire protocol itself and has no SDK dependency, by
  * design, because a recorder that shares a client implementation with the thing
  * it records cannot see that implementation drift. The cost of that choice is
  * that nothing in the normal test suite ever notices when the SDK changes how a
@@ -21,7 +21,7 @@
  *
  * Resolution note: this file is copied next to a throwaway `npm install` of the
  * SDK before it runs. ESM resolves bare specifiers relative to the importing
- * file, not the working directory, so it has to sit inside that install — it
+ * file, not the working directory, so it has to sit inside that install, and it
  * cannot import the SDK from where it lives in the repository.
  */
 
@@ -37,7 +37,7 @@ if (!serverPath) {
 }
 
 /**
- * Read from the install tree rather than `require("…/sdk/package.json")`: the
+ * Read from the install tree rather than `require(".../sdk/package.json")`: the
  * SDK's `exports` map does not expose its own manifest, and that import
  * resolves to something without a `version`, which reports "undefined" in the
  * one line of this log a human actually needs.

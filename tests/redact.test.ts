@@ -14,11 +14,11 @@ import {
 import type { Cassette } from "../src/cassette.js";
 
 /**
- * Fake credentials — shaped like the real thing, valid nowhere.
+ * Fake credentials: shaped like the real thing, valid nowhere.
  *
  * None of these are structurally accurate, on purpose. A fixture with a real
  * token's shape trips GitHub push protection, which blocks the push over a
- * credential that never existed — that already happened once here, with a
+ * credential that never existed. That already happened once here, with a
  * convincing `xoxb-<digits>-<digits>-<alnum>` Slack fixture. Every rule keys on
  * a prefix and a length, so an obviously synthetic value exercises it
  * identically. Please don't "fix" these to look realistic.
@@ -141,8 +141,8 @@ describe("placeholder determinism", () => {
   it("does not re-redact a placeholder sitting in a delimited field", () => {
     // A placeholder is ordinary text to a pattern that reads a *slot* rather
     // than a shape: the password position of a connection string still looks
-    // like a password once it holds `[REDACTED:urlcreds:…]`. Redacting it again
-    // would hash the placeholder and produce a second, different one — the
+    // like a password once it holds `[REDACTED:urlcreds:...]`. Redacting it again
+    // would hash the placeholder and produce a second, different one, and the
     // failure that breaks replay matching on a twice-redacted cassette.
     const once = redactString("postgres://user:hunter2hunter2@db.internal:5432/app");
     expect(once).toMatch(/^postgres:\/\/user:\[REDACTED:urlcreds:[0-9a-f]{8}\]@db\.internal:5432\/app$/);
@@ -289,7 +289,7 @@ describe("key context vs. discovery metadata", () => {
 });
 
 describe("raw lines", () => {
-  // A JSON line with no "jsonrpc" tag — a batch, or a server's structured log —
+  // A JSON line with no "jsonrpc" tag, such as a batch or a server's structured log,
   // is stored as a raw entry, so keyctx has to reach it too.
   const line = JSON.stringify({
     level: "debug",
@@ -410,14 +410,14 @@ describe("scanning", () => {
         dir: "s2c",
         frame: { jsonrpc: "2.0", id: 1, method: "sampling/createMessage", params: {} },
       },
-      // The client answers it — c2s response to an s2c request.
+      // The client answers it: c2s response to an s2c request.
       {
         type: "frame",
         t: 3,
         dir: "c2s",
         frame: { jsonrpc: "2.0", id: 1, result: { model: SECRETS.aws } },
       },
-      // The server answers the client's original tools/call — s2c response to c2s.
+      // The server answers the client's original tools/call: s2c response to c2s.
       {
         type: "frame",
         t: 4,
@@ -467,7 +467,7 @@ describe("numeric secrets under a sensitive key", () => {
     const fromString = redactFrame({ pin: String(PIN) }) as Record<string, string>;
     expect(fromNumber.pin).toMatch(PLACEHOLDER);
     // Hashed from the decimal text, so a server that quotes the value and one
-    // that does not collapse to the same placeholder — which is what keeps
+    // that does not collapse to the same placeholder, which is what keeps
     // replay matching (see replay.test.ts).
     expect(fromNumber.pin).toBe(fromString.pin);
   });
@@ -607,7 +607,7 @@ describe("adversarial input", () => {
       return performance.now() - started;
     };
     timeFor(1000); // warm up
-    expect(timeFor(32_000)).toBeLessThan(1000); // 128KB — was ~6100ms
+    expect(timeFor(32_000)).toBeLessThan(1000); // 128KB, was ~6100ms
     expect(redactString(`x ${SECRETS.jwt} y`)).toContain("[REDACTED:jwt:"); // still catches real ones
   });
 });

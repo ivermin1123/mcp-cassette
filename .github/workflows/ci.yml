@@ -128,7 +128,7 @@ jobs:
       # it.
       # TINY_V2 rides in the server command rather than in the step's `env:`,
       # so this does not depend on how a composite action inherits step
-      # environment — the flag reaches the fixture the same way a consumer's
+      # environment: the flag reaches the fixture the same way a consumer's
       # own wrapper command would.
       - name: Gate a drifted server (expected to fail)
         id: drift

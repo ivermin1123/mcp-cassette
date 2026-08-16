@@ -2,15 +2,15 @@
  * The package version, read from package.json at runtime.
  *
  * Hardcoding it meant a cassette could be stamped with a recorder version that
- * did not match the package that wrote it — a bump to the manifest alone was
+ * did not match the package that wrote it, because a bump to the manifest alone was
  * enough to make every recording lie about its provenance.
  *
  * Loaded with `createRequire` rather than a JSON import: `rootDir` is `src`, so
- * a static `import … from "../package.json"` puts a file outside the root into
+ * a static `import ... from "../package.json"` puts a file outside the root into
  * the program and fails the build, and import attributes would still emit a
  * bare specifier the packed tarball has to resolve. `require` resolves relative
  * to this module and caches, and the layout holds in both places this runs from
- * — `src/version.ts` and `dist/version.js` are each one level below the
+ * because `src/version.ts` and `dist/version.js` are each one level below the
  * package.json they need, in the repo and in the tarball alike.
  */
 
