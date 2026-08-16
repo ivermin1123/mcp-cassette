@@ -264,6 +264,39 @@ Heuristics, not proofs — treat findings as review triggers, and pair with a de
 
 Every pattern in the rule set is proven free of super-linear backtracking by [recheck](https://github.com/makenowjust/recheck) in CI, because lint input is text an attacker wrote.
 
+### SARIF output
+
+`check --format sarif` emits SARIF 2.1.0, so findings land in GitHub's Security tab instead of a log nobody opens. The rule ids are the same `CAS-Lxxx` you see in the terminal, and each rule carries its OWASP and SAFE-MCP ids as tags:
+
+```json
+{
+  "ruleId": "CAS-L001",
+  "level": "error",
+  "message": { "text": "instruction-override phrasing (classic prompt-injection) (in description) — …" },
+  "partialFingerprints": { "mcpCassetteFindingV1": "86f30c3c29712ff6" },
+  "locations": [{ "logicalLocations": [{ "fullyQualifiedName": "get_weather", "kind": "member" }] }]
+}
+```
+
+```yaml
+- name: MCP safety check
+  run: npx mcp-cassette check --stdio "node dist/my-server.js" --format sarif > mcp-cassette.sarif
+  continue-on-error: true       # let the upload happen even when the gate fails
+
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: mcp-cassette.sarif
+```
+
+Two things worth knowing before you wire it up:
+
+- **Findings have no line numbers.** `check` inspects a *live server* reached by spawning a command or opening a URL — there is no file in your repository the finding sits at, so results carry `logicalLocations` (the tool name) rather than a fabricated `physicalLocation`. GitHub shows them against the repository rather than against a line.
+- `partialFingerprints` are built from the rule and the tool, never the excerpt, so rewording a description does not resurrect a triaged alert as a new one. One rule firing on two fields of the same tool therefore collapses to a single alert.
+
+The output is validated against the official OASIS SARIF 2.1.0 schema in the test suite; that schema is vendored under `schemas/` (see `schemas/vendored.json` for source and version) so the suite stays offline, with a weekly canary warning if it drifts upstream.
+
+> The workflow snippet above is the standard `upload-sarif` wiring and has **not** been executed end to end against GitHub code scanning from this repository — the `check --format sarif` half is real and its output is schema-validated in CI, but the upload half is unverified here.
+
 ## Cassette format (open, v2)
 
 Append-only JSONL. Line 1 is a header; each following line is one captured frame with direction and a millisecond offset:
