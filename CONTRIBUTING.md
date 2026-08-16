@@ -135,6 +135,36 @@ dispatch cannot publish.
   should outlive the machine it was written on does not belong in `plans/`;
   promote it to one of the files above.
 
+## Claims about other tools
+
+**Truncating another tool's output truncates your own conclusion.** This is a
+project law because it has already cost a wrong answer twice in one day.
+
+`docs/research/01-reality-check.md` first concluded that a competitor did not
+offer a contract-lock workflow. It does — `lock create` and `lock verify` — and
+the reason the report said otherwise is that its author read the command list
+through `--help | head -35`, which cut nine commands including that one. The same
+report then measured the competitor's poisoning coverage using the wrong
+subcommand, having never seen the right one. Both conclusions were wrong in the
+direction that flattered this project.
+
+So, before writing any sentence of the form "tool X cannot do Y":
+
+- Read the whole of `--help`. No `head`, no `| head -N`, no truncated paste. If
+  the output is long, that is the point.
+- Prefer the tool's own listing to its README, and prefer running it to both.
+- If the tool appears to fail, suspect the invocation before the tool. A flag
+  that exits 0 when you expected 1 is more often the wrong flag than a broken
+  gate — `--fail-on-regression` versus `--fail-on-schema-drift` cost an hour
+  here.
+- Name the exact command in the write-up. A comparison that does not say what
+  was run cannot be checked, and will eventually be wrong without anyone
+  noticing.
+
+Same class: quoting a URL without opening it, citing a file without reading past
+the first screen, and trusting a source tree's filenames over the installed
+artifact's behaviour.
+
 ## Commits
 
 Use [Conventional Commits](https://www.conventionalcommits.org/):

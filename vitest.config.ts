@@ -15,6 +15,7 @@ export default defineConfig({
       ...configDefaults.exclude,
       'worktrees/**',
       '_to_delete/**',
+      'plans/**',
       'tests/fixtures/vitest-adapter/**',
     ],
   },
