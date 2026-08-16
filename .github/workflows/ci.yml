@@ -183,21 +183,39 @@ jobs:
       # so the document carries real findings rather than an empty `results`.
       # `check` exits non-zero on error-level findings by design, and the file is
       # written before it does — the gate firing is the point, not a failure.
+      # The anchor is a committed snapshot of this same poisoned fixture, so
+      # every finding points at the line in the repository that actually
+      # declares the tool it is about. Anchoring to a file generated here and
+      # never committed would upload cleanly and then link a reviewer to a path
+      # that does not exist at this commit.
       - name: Scan the poisoned fixture
         continue-on-error: true
         run: |
           node dist/cli.js check \
             --stdio "env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs" \
-            --format sarif > mcp-cassette.sarif
+            --format sarif \
+            --sarif-location tests/fixtures/tiny-server-evil.snapshot.json > mcp-cassette.sarif
 
-      - name: Show what is about to be uploaded
+      # The upload reports success for a document code scanning then discards,
+      # so "it uploaded" is not evidence. Fail here instead, where the log says
+      # which result was unanchored.
+      - name: Assert every result carries a physical location
         run: |
           node -e '
-            const s = JSON.parse(require("fs").readFileSync("mcp-cassette.sarif", "utf8"));
+            const fs = require("fs");
+            const s = JSON.parse(fs.readFileSync("mcp-cassette.sarif", "utf8"));
             const r = s.runs[0];
             console.log("driver:", r.tool.driver.name, r.tool.driver.version);
             console.log("rules:", r.tool.driver.rules.length, "results:", r.results.length);
-            console.log("ruleIds:", r.results.map((x) => x.ruleId).join(", "));
+            if (r.results.length === 0) throw new Error("no findings: the fixture stopped being poisoned");
+            for (const x of r.results) {
+              const p = x.locations[0].physicalLocation;
+              if (!p) throw new Error(`${x.ruleId}: no physicalLocation, code scanning would drop it`);
+              if (!fs.existsSync(p.artifactLocation.uri)) {
+                throw new Error(`${x.ruleId}: anchored at ${p.artifactLocation.uri}, which is not in the checkout`);
+              }
+              console.log(`  ${x.ruleId}  ${p.artifactLocation.uri}:${p.region.startLine}`);
+            }
           '
 
       - uses: github/codeql-action/upload-sarif@v3
