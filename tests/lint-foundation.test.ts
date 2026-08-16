@@ -34,6 +34,11 @@ const byId = (id: string): LintRule => {
  * or a SARIF suppression keyed on it. Dropping one is a breaking change and
  * belongs under `### BREAKING` in the CHANGELOG. Adding one is not, so the
  * assertion below is containment, never equality.
+ *
+ * The risk-map assertion further down would also go red on a removal, so what
+ * this adds is the message, not the detection: that one reports `expected
+ * { 'CAS-L001': [...], ...(15) } to deeply equal { ...(15) }`, which names
+ * neither the id that vanished nor why anyone should care.
  */
 const RELEASED_RULE_IDS = [
   "CAS-L001", "CAS-L002", "CAS-L003", "CAS-L004", "CAS-L005", "CAS-L006",

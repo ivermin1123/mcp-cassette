@@ -56,8 +56,11 @@ This is not a rule against changing rules. Two things you are free to do:
   to match on the id instead of the sentence.
 
 `tests/lint-foundation.test.ts` freezes the released `CAS-L*` ids, so dropping
-one turns the suite red. Adding one does not. The `CAS-C*` ids are under the
-same law but have no such gate; they live in `src/check.ts` and `src/sarif.ts`.
+one fails that gate by name. Adding one does not trip the freeze, though two
+assertions will ask you to register the new id before the suite goes green: the
+risk map in the same file, and the fixture pair in `tests/lint-rules.test.ts`.
+The `CAS-C*` ids are under the same law but have no freeze gate; they live in
+`src/check.ts` and `src/sarif.ts`.
 
 ## Dev setup
 
