@@ -88,8 +88,31 @@ the extract-and-stub verification described in
 
 ---
 
-## Schema-diff completeness
+## Schema-diff completeness — CANCELLED
 
-**Raised** 2026-08-16. Design pass in progress — see the rule-family table
-before implementation starts. Same risk class as the lint upgrade: it decides
-what turns a consumer's CI red.
+**Raised** 2026-08-16. **Cancelled** 2026-08-16, the same day, after
+[`docs/research/01-reality-check.md`](docs/research/01-reality-check.md) measured
+the contract-gate feature as occupied: `@kryptosai/mcp-observatory` ships
+`lock create` / `lock verify`, five months older and working on a clean install,
+and the follow-up check found its workflow is the same one command against one
+committed file — so the ergonomic argument for continuing does not survive
+either.
+
+**What shipped before the stop**, because both were defect repairs rather than
+new surface: the recursive walk with a per-node fallback (a `minor` at the root
+was swallowing nested breaking changes), the canonicalisation pre-pass that
+stopped reporting reordering as breaking, and a `$ref` guard that refuses to
+classify what it cannot resolve. See the Unreleased section of
+[CHANGELOG.md](CHANGELOG.md).
+
+**What is cancelled**, from the design's own pairing —
+`plans/reports/design-260816-1705-schema-diff-completeness.md`:
+
+- Pair 2 — `additionalProperties` tiers, nested `required` families, array
+  cardinality, nullability.
+- Pair 3 — `anyOf` / `oneOf` / `allOf`, constraint direction.
+- Pair 4 — `outputSchema` rules and the v2 snapshot format migration.
+
+The design's four open questions go with them; none needs an answer now. The
+feature that exists keeps working and keeps being maintained — this cancels
+further investment, not the command.

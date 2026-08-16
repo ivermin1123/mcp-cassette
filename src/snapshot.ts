@@ -81,6 +81,8 @@ export const CONTRACT_RULES = Object.freeze({
   inputPropertyDefaultChanged: "input-property-default-changed",
   inputEnumValueRemoved: "input-enum-value-removed",
   inputEnumValueAdded: "input-enum-value-added",
+  inputAnnotationChanged: "input-annotation-changed",
+  inputSchemaRefUnclassified: "input-schema-ref-unclassified",
 } as const);
 
 export type ContractRule = (typeof CONTRACT_RULES)[keyof typeof CONTRACT_RULES];
@@ -200,6 +202,132 @@ function asObj(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
+/**
+ * Keys that carry prose for a reader, not obligation for a caller. Changing one
+ * cannot break anybody, so they are lifted out before structural comparison and
+ * reported on their own at `info` — otherwise every reworded description lands
+ * in the conservative-breaking bucket and turns a consumer's CI red for a typo
+ * fix.
+ */
+const ANNOTATION_KEYS = new Set(["description", "title", "$comment", "examples"]);
+
+/**
+ * Keywords every node accounts for itself: `type` and `required` are classified
+ * here, and `properties` is fully covered by the add/remove/recurse pass. What
+ * is left after removing these — and whatever else the caller reports having
+ * delegated — is a keyword this engine cannot classify yet, which is exactly
+ * what should trip the conservative fallback.
+ */
+const NODE_OWN_KEYS = ["type", "required", "properties"];
+
+/**
+ * Normalise the ways one meaning can be spelled, so that only real differences
+ * survive to the rules. This emits nothing; it *prevents* findings. Deliberately
+ * NOT normalised: `items: [X]` (draft-04 tuple) against `items: X` — those mean
+ * different things, and folding them would be inventing agreement.
+ */
+function canonicalizeSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeSchema);
+  const node = asObj(value);
+  if (!node) return value;
+
+  const out: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(node)) {
+    if (ANNOTATION_KEYS.has(key)) continue;
+    switch (key) {
+      // order carries no meaning in any of these three
+      case "required":
+        out.required = Array.isArray(val) ? [...new Set(val as string[])].sort() : val;
+        break;
+      case "enum":
+        out.enum = Array.isArray(val)
+          ? [...val].sort((a, b) => stableStringify(a).localeCompare(stableStringify(b)))
+          : val;
+        break;
+      case "type":
+        out.type = Array.isArray(val) ? [...new Set(val as string[])].sort() : val;
+        break;
+      // `absent`, `{}` and `true` are three spellings of "anything else is allowed"
+      case "additionalProperties": {
+        const asSchema = asObj(val);
+        out.additionalProperties =
+          val === true || (asSchema && Object.keys(asSchema).length === 0)
+            ? true
+            : canonicalizeSchema(val);
+        break;
+      }
+      case "properties":
+      case "patternProperties":
+      case "$defs":
+      case "definitions": {
+        const map = asObj(val);
+        if (!map) {
+          out[key] = val;
+          break;
+        }
+        const canon: Record<string, unknown> = {};
+        for (const name of Object.keys(map).sort()) canon[name] = canonicalizeSchema(map[name]);
+        out[key] = canon;
+        break;
+      }
+      default:
+        out[key] = canonicalizeSchema(val);
+    }
+  }
+  if (!("additionalProperties" in out) && ("properties" in out || out.type === "object")) {
+    out.additionalProperties = true;
+  }
+  return out;
+}
+
+/**
+ * The prose of a schema, with its structure discarded. Two schemas that
+ * canonicalize the same may still differ here (a reworded description) or not
+ * at all (a reordered `required`) — and only the first is worth a line of
+ * output. Without this split, every reordering would be announced as a
+ * description change.
+ */
+function annotationShape(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(annotationShape);
+  const node = asObj(value);
+  if (!node) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(node)) {
+    if (ANNOTATION_KEYS.has(key)) {
+      out[key] = val;
+      continue;
+    }
+    const child = annotationShape(val);
+    if (stableStringify(child) !== "{}") out[key] = child;
+  }
+  return out;
+}
+
+/** Does a `$ref` appear anywhere below here? */
+function containsRef(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsRef);
+  const node = asObj(value);
+  if (!node) return false;
+  if (typeof node.$ref === "string") return true;
+  return Object.values(node).some(containsRef);
+}
+
+/**
+ * What is left of a node once the keywords somebody has already accounted for
+ * are removed. A key is only dropped when it was genuinely handled — an `items`
+ * that could not be recursed into (a tuple against a single schema, say) stays,
+ * so the difference still surfaces instead of disappearing.
+ */
+function shallowShape(node: Record<string, unknown>, delegated: readonly string[]): string {
+  const rest: Record<string, unknown> = { ...node };
+  for (const key of [...NODE_OWN_KEYS, ...delegated]) delete rest[key];
+  return stableStringify(rest);
+}
+
+function at(pointer: string): string {
+  return pointer === "" ? "" : ` at ${pointer}`;
+}
+
 function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: ContractChange[]): void {
   if (stableStringify(oldS ?? null) === stableStringify(newS ?? null)) return;
 
@@ -215,10 +343,67 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
     return;
   }
 
-  const emitted = changes.length;
+  const canonOld = canonicalizeSchema(o);
+  const canonNew = canonicalizeSchema(n);
 
-  // type change at root
-  if (o.type !== undefined && n.type !== undefined && stableStringify(o.type) !== stableStringify(n.type)) {
+  // The raw schemas differ but nothing a caller is bound by does. That is either
+  // reworded prose, which is worth one info line, or a difference of spelling
+  // only — a reordered `required`, `additionalProperties` written three ways —
+  // which is worth nothing at all.
+  if (stableStringify(canonOld) === stableStringify(canonNew)) {
+    if (stableStringify(annotationShape(o)) !== stableStringify(annotationShape(n))) {
+      changes.push({
+        kind: "info",
+        rule: CONTRACT_RULES.inputAnnotationChanged,
+        subject: tool,
+        message: "inputSchema annotations changed (description/title/examples only)",
+      });
+    }
+    return;
+  }
+
+  // A `$ref` means the shape being compared is not the shape in front of us.
+  // Resolving references is not implemented, so say that plainly and stay
+  // conservative rather than emitting a specific rule ID that would read as an
+  // authoritative finding about a schema this engine did not actually inspect.
+  if (containsRef(canonOld) || containsRef(canonNew)) {
+    changes.push({
+      kind: "breaking",
+      rule: CONTRACT_RULES.inputSchemaRefUnclassified,
+      subject: tool,
+      message:
+        "inputSchema changed and uses $ref — reference resolution is not implemented, " +
+        "so the change is unclassified and treated as breaking",
+    });
+    return;
+  }
+
+  diffSchemaNode(tool, "", canonOld as Record<string, unknown>, canonNew as Record<string, unknown>, changes, true);
+}
+
+/**
+ * One schema node, then its children. The fallback is per node, not per tool:
+ * the earlier version only asked whether the *whole tool* had produced any
+ * finding, so a single `minor` at the root swallowed every breaking change
+ * nested underneath it — a contract-drift detector silently dropping contract
+ * drift.
+ */
+function diffSchemaNode(
+  tool: string,
+  pointer: string,
+  o: Record<string, unknown>,
+  n: Record<string, unknown>,
+  changes: ContractChange[],
+  isRoot: boolean
+): void {
+  const emitted = changes.length;
+  // `enum` and `default` on a non-root node were already classified by the
+  // parent, which owns the per-property rules; at the root nobody else does.
+  const delegated: string[] = isRoot ? [] : ["enum", "default"];
+
+  // A nested node's own `type` is reported by its parent as a property type
+  // change, so only the root reports its own.
+  if (isRoot && o.type !== undefined && n.type !== undefined && stableStringify(o.type) !== stableStringify(n.type)) {
     changes.push({
       kind: "breaking",
       rule: CONTRACT_RULES.inputSchemaTypeChanged,
@@ -227,7 +412,6 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
     });
   }
 
-  // required
   const oldReq = new Set((o.required as string[] | undefined) ?? []);
   const newReq = new Set((n.required as string[] | undefined) ?? []);
   for (const r of newReq) {
@@ -236,7 +420,7 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
         kind: "breaking",
         rule: CONTRACT_RULES.inputPropertyBecameRequired,
         subject: tool,
-        message: `parameter "${r}" is now required`,
+        message: `parameter "${r}" is now required${at(pointer)}`,
       });
     }
   }
@@ -246,12 +430,11 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
         kind: "minor",
         rule: CONTRACT_RULES.inputPropertyBecameOptional,
         subject: tool,
-        message: `parameter "${r}" is no longer required`,
+        message: `parameter "${r}" is no longer required${at(pointer)}`,
       });
     }
   }
 
-  // properties
   const oldProps = asObj(o.properties) ?? {};
   const newProps = asObj(n.properties) ?? {};
   for (const key of Object.keys(oldProps)) {
@@ -260,7 +443,7 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
         kind: "breaking",
         rule: CONTRACT_RULES.inputPropertyRemoved,
         subject: tool,
-        message: `parameter "${key}" removed`,
+        message: `parameter "${key}" removed${at(pointer)}`,
       });
     }
   }
@@ -277,13 +460,13 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
             kind: "breaking",
             rule: CONTRACT_RULES.inputPropertyAddedRequired,
             subject: tool,
-            message: `parameter "${key}" added (required)`,
+            message: `parameter "${key}" added (required)${at(pointer)}`,
           }
         : {
             kind: "dangerous",
             rule: CONTRACT_RULES.inputPropertyAddedOptional,
             subject: tool,
-            message: `parameter "${key}" added`,
+            message: `parameter "${key}" added${at(pointer)}`,
           }
     );
   }
@@ -297,20 +480,37 @@ function diffSchema(tool: string, oldS: unknown, newS: unknown, changes: Contrac
         kind: "breaking",
         rule: CONTRACT_RULES.inputPropertyTypeChanged,
         subject: tool,
-        message: `parameter "${key}" type changed: ${op.type} → ${np.type}`,
+        message: `parameter "${key}" type changed: ${op.type} → ${np.type}${at(pointer)}`,
       });
     }
     diffDefault(tool, key, op, np, changes);
     diffEnum(tool, key, op, np, changes);
+    if (stableStringify(op) !== stableStringify(np)) {
+      diffSchemaNode(tool, `${pointer}/properties/${key}`, op, np, changes, false);
+    }
   }
 
-  // schemas differ but nothing specific detected → be conservative
-  if (changes.length === emitted) {
+  // Array members and the open-ended tail are schemas too.
+  for (const [key, childPointer] of [
+    ["items", `${pointer}/items`],
+    ["additionalProperties", `${pointer}/additionalProperties`],
+  ] as const) {
+    const oc = asObj(o[key]);
+    const nc = asObj(n[key]);
+    if (!oc || !nc) continue;
+    delegated.push(key);
+    if (stableStringify(oc) === stableStringify(nc)) continue;
+    diffSchemaNode(tool, childPointer, oc, nc, changes, false);
+  }
+
+  // This node differs in a keyword nothing above classified → say so, here,
+  // rather than letting a sibling's finding stand in for it.
+  if (changes.length === emitted && shallowShape(o, delegated) !== shallowShape(n, delegated)) {
     changes.push({
       kind: "breaking",
       rule: CONTRACT_RULES.inputSchemaChangedUnclassified,
       subject: tool,
-      message: "inputSchema changed structurally (unclassified — treated as breaking)",
+      message: `inputSchema changed structurally${at(pointer)} (unclassified — treated as breaking)`,
     });
   }
 }

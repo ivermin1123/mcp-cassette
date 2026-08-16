@@ -6,6 +6,45 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [Unreleased]
+
+### BREAKING
+
+- `snapshot --check` now walks nested schemas. Previously the conservative
+  fallback asked whether the *whole tool* had produced any finding, so a single
+  `minor` at the root swallowed every breaking change underneath it — a tool
+  that exists to catch silent contract drift was producing silent contract
+  drift. The fallback is now per node. **This can turn a previously green build
+  red without anyone changing their server**, in exactly the cases where it
+  should have been red already. `--fail-on` remains the release valve.
+
+### Fixed
+
+- Reordering `required`, `enum`, or a union `type` is no longer reported as a
+  breaking change. Order carries no meaning in JSON Schema; three of these were
+  reported as breaking before, and one of them (`["string","null"]` becoming
+  `["null","string"]`) carried a specific rule ID, which read as an authoritative
+  finding about a change that binds nobody.
+- `additionalProperties` absent, `{}` and `true` are recognised as three
+  spellings of one thing.
+- A reworded `description`, `title`, `$comment` or `examples` now reports as
+  `input-annotation-changed` at `info` instead of landing in the
+  conservative-breaking bucket. Editing prose was turning consumers' CI red.
+
+### Added
+
+- `input-schema-ref-unclassified` (breaking). Reference resolution is not
+  implemented, so when a changed schema contains `$ref` the diff says that
+  plainly rather than emitting a specific rule ID about a shape it never
+  resolved.
+
+### Note
+
+Schema-diff work stops here. The remaining families — `additionalProperties`
+tiers, array cardinality, `anyOf`/`oneOf`/`allOf`, constraint direction,
+nullability, and `outputSchema` — are cancelled, not deferred. The reasoning is
+in [`docs/research/01-reality-check.md`](docs/research/01-reality-check.md).
+
 ## [0.3.0] — 2026-08-16
 
 Testing and safety. A first-party `vitest` adapter so a suite can talk to a

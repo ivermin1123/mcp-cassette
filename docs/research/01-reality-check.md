@@ -14,6 +14,12 @@ sold"*.
 > kết luận **DỪNG**, dựa trên README và mã nguồn của đối thủ mà chưa cài, chưa
 > chạy. Đã cài và chạy cả ba đối thủ. **Phán quyết đổi thành NARROW.** Phần dưới
 > là kết luận sau thí nghiệm; §8 ghi lại đã chạy gì và cái gì lật.
+>
+> **Hiệu chỉnh sau phản biện coordinator (§9).** Coordinator chỉ ra §8 vẫn bỏ sót
+> hai lệnh của đối thủ, vì tôi đọc `--help` qua `head -35` và bị cắt. Đã chạy lại
+> `lock create`/`lock verify` và `audit`. Phán quyết tổng **không đổi**, nhưng
+> cửa thoát cuối của `snapshot --check` đóng lại, và con số 4/6 giờ đến từ đúng
+> cổng bảo mật của họ chứ không phải một lệnh không nêu tên.
 
 | | |
 |---|---|
@@ -457,9 +463,128 @@ coverage score.
 
 ---
 
+## 9. Hiệu chỉnh sau phản biện coordinator
+
+Coordinator chỉ ra hai lỗ. Cả hai đều đúng, và cả hai đều do **cùng một sai lầm
+tôi đã tự ghi vào §8 rồi vẫn mắc lại**: kết luận về đối thủ dựa trên thứ mình
+nhìn thấy, chứ không phải thứ mình chạy. Lần này cơ chế khác — không phải đọc
+README, mà là **cắt output**.
+
+Không mở đợt đo mới, không đổi tiêu chí đã khoá. Chỉ chạy hai phép thử.
+
+### 9.0 Gói đã cài — xác minh trước, vì mọi thứ khác phụ thuộc vào nó
+
+Coordinator cảnh báo gói npm tên trần `mcp-observatory` là placeholder. Đã kiểm:
+gói tên trần là `1.0.0`, `bin: null`, mô tả *"MCP Observatory - Coming Soon"*.
+Gói tôi đã cài và chạy suốt §8 là `@kryptosai/mcp-observatory@1.36.5`, đúng gói
+coordinator xác nhận. **Không phải cài nhầm, nên không phải đo lại từ đầu.**
+
+### 9.1 Lỗi gốc: `head -35`
+
+Cả hai lỗ có chung một nguyên nhân. Tôi đọc danh sách lệnh bằng
+`--help | head -35`, và nó cắt đúng sau `setup-ci`. Chín lệnh biến mất khỏi tầm
+nhìn của tôi: **`lock`**, **`audit`**, `enforce`, `receipt`, `risk-graph`,
+`attack-sim`, `skill-scan`, `cloud`, `smithery`.
+
+Mọi câu trong §8 nói observatory "không có" một thứ gì đó đều được viết dựa trên
+danh sách bị cắt đó. §8 tự cảnh báo về việc dùng sai flag rồi vẫn dùng sai lệnh.
+
+### 9.2 LỖ 1 — `lock create` / `lock verify`: lợi thế công thái học KHÔNG TỒN TẠI
+
+Chạy thật trên đúng server mồi cũ:
+
+```
+mcp-observatory lock create --config ./cfg.json     → .mcp-observatory/lock.json
+mcp-observatory lock verify --config ./cfg.json     → exit 0   (không đổi gì)
+# trỏ cfg sang v2 (hợp đồng đã đổi)
+mcp-observatory lock verify --config ./cfg.json     → exit 1
+    → tools/slugify: removed
+    → tools/add: schema changed
+    → tools/greet: schema changed
+```
+
+Đếm, không cảm nhận:
+
+| | lệnh để đi từ zero tới "CI đỏ khi hợp đồng đổi" | file phải commit |
+|---|---|---|
+| `mcp-cassette` | **2** (`snapshot`, `snapshot --check`) | **1** (`mcp-contract.snapshot.json`) |
+| `mcp-observatory` | **2** (`lock create`, `lock verify`) | **2** (`cfg.json` + `lock.json`) |
+
+**Cùng số lệnh. Chênh đúng một file cấu hình** — và file đó là MCP config chuẩn,
+thứ nhiều dự án đã có sẵn.
+
+Kết luận §8 rằng họ cần "hai run artifact" là **sai**: đó là mô tả đường `diff`,
+là đường duy nhất tôi tìm thấy vì `lock` đã bị `head -35` cắt mất. **Lợi thế công
+thái học mà báo cáo nêu không tồn tại**, và câu hỏi mở #2 của §8 — "có đáng giữ
+`snapshot --check` sống như một quyết định cố ý đè lên tiêu chí không" — mất căn
+cứ. Cửa thoát duy nhất của `snapshot --check` đóng lại. Phán quyết **CHẾT** cho
+tính năng này không đổi, nhưng bây giờ nó đứng vững hơn trước, không phải yếu đi.
+
+Một khác biệt còn lại, ghi làm quan sát và **không** nâng thành cửa thoát mới:
+`lock verify` báo `tools/add: schema changed`, còn `snapshot --check` báo
+`[BREAKING] add: parameter "precision" is now required (input-property-became-required)`
+— có tầng và có rule ID ổn định. Đó là khác biệt về độ mịn của đầu ra, không phải
+về quy trình, và một mình nó không lật được ô Box C.
+
+### 9.3 LỖ 2 — chạy lại bằng `audit`: vẫn 4/6, nhưng lần này có nêu tên lệnh
+
+§8 viết "observatory bắt 4 trên 6" mà **không nói đã chạy lệnh nào** — tự vi phạm
+tiêu chuẩn mà chính §8 đặt ra. Con số đó đến từ `test --security`. Cổng bảo mật
+thật là `audit`.
+
+Chạy lại trên đúng fixture độc cũ:
+
+```
+mcp-observatory audit --profile nsa-mcp --fail-on-high node server-poisoned.mjs   → exit 1
+```
+
+Lưu ý cách gọi: truyền lệnh server thành **argv rời**. Truyền dạng chuỗi trong
+ngoặc kép (`"node …"`) làm audit không dựng nổi phiên stdio và trả về
+`run/fatal-error` — đúng cái bẫy §8 đã ghi với `--fail-on-regression`, gặp lại
+lần thứ hai trong cùng một buổi.
+
+Đối chiếu trên 6 dạng đã gài:
+
+| # | dạng gài | `audit` | rule của họ |
+|---|---|---|---|
+| 1 | ghi đè chỉ thị (`read_notes`) | ✔ | `attack-sim/tool-poisoning/hidden-instruction` |
+| 2 | chỉ thị giấu người dùng (`read_notes`) | ✔ | `attack-sim/tool-poisoning/stealth-instruction` |
+| 3 | rút dữ liệu ra URL ngoài (`sync_notes`) | ✘ | — không finding nào nhắc `sync_notes` |
+| 4 | Unicode tàng hình (`summarize`) | ✔ | `unicode-obfuscation-description` |
+| 5 | lệnh shell trong mô tả (`summarize`) | ✔ | `shell-injection` |
+| 6 | `inputSchema` không hợp lệ | ✘ | chỉ `info` "missing description" |
+
+**Vẫn 4/6, và sót đúng hai chỗ cũ.** Đã thử profile khác: chỉ tồn tại một profile
+(`nsa-mcp`) — công cụ tự trả lời `Available profiles: nsa-mcp`.
+
+Vậy điểm "`check` SỐNG" **không phải hạ**. Nhưng lý do phải sửa: §8 dựa vào
+`test --security` và không nói ra; giờ nó dựa vào cổng bảo mật thật, có nêu tên
+lệnh, và ra cùng con số.
+
+### 9.4 Fixture độc vẫn là bằng chứng yếu nhất
+
+Kết quả không đổi chiều, nên không có gì để cám dỗ. Nhưng ghi lại cho rõ: fixture
+vẫn do tôi viết từ danh sách rule của mcp-cassette, vẫn thiên vị theo cấu tạo,
+và việc nó sống sót qua một lần chạy lại bằng lệnh đúng **không** nâng nó lên
+hạng bằng chứng mạnh. Câu hỏi mở #1 giữ nguyên.
+
+### 9.5 Điều mục này đổi và không đổi
+
+| | trước hiệu chỉnh | sau |
+|---|---|---|
+| Phán quyết tổng | NARROW | **NARROW** (không đổi) |
+| `snapshot --check` | CHẾT, còn một cửa thoát công thái học | **CHẾT**, cửa thoát đã đóng |
+| `check` poisoning | SỐNG, đếm 4/6 từ lệnh không nêu tên | **SỐNG**, đếm 4/6 từ `audit`, có nêu tên |
+| `replay` | SỐNG | **SỐNG** (không có phép thử mới) |
+
+Việc code đi theo: schema-diff dừng hẳn sau khi vá xong hai defect đã tái hiện
+được. Chi tiết trong [BACKLOG.md](../../BACKLOG.md).
+
+---
+
 ## Unresolved questions
 
 1. Would an independently-authored poisoned corpus reverse the 6-versus-4 result? The §8 fixture was built from cassette's own rule list, so the poisoning comparison is the weakest evidence in this report.
-2. `snapshot --check` is dead by the frozen rule, but cassette's stable rule IDs and one-command-against-a-committed-file workflow are genuinely lighter than observatory's two-artifact diff. Is that worth keeping alive as a deliberate override of the criteria — a decision for the owner, not for this report?
+2. ~~`snapshot --check` is dead by the frozen rule, but cassette's one-command-against-a-committed-file workflow is genuinely lighter than observatory's two-artifact diff. Is that worth keeping alive as a deliberate override?~~ **Answered and closed in §9.2:** the premise was wrong. `lock create` / `lock verify` is also one command against one committed file, so there is no ergonomic gap to override the criteria for.
 3. Field (h) is structurally unmeasurable from public repositories. Is there a way to see whether internal enterprise MCP servers break their consumers — or should that question simply be dropped rather than answered with public-repo silence?
 4. Observatory's `record`/`replay` exist as MCP tools today and are one release away from being CLI commands. If they surface, `replay` moves from ALIVE to occupied. How much warning would that give, and is there anything worth doing before it happens?
