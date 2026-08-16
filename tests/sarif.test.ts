@@ -130,8 +130,10 @@ describe("what the document says", () => {
     expect(run.tool.driver.rules.length).toBeLessThan(LINT_RULES.length);
   });
 
-  it("locates findings logically, because there is no file to point at", () => {
-    // check inspects a live server. A physicalLocation here would be invented.
+  it("locates findings logically, and physically only when an anchor was given", () => {
+    // No anchor was passed to this document, so there is no file to point at
+    // and none is invented. The logical location carries the meaning instead.
+    // What an anchor changes is covered in "anchored findings" below.
     expect(run.results[0]!.locations[0]!.logicalLocations[0]!.fullyQualifiedName).toBe("get_weather");
     expect(JSON.stringify(run.results)).not.toContain("physicalLocation");
   });

@@ -318,28 +318,58 @@ Every pattern in the rule set is proven free of super-linear backtracking by [re
   "level": "error",
   "message": { "text": "instruction-override phrasing (classic prompt-injection) (in description): ..." },
   "partialFingerprints": { "mcpCassetteFindingV1": "86f30c3c29712ff6" },
-  "locations": [{ "logicalLocations": [{ "fullyQualifiedName": "get_weather", "kind": "member" }] }]
+  "locations": [
+    {
+      "physicalLocation": {
+        "artifactLocation": { "uri": "mcp-contract.snapshot.json" },
+        "region": { "startLine": 58 }
+      },
+      "logicalLocations": [{ "fullyQualifiedName": "get_weather", "kind": "member" }]
+    }
+  ]
 }
 ```
 
-```yaml
-- name: MCP safety check
-  run: npx mcp-cassette check --stdio "node dist/my-server.js" --format sarif > mcp-cassette.sarif
-  continue-on-error: true       # let the upload happen even when the gate fails
+This is the wiring, copied from [the job that runs it in this repository](.github/workflows/foundation-canary.yml):
 
-- uses: github/codeql-action/upload-sarif@v3
-  with:
-    sarif_file: mcp-cassette.sarif
+```yaml
+permissions:
+  contents: read
+  security-events: write        # the only permission the upload needs
+
+steps:
+  - name: Scan the poisoned fixture
+    continue-on-error: true     # let the upload happen even when the gate fails
+    run: |
+      node dist/cli.js check \
+        --stdio "env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs" \
+        --format sarif \
+        --sarif-location tests/fixtures/tiny-server-evil.snapshot.json > mcp-cassette.sarif
+
+  - uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: mcp-cassette.sarif
+      category: mcp-cassette    # keeps these results in their own bucket
 ```
 
-Two things worth knowing before you wire it up:
+**Findings are anchored to a file, and that file has to be a real one.** `check` inspects a *live server*, so nothing it finds lives in a source file. GitHub code scanning nonetheless discards any result without a `physicalLocation`, so the anchor is the **contract snapshot**: your server's tool surface is recorded in that committed file, at a line, and it is where you go to read what your server advertises. `mcp-cassette` resolves one in this order, and never invents a path:
 
-- **Findings have no line numbers.** `check` inspects a *live server* reached by spawning a command or opening a URL, so there is no file in your repository the finding sits at, so results carry `logicalLocations` (the tool name) rather than a fabricated `physicalLocation`. GitHub shows them against the repository rather than against a line.
-- `partialFingerprints` are built from the rule and the tool, never the excerpt, so rewording a description does not resurrect a triaged alert as a new one. One rule firing on two fields of the same tool therefore collapses to a single alert.
+1. `--sarif-location <file>`, when you name it. A missing file, or one outside the working directory, is an error rather than a silent downgrade.
+2. `mcp-contract.snapshot.json`, when it exists. Each tool gets its own line.
+3. the server script from `--stdio`, when a token of it is a real file in the tree. Line 1, stated rather than guessed.
+4. nothing, in which case the document is still emitted and still valid, and `check` warns on stderr that code scanning will drop every result.
+
+`logicalLocations` is kept alongside, so consumers that read logical locations are unaffected.
+
+`partialFingerprints` are built from the rule and the tool, never the excerpt, so rewording a description does not resurrect a triaged alert as a new one. One rule firing on two fields of the same tool therefore collapses to a single alert.
 
 The output is validated against the official OASIS SARIF 2.1.0 schema in the test suite; that schema is vendored under `schemas/` (see `schemas/vendored.json` for source and version) so the suite stays offline, with a weekly canary warning if it drifts upstream.
 
-> **GitHub code scanning currently rejects this output, and the snippet above will not work as written.** Running it end to end from this repository ([run 31940968730](https://github.com/ivermin1123/mcp-cassette/actions/runs/31940968730/job/95149992573)) uploaded the document successfully and then failed to process it: `Code Scanning could not process the submitted SARIF file: locationFromSarifResult: expected a physical location`, once per finding. No alert was created. The cause is the `logicalLocations`-only design described just above: principled, but code scanning requires a `physicalLocation` and discards results without one. Nothing needs enabling in repository settings; `permissions: security-events: write` was sufficient for the upload itself. A fix that anchors findings to a real file is being worked on; until it lands, `check --format sarif` is useful to SARIF consumers that accept logical locations, and not to GitHub code scanning.
+> **Verified end to end against GitHub code scanning**, not just against the schema. [Run 31950265132](https://github.com/ivermin1123/mcp-cassette/actions/runs/31950265132) uploaded a document from the poisoned fixture; the analysis processed with no error and created six alerts, each one anchored to the line of the tool it describes (`get_weather` at line 58, `broken` at line 30). The API record for that analysis reads `results=6, error=""`.
+>
+> It has also been verified in the failing direction, which is why the anchor exists. The same job on an earlier PR, emitting `logicalLocations` only, uploaded successfully and then recorded `results=0` with `locationFromSarifResult: expected a physical location` once per finding, creating no alerts. An upload reporting success is not evidence that anything was kept.
+
+That upload is not repeated on every pull request, and the reason is worth stating, because the snippet above is the right thing for *your* server and the wrong thing for this repository. The document above comes from a fixture that is poisoned on purpose, so uploading it per pull request would attach six alerts and a permanent red check to every branch this project ever opens; a check that is always red is one nobody reads by the second week, including the week it goes red for a real reason. Scanning a clean fixture instead would be worse, because an empty `results` array uploads perfectly happily, so the job would stay green through exactly the regression it exists to catch. The proof above was worth running once. What runs now is a split: [ci.yml](.github/workflows/ci.yml) asserts on every pull request that each finding is anchored to a real file at a real line, without uploading anything, and a weekly non-blocking job in [foundation-canary.yml](.github/workflows/foundation-canary.yml) does the real upload and asks the API what survived, parking its alerts on a `ci/sarif-canary` branch so they touch neither main nor any pull request.
 
 ## Cassette format (open, v2)
 

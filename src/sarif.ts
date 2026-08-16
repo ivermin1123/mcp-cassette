@@ -6,13 +6,24 @@
  * nobody opens. The rule ids are the same `CAS-Lxxx` / `CAS-Cxxx` the CLI
  * prints: one identifier, wherever you meet it.
  *
- * One thing is deliberately absent: `physicalLocation`. `check` inspects a
- * *live server*, reached by spawning a command or opening a URL; there is no
- * file in the repository the finding sits at, and inventing a line number for
- * one would be a lie a reader would act on. Findings carry `logicalLocations`
- * instead, the tool the finding is about, which is what SARIF provides for
- * exactly this case; the field the text was found in stays in the message.
- * GitHub shows such results against the repository rather than against a line.
+ * `check` inspects a *live server*, so for a long time this emitted
+ * `logicalLocations` and nothing else: there is no source file the server's
+ * behaviour lives in, and a fabricated line number is a lie a reader would act
+ * on. That reasoning was right about fabrication and wrong about the
+ * conclusion. GitHub code scanning rejects every result without a
+ * `physicalLocation` ("expected a physical location"), so the document uploaded
+ * cleanly and then produced no alerts at all.
+ *
+ * The repair is an anchor that is true rather than convenient. When a contract
+ * snapshot is present, the tool surface the finding describes **is** recorded
+ * in that committed file, at a line this module can locate, and that file is
+ * where a developer goes to see what their server advertises. Pointing there
+ * invents nothing.
+ *
+ * So: `physicalLocation` exists only when a real file was resolved, never
+ * otherwise, and `logicalLocations` stays alongside it for consumers that read
+ * logical locations. With no anchor the document is still emitted, still valid,
+ * and the caller warns that GitHub will discard it.
  */
 
 import { createHash } from "node:crypto";
@@ -39,6 +50,100 @@ const CONTRACT_RULES: Array<[string, string]> = [
   ["CAS-C006", "advertised capability failed to list"],
   ["CAS-C007", "advertised capability failed to list"],
 ];
+
+/**
+ * A real file to hang findings on, and where inside it each subject sits.
+ *
+ * `uri` is always a path that exists, relative to the repository root, because
+ * a path that does not exist is worse than no location at all: code scanning
+ * would accept it and then show a developer a file they cannot open.
+ */
+export interface SarifAnchor {
+  uri: string;
+  /** 1-based line for a subject; 1 when the subject cannot be located in the file. */
+  lineOf(subject: string): number;
+}
+
+/**
+ * Line of each tool's `"name"` inside a contract snapshot, keyed by tool name.
+ *
+ * Snapshots are written with `JSON.stringify(..., 2)`, but this does not lean
+ * on that indentation. It tracks bracket depth outside string literals, so it
+ * only reads `"name"` keys that are direct members of an element of the `tools`
+ * array. A description containing the text `"name": "add"` is inside a string
+ * and never counted.
+ *
+ * A subject with no entry is absent from the map rather than guessed at, which
+ * is what lets the caller fall back to line 1 instead of pointing at a line
+ * that means something else.
+ */
+export function snapshotToolLines(text: string): Map<string, number> {
+  const lines = new Map<string, number>();
+  let depth = 0;
+  let toolsDepth = -1; // depth *inside* the tools array, once found
+  let inString = false;
+  let escaped = false;
+  let line = 1;
+  let token = ""; // the current line's text, for matching keys
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === "\n") {
+      line++;
+      token = "";
+      continue;
+    }
+    token += ch;
+
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      // `"tools": [` opens the array; its elements sit one level deeper.
+      if (ch === "[" && toolsDepth === -1 && /"tools"\s*:\s*\[$/.test(token)) toolsDepth = depth + 1;
+      depth++;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      depth--;
+      if (toolsDepth !== -1 && depth < toolsDepth) toolsDepth = -1; // left the array
+      continue;
+    }
+    // A tool object is an element of the array, so its keys sit at toolsDepth + 1.
+    if (ch === "," || ch === ":") {
+      if (toolsDepth !== -1 && depth === toolsDepth + 1) {
+        const m = /"name"\s*:\s*("(?:[^"\\]|\\.)*")\s*[,}]?$/.exec(token);
+        if (m) {
+          const name = JSON.parse(m[1]!) as string;
+          if (!lines.has(name)) lines.set(name, line);
+        }
+      }
+    }
+  }
+  return lines;
+}
+
+/** Anchor findings to a contract snapshot, mapping each tool to its own line. */
+export function snapshotAnchor(uri: string, text: string): SarifAnchor {
+  const lines = snapshotToolLines(text);
+  return { uri, lineOf: (subject) => lines.get(subject) ?? 1 };
+}
+
+/**
+ * Anchor findings to a file whose contents carry no line for a tool: a server
+ * script, say. The file is real, so code scanning accepts it; line 1 is stated
+ * rather than searched for, because nothing here knows better.
+ */
+export function fileAnchor(uri: string): SarifAnchor {
+  return { uri, lineOf: () => 1 };
+}
 
 interface SarifRule {
   id: string;
@@ -92,21 +197,26 @@ function fingerprintOf(finding: CheckFinding): string {
   return createHash("sha256").update(parts).digest("hex").slice(0, 16);
 }
 
-function toResult(finding: CheckFinding) {
+function toResult(finding: CheckFinding, anchor?: SarifAnchor) {
+  const location: Record<string, unknown> = {
+    logicalLocations: [{ fullyQualifiedName: finding.subject, kind: "member" }],
+  };
+  if (anchor) {
+    location.physicalLocation = {
+      artifactLocation: { uri: anchor.uri },
+      region: { startLine: anchor.lineOf(finding.subject) },
+    };
+  }
   return {
     ruleId: finding.code,
     level: LEVELS[finding.level],
     message: { text: finding.excerpt ? `${finding.message}: ${finding.excerpt}` : finding.message },
     partialFingerprints: { mcpCassetteFindingV1: fingerprintOf(finding) },
-    locations: [
-      {
-        logicalLocations: [{ fullyQualifiedName: finding.subject, kind: "member" }],
-      },
-    ],
+    locations: [location],
   };
 }
 
-export function toSarif(report: CheckReport): unknown {
+export function toSarif(report: CheckReport, anchor?: SarifAnchor): unknown {
   // Only rules that actually fired are worth describing: a catalogue of
   // sixteen against two findings is noise in the Security tab.
   const fired = new Set(report.findings.map((f) => f.code));
@@ -126,7 +236,7 @@ export function toSarif(report: CheckReport): unknown {
         // What was inspected, recorded as prose because it is a server, not a file.
         invocations: [{ executionSuccessful: report.ok, workingDirectory: { uri: `file://${process.cwd()}/` } }],
         properties: { target: report.target, toolCount: report.toolCount },
-        results: report.findings.map(toResult),
+        results: report.findings.map((f) => toResult(f, anchor)),
       },
     ],
   };

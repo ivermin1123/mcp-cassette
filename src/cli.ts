@@ -13,13 +13,14 @@
 
 import { Command } from "commander";
 import fs from "node:fs";
+import path from "node:path";
 import { runRecord, type RecordMode } from "./record.js";
 import { DEFAULT_LISTEN, runHttpRecord } from "./proxy.js";
 import { runReplay, type OnMissMode } from "./replay.js";
 import { runHttpReplay } from "./http-replay.js";
 import { printVerifyReport, verifyAgainstServer, verifyFailed } from "./verify.js";
 import { runCheck, printReport } from "./check.js";
-import { toSarif } from "./sarif.js";
+import { fileAnchor, snapshotAnchor, toSarif, type SarifAnchor } from "./sarif.js";
 import { readCassette, writeCassette } from "./cassette.js";
 import { redactCassette, scanCassette } from "./redact.js";
 import { lintCassette } from "./lint.js";
@@ -74,6 +75,79 @@ function resolveTarget(opts: { stdio?: string; url?: string }): { target: Target
 }
 
 const ERA_HELP = "server lifecycle: legacy (initialize handshake) | modern (2026-07-28 stateless) | auto";
+
+/** The file `snapshot` writes unless told otherwise; the usual anchor for SARIF. */
+const DEFAULT_SNAPSHOT_FILE = "mcp-contract.snapshot.json";
+
+/**
+ * Find a real file to hang SARIF findings on, in descending order of honesty.
+ *
+ * GitHub code scanning discards any result without a physical location, so a
+ * SARIF document with no anchor uploads successfully and produces no alerts.
+ * That silence is the failure this resolution exists to prevent, and every
+ * branch below either returns a path that exists or returns nothing at all.
+ *
+ *   1. `--sarif-location`, when the operator names the file themselves.
+ *   2. the contract snapshot for this run, where each tool has its own line.
+ *   3. the server script named by `--stdio`, when a token of it is a real file.
+ *   4. nothing, and the caller says so loudly.
+ */
+function resolveSarifAnchor(opts: { sarifLocation?: string; stdio?: string }): SarifAnchor | undefined {
+  const anchorFor = (file: string): SarifAnchor | undefined => {
+    const uri = repoRelative(file);
+    if (!uri) return undefined;
+    const text = fs.readFileSync(file, "utf8");
+    // Only a contract snapshot has tools to map; anything else is anchored whole.
+    return text.includes('"mcpCassetteContract"') ? snapshotAnchor(uri, text) : fileAnchor(uri);
+  };
+
+  if (opts.sarifLocation) {
+    // Named explicitly and unusable is an error, not a silent downgrade: the
+    // operator asked for an anchor and would otherwise get no alerts at all.
+    if (!fs.existsSync(opts.sarifLocation)) {
+      throw new Error(`--sarif-location: ${opts.sarifLocation} does not exist`);
+    }
+    const anchor = anchorFor(opts.sarifLocation);
+    if (!anchor) {
+      throw new Error(`--sarif-location: ${opts.sarifLocation} is outside the working directory`);
+    }
+    return anchor;
+  }
+  if (fs.existsSync(DEFAULT_SNAPSHOT_FILE)) {
+    const anchor = anchorFor(DEFAULT_SNAPSHOT_FILE);
+    if (anchor) return anchor;
+  }
+  if (opts.stdio) {
+    for (const token of tokenize(opts.stdio)) {
+      if (!fs.existsSync(token) || !fs.statSync(token).isFile()) continue;
+      const anchor = anchorFor(token);
+      if (anchor) return anchor;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A SARIF uri code scanning can resolve, or nothing.
+ *
+ * Uris are interpreted against the repository root, so an absolute path means
+ * nothing to GitHub and a `../` path points outside the checkout at a file the
+ * Security tab cannot open. Both are worse than having no location: they look
+ * like an anchor and are not one. A server script living outside the working
+ * directory therefore yields no anchor, and the caller warns instead.
+ */
+function repoRelative(file: string): string | undefined {
+  const rel = path.relative(process.cwd(), path.resolve(file));
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return undefined;
+  return rel.split(path.sep).join("/");
+}
+
+const NO_ANCHOR_WARNING =
+  "mcp-cassette check: no file to anchor SARIF findings to, so this document carries\n" +
+  "  no physicalLocation. GitHub code scanning REJECTS such results with \"expected a\n" +
+  "  physical location\" and creates no alerts, though the upload itself reports success.\n" +
+  "  Fix: commit a contract snapshot (mcp-cassette snapshot), or pass\n" +
+  "  --sarif-location <file> naming a file in the repository.\n";
 
 function resolveEra(value: string): EraOption {
   if (value === "auto" || value === "legacy" || value === "modern") return value;
@@ -246,8 +320,20 @@ program
   // README and workflow written so far, and an alias costs one line.
   .option("--json", "alias for --format json")
   .option("--fail-on <level>", "lowest finding level that fails the run: error | warn", "error")
+  .option(
+    "--sarif-location <file>",
+    "file in the repository to anchor SARIF findings to (default: the contract snapshot, if one exists)"
+  )
   .action(
-    async (opts: { stdio?: string; url?: string; era: string; json?: boolean; format: string; failOn: string }) => {
+    async (opts: {
+      stdio?: string;
+      url?: string;
+      era: string;
+      json?: boolean;
+      format: string;
+      failOn: string;
+      sarifLocation?: string;
+    }) => {
     try {
       if (opts.failOn !== "error" && opts.failOn !== "warn") {
         process.stderr.write(`check: --fail-on must be error or warn (got '${opts.failOn}')\n`);
@@ -260,8 +346,11 @@ program
       }
       const { target, label } = resolveTarget(opts);
       const report = await runCheck(target, label, resolveEra(opts.era), opts.failOn);
-      if (format === "sarif") process.stdout.write(JSON.stringify(toSarif(report), null, 2) + "\n");
-      else if (format === "json") process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+      if (format === "sarif") {
+        const anchor = resolveSarifAnchor(opts);
+        if (!anchor) process.stderr.write(NO_ANCHOR_WARNING);
+        process.stdout.write(JSON.stringify(toSarif(report, anchor), null, 2) + "\n");
+      } else if (format === "json") process.stdout.write(JSON.stringify(report, null, 2) + "\n");
       else printReport(report);
       process.exit(report.ok ? 0 : 1);
     } catch (err) {

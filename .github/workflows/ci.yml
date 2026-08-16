@@ -149,6 +149,107 @@ jobs:
             exit 1
           fi
 
+  # Half of `check --format sarif`: the half that can afford to run on every
+  # commit. The suite already validates the document against the OASIS schema.
+  # What the schema cannot express is the one rule that actually costs findings,
+  # that code scanning silently discards any result without a `physicalLocation`.
+  # So this asserts the anchoring locally, against a document from a real run.
+  #
+  # It does not upload, and that is the point of the split. The fixture it scans
+  # is poisoned on purpose, so uploading here would hang six alerts and a red
+  # check on every pull request for the rest of the project's life. A check that
+  # is always red stops being read by the second week, including on the day it
+  # goes red for a reason. Pointing the job at a clean fixture instead would trade
+  # the false alarm for a worse failure: an empty `results` array uploads
+  # perfectly happily, so the job would stay green through exactly the regression
+  # it exists to catch.
+  #
+  # The other half, proving GitHub still accepts what we emit, is the weekly
+  # `sarif-canary` job in foundation-canary.yml. It uploads for real, and blocks
+  # nothing.
+  sarif:
+    name: sarif (findings anchored where code scanning keeps them)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # TINY_EVIL makes the fixture serve a poisoned tool and a broken schema,
+      # so the document carries real findings rather than an empty `results`.
+      # `check` exits non-zero on error-level findings by design, and the file is
+      # written before it does — the gate firing is the point, not a failure.
+      # The anchor is a committed snapshot of this same poisoned fixture, so
+      # every finding points at the line in the repository that actually
+      # declares the tool it is about. Anchoring to a file generated here and
+      # never committed would upload cleanly and then link a reviewer to a path
+      # that does not exist at this commit.
+      - name: Scan the poisoned fixture
+        continue-on-error: true
+        run: |
+          node dist/cli.js check \
+            --stdio "env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs" \
+            --format sarif \
+            --sarif-location tests/fixtures/tiny-server-evil.snapshot.json > mcp-cassette.sarif
+
+      # An upload reports success for a document code scanning then throws away,
+      # so "it uploaded" was never evidence of anything. These four checks are
+      # what the upload could not tell us, and the log names the result that
+      # broke each one.
+      - name: Assert every finding is anchored where code scanning keeps it
+        run: |
+          node -e '
+            const fs = require("fs");
+
+            // Five safety rules fire on the single poisoned tool `get_weather`
+            // (CAS-L001 through CAS-L005), and CAS-C005 fires on the malformed
+            // schema of the `broken` tool. Six is therefore the whole poisoned
+            // surface of the fixture, not a sample of it.
+            //
+            // The count is pinned because the other three checks are all of the
+            // form "every result is well formed", and every result is trivially
+            // well formed when there are none. A rule that quietly stopped
+            // firing would leave this job green while the coverage it reports
+            // had gone. If you change the fixture or add a rule, change this
+            // number in the same commit and say why.
+            const EXPECTED_RESULTS = 6;
+
+            const s = JSON.parse(fs.readFileSync("mcp-cassette.sarif", "utf8"));
+            const r = s.runs[0];
+            console.log("driver:", r.tool.driver.name, r.tool.driver.version);
+            console.log("rules:", r.tool.driver.rules.length, "results:", r.results.length);
+
+            if (r.results.length !== EXPECTED_RESULTS) {
+              throw new Error(
+                `expected ${EXPECTED_RESULTS} findings from the poisoned fixture, got ${r.results.length}`
+              );
+            }
+
+            for (const x of r.results) {
+              const p = x.locations[0].physicalLocation;
+              if (!p) throw new Error(`${x.ruleId}: no physicalLocation, code scanning would drop it`);
+
+              const uri = p.artifactLocation.uri;
+              if (!fs.existsSync(uri)) {
+                throw new Error(`${x.ruleId}: anchored at ${uri}, which is not in the checkout`);
+              }
+
+              const line = p.region && p.region.startLine;
+              if (!Number.isInteger(line) || line < 1) {
+                throw new Error(`${x.ruleId}: startLine is ${line}, which points at no line of ${uri}`);
+              }
+
+              console.log(`  ${x.ruleId}  ${uri}:${line}`);
+            }
+          '
+
   smoke-canary:
     name: smoke-canary (unpinned reference server, non-blocking)
     runs-on: ubuntu-latest
