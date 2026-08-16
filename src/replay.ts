@@ -42,7 +42,7 @@ import {
   stableStringify,
 } from "./jsonrpc.js";
 import { Cassette, ChunksEntry, Direction, FrameEntry, readCassette } from "./cassette.js";
-import { diffValues, formatValue } from "./diff.js";
+import { diffValues, formatValue, type DiffEntry } from "./diff.js";
 import { MiniClient } from "./client.js";
 import { redactFrame } from "./redact.js";
 
@@ -155,29 +155,58 @@ function consumeFromFingerprintPools(index: ReplayIndex, res: JsonRpcResponse): 
 }
 
 /**
+ * Why a request found no recorded answer — as data, not as a sentence.
+ *
+ * A miss is the one thing a caller most often needs to *act* on, and the
+ * difference between "you never recorded this tool" and "you recorded it but
+ * the arguments drifted at /city" is the difference between two different
+ * fixes. Collapsing that into prose forces every consumer to parse English
+ * back into a decision, so the shape stays structured and the sentence becomes
+ * a rendering of it (`formatMiss`) rather than the other way round.
+ *
+ * `exhausted` and `stream-exhausted` are the two "recorded, but already spent"
+ * cases; the rest say nothing matched. Only `arguments-differ` and
+ * `params-differ` mean a recording came close, which is why they alone carry
+ * the diverging paths.
+ */
+export type MissReason =
+  /** The cassette has no request/response pairs at all. */
+  | { kind: "empty-cassette" }
+  /** This fingerprint was recorded, but every recorded response is spent. */
+  | { kind: "exhausted"; fingerprint: string; recordedCount: number }
+  /** As above, for an answer that was recorded as a stream (HTTP only). */
+  | { kind: "stream-exhausted"; fingerprint: string; recordedCount: number }
+  | { kind: "unknown-method"; method: string; recordedMethods: string[] }
+  | { kind: "unknown-tool"; tool: string; recordedTools: string[] }
+  /** A `tools/call` for a recorded tool, diverging at these paths. */
+  | { kind: "arguments-differ"; changes: DiffEntry[] }
+  /** A recorded method, diverging at these paths. */
+  | { kind: "params-differ"; changes: DiffEntry[] };
+
+/** A miss as it happened: what was asked, and why nothing answered it. */
+export interface MissEvent {
+  method: string;
+  request: JsonRpcRequest;
+  reason: MissReason;
+}
+
+/**
  * Explain a miss in terms of the closest recording: which fingerprint came
  * nearest, and exactly which component diverged (method? tool name? which
  * arguments path?). This is what turns "no recorded response" into a fix.
  */
-export function diagnoseMiss(index: ReplayIndex, req: JsonRpcRequest): string {
+export function diagnoseMissReason(index: ReplayIndex, req: JsonRpcRequest): MissReason {
   const effective = index.redactRequests ? (redactFrame(req) as JsonRpcRequest) : req;
   const fp = fingerprint(effective);
 
   const recordedCount = index.recordedCountByFingerprint.get(fp);
-  if (recordedCount !== undefined) {
-    return (
-      `this exact fingerprint was recorded ${recordedCount} time(s), but every recorded response ` +
-      `was already consumed earlier in this session — the client is calling it more often than the recording did`
-    );
-  }
-  if (index.recordedRequests.length === 0) {
-    return "the cassette contains no request/response pairs at all";
-  }
+  if (recordedCount !== undefined) return { kind: "exhausted", fingerprint: fp, recordedCount };
+  if (index.recordedRequests.length === 0) return { kind: "empty-cassette" };
 
   const sameMethod = index.recordedRequests.filter((r) => r.method === effective.method);
   if (sameMethod.length === 0) {
-    const methods = [...new Set(index.recordedRequests.map((r) => r.method))].sort();
-    return `no recorded request has method "${effective.method}" — recorded methods: ${methods.join(", ")}`;
+    const recordedMethods = [...new Set(index.recordedRequests.map((r) => r.method))].sort();
+    return { kind: "unknown-method", method: effective.method, recordedMethods };
   }
 
   if (effective.method === "tools/call") {
@@ -186,38 +215,74 @@ export function diagnoseMiss(index: ReplayIndex, req: JsonRpcRequest): string {
       (r) => String((r.params as Record<string, unknown> | undefined)?.name) === wanted
     );
     if (byName.length === 0) {
-      const names = [...new Set(sameMethod.map((r) => String((r.params as Record<string, unknown> | undefined)?.name)))].sort();
-      return `no recorded tools/call for tool "${wanted}" — recorded tools: ${names.join(", ")}`;
+      const recordedTools = [...new Set(sameMethod.map((r) => String((r.params as Record<string, unknown> | undefined)?.name)))].sort();
+      return { kind: "unknown-tool", tool: wanted, recordedTools };
     }
-    return describeNearestParams(
-      byName.map((r) => (r.params as Record<string, unknown>).arguments ?? {}),
-      (effective.params as Record<string, unknown>).arguments ?? {},
-      `arguments`
-    );
+    return {
+      kind: "arguments-differ",
+      changes: nearestChanges(
+        byName.map((r) => (r.params as Record<string, unknown>).arguments ?? {}),
+        (effective.params as Record<string, unknown>).arguments ?? {}
+      ),
+    };
   }
 
-  return describeNearestParams(
-    sameMethod.map((r) => r.params ?? {}),
-    effective.params ?? {},
-    `params`
-  );
+  return {
+    kind: "params-differ",
+    changes: nearestChanges(sameMethod.map((r) => r.params ?? {}), effective.params ?? {}),
+  };
 }
 
-/** Pick the candidate with the fewest differing paths and name those paths. */
-function describeNearestParams(candidates: unknown[], incoming: unknown, what: string): string {
-  let best: { changes: ReturnType<typeof diffValues> } | null = null;
-  for (const candidate of candidates) {
-    const changes = diffValues(candidate, incoming);
-    if (!best || changes.length < best.changes.length) best = { changes };
+/** The one place a `MissReason` becomes the sentence humans read. */
+export function formatMiss(reason: MissReason): string {
+  switch (reason.kind) {
+    case "empty-cassette":
+      return "the cassette contains no request/response pairs at all";
+    case "exhausted":
+      return (
+        `this exact fingerprint was recorded ${reason.recordedCount} time(s), but every recorded response ` +
+        `was already consumed earlier in this session — the client is calling it more often than the recording did`
+      );
+    case "stream-exhausted":
+      return (
+        `this request's answer was recorded as a stream ${reason.recordedCount} time(s), but every one ` +
+        `was already replayed earlier in this session`
+      );
+    case "unknown-method":
+      return `no recorded request has method "${reason.method}" — recorded methods: ${reason.recordedMethods.join(", ")}`;
+    case "unknown-tool":
+      return `no recorded tools/call for tool "${reason.tool}" — recorded tools: ${reason.recordedTools.join(", ")}`;
+    case "arguments-differ":
+      return describeChanges(reason.changes, "arguments");
+    case "params-differ":
+      return describeChanges(reason.changes, "params");
   }
-  if (!best) return `${what} could not be compared to any recording`;
-  const changes = best.changes;
+}
+
+/** The prose form of the two near-miss reasons. */
+function describeChanges(changes: DiffEntry[], what: string): string {
+  if (changes.length === 0) return `${what} could not be compared to any recording`;
   const shown = changes
     .slice(0, 3)
     .map((c) => `${c.path || "/"} (recorded ${formatValue(c.recorded)}, got ${formatValue(c.live)})`)
     .join("; ");
   const more = changes.length > 3 ? ` and ${changes.length - 3} more path(s)` : "";
   return `method and tool match a recording, but ${what} differ at: ${shown}${more}`;
+}
+
+/** Pick the candidate with the fewest differing paths. Empty means nothing to compare against. */
+function nearestChanges(candidates: unknown[], incoming: unknown): DiffEntry[] {
+  let best: DiffEntry[] | null = null;
+  for (const candidate of candidates) {
+    const changes = diffValues(candidate, incoming);
+    if (!best || changes.length < best.length) best = changes;
+  }
+  return best ?? [];
+}
+
+/** The sentence form, kept for every caller that just wants to print it. */
+export function diagnoseMiss(index: ReplayIndex, req: JsonRpcRequest): string {
+  return formatMiss(diagnoseMissReason(index, req));
 }
 
 /** The one miss answer, shared by both front-ends: a diagnosis a human can act on. */
