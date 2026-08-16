@@ -132,6 +132,15 @@ export class MiniClient {
     return this.currentEra;
   }
 
+  /**
+   * Every frame of the last answer, when it streamed. Only a recorder cares:
+   * a passthrough writing down a streamed answer owes the cassette all of it,
+   * not just the response it handed back (§1.3).
+   */
+  get lastStream(): JsonRpcFrame[] | undefined {
+    return this.transport.lastStream;
+  }
+
   static async connect(
     target: Target,
     timeoutMs?: number,

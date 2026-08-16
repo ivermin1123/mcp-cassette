@@ -33,6 +33,7 @@ import {
   isRequest,
   isResponse,
   JsonRpcFrame,
+  JsonRpcId,
   JsonRpcRequest,
   JsonRpcResponse,
   LineBuffer,
@@ -40,7 +41,7 @@ import {
   serializeFrame,
   stableStringify,
 } from "./jsonrpc.js";
-import { Cassette, FrameEntry, readCassette } from "./cassette.js";
+import { Cassette, ChunksEntry, Direction, FrameEntry, readCassette } from "./cassette.js";
 import { diffValues, formatValue } from "./diff.js";
 import { MiniClient } from "./client.js";
 import { redactFrame } from "./redact.js";
@@ -262,6 +263,68 @@ export function handleFrame(index: ReplayIndex, frame: JsonRpcFrame): JsonRpcFra
 
 export type OnMissMode = "error" | "warn" | "passthrough";
 
+/**
+ * The spy-append machinery, shared by both front-ends: v1 invented it for stdio
+ * and HTTP passthrough needs exactly the same thing, so it is lifted out rather
+ * than reimplemented.
+ *
+ * Two disciplines travel with it. Appends go out synchronously, one line at a
+ * time, to an already-written file — never through a writer that would truncate
+ * it. And a live pair is re-keyed to a fresh `live-N` id, which keeps request
+ * and response paired on re-read and cannot collide with an id the original
+ * recording, an earlier passthrough session, or a future client used.
+ */
+export class LiveAppender {
+  private seq = 0;
+  private started = Date.now();
+
+  constructor(
+    private path: string,
+    cassette: Cassette,
+    /** A redacted cassette never gains raw secrets through the passthrough door. */
+    private redact: boolean
+  ) {
+    // Seed past any ids an earlier passthrough session left behind.
+    for (const entry of cassette.entries) {
+      const ids = entry.type === "chunks" ? [entry.id] : entry.type === "frame" ? [(entry.frame as { id?: unknown }).id] : [];
+      for (const id of ids) {
+        const found = typeof id === "string" ? /^live-(\d+)$/.exec(id) : null;
+        if (found) this.seq = Math.max(this.seq, Number(found[1]));
+      }
+    }
+  }
+
+  /** The id the next appended pair will carry. */
+  nextId(): string {
+    return `live-${++this.seq}`;
+  }
+
+  private write(entry: FrameEntry | ChunksEntry): void {
+    fs.appendFileSync(this.path, JSON.stringify(entry) + "\n");
+  }
+
+  private clean(frame: JsonRpcFrame): JsonRpcFrame {
+    return this.redact ? (redactFrame(frame) as JsonRpcFrame) : frame;
+  }
+
+  frame(dir: Direction, frame: JsonRpcFrame): void {
+    this.write({ type: "frame", t: Date.now() - this.started, dir, frame: this.clean(frame), origin: "live" });
+  }
+
+  /** A live answer that streamed is a `chunks` entry, frames and all (§1.3). */
+  chunks(id: JsonRpcId, frames: JsonRpcFrame[]): void {
+    const t = Date.now() - this.started;
+    this.write({
+      type: "chunks",
+      t,
+      dir: "s2c",
+      id,
+      chunks: frames.map((frame) => ({ t, frame: this.clean(frame) })),
+      origin: "live",
+    });
+  }
+}
+
 export interface ReplayOptions {
   onMiss?: OnMissMode;
   /** Real server command, required for passthrough. */
@@ -278,7 +341,6 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
 
   const cassette = readCassette(cassettePath);
   const index = buildReplayIndex(cassette);
-  const sessionStart = Date.now();
   let misses = 0;
   let appended = 0;
   let forwardFailures = 0;
@@ -288,15 +350,7 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
   const connectLive = (): Promise<MiniClient> =>
     (livePromise ??= MiniClient.connect({ kind: "stdio", command: opts.serverCommand! }).then((r) => r.client));
 
-  // Seed the live-N sequence past any ids a previous passthrough session
-  // appended, so a re-run never reuses an id and breaks response pairing.
-  let liveSeq = 0;
-  for (const entry of cassette.entries) {
-    if (entry.type !== "frame") continue;
-    const id = (entry.frame as { id?: unknown }).id;
-    const m = typeof id === "string" ? /^live-(\d+)$/.exec(id) : null;
-    if (m) liveSeq = Math.max(liveSeq, Number(m[1]));
-  }
+  const live = new LiveAppender(cassettePath, cassette, index.redactRequests);
 
   if (index.skippedServerFrames > 0) {
     process.stderr.write(
@@ -304,23 +358,12 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
     );
   }
 
-  const appendLive = (dir: "c2s" | "s2c", frame: JsonRpcFrame): void => {
-    // Keep the file's redaction promise: a redacted cassette never gains raw
-    // secrets through the passthrough door.
-    const stored = index.redactRequests ? (redactFrame(frame) as JsonRpcFrame) : frame;
-    const entry: FrameEntry = { type: "frame", t: Date.now() - sessionStart, dir, frame: stored, origin: "live" };
-    fs.appendFileSync(cassettePath, JSON.stringify(entry) + "\n");
-  };
-
   const forwardMiss = async (frame: JsonRpcRequest): Promise<JsonRpcResponse> => {
     const client = await connectLive();
     const res = await client.request(frame.method, frame.params);
-    // Re-key the appended pair to a fresh "live-N" id: it keeps request and
-    // response paired on re-read, and cannot collide with the ids the original
-    // recording, an earlier passthrough session, or a future client used.
-    const liveId = `live-${++liveSeq}`;
-    appendLive("c2s", { ...frame, id: liveId });
-    appendLive("s2c", { ...res, id: liveId });
+    const liveId = live.nextId();
+    live.frame("c2s", { ...frame, id: liveId });
+    live.frame("s2c", { ...res, id: liveId });
     appended++;
     return { ...res, id: frame.id };
   };

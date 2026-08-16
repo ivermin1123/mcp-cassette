@@ -8,6 +8,8 @@
  */
 
 import type { Tool } from "./client.js";
+import { cassetteEra, type Cassette, type FrameEntry } from "./cassette.js";
+import { isRequest, type JsonRpcRequest } from "./jsonrpc.js";
 
 export type LintSeverity = "error" | "warn";
 
@@ -145,4 +147,54 @@ function collectSchemaDescriptions(
       }
     }
   }
+}
+
+/**
+ * Cassette consistency: does the file's header agree with the frames under it?
+ *
+ * A cassette is an open text format, so it gets hand-edited — and a header that
+ * contradicts its own transcript fails confusingly at replay time (§4.3), where
+ * the era decides behavior and is never re-derived from frames. Lint is where
+ * that contradiction should surface instead.
+ */
+export interface CassetteFinding {
+  rule: string;
+  message: string;
+}
+
+export function lintCassette(cassette: Cassette): CassetteFinding[] {
+  const findings: CassetteFinding[] = [];
+  const { header, entries } = cassette;
+  const era = cassetteEra(header);
+  const add = (rule: string, message: string) => findings.push({ rule, message });
+
+  const requests = entries.filter((e) => e.type === "frame" && e.dir === "c2s" && isRequest(e.frame));
+  const asked = (method: string) =>
+    requests.some((e) => ((e as FrameEntry).frame as JsonRpcRequest).method === method);
+
+  if (era === "modern") {
+    // The modern era has no handshake at all, so recorded handshake traffic
+    // means the header is lying about one of the two.
+    if (asked("initialize")) {
+      add("era-handshake", 'era is "modern" but the cassette records an `initialize` request — the modern era has no handshake');
+    }
+    if (header.sessioned) {
+      add("era-sessioned", 'era is "modern" but the header says `sessioned` — the modern era removed sessions entirely');
+    }
+    if (entries.some((e) => e.type === "chunks" && e.via === "get")) {
+      add("era-get-stream", 'era is "modern" but a stream is recorded as `via:"get"` — the modern era removed the standalone GET stream');
+    }
+  }
+
+  if (header.transport === "stdio") {
+    // stdio has no URL and no SSE; either field means the header's transport is wrong.
+    if (header.url) add("transport-url", 'transport is "stdio" but the header carries a `url`');
+    if (entries.some((e) => e.type === "chunks")) {
+      add("transport-chunks", 'transport is "stdio" but the cassette records a streamed answer — `chunks` entries only come from HTTP');
+    }
+  } else if (header.command) {
+    add("transport-command", 'transport is "http" but the header carries a spawn `command`');
+  }
+
+  return findings;
 }

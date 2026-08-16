@@ -31,7 +31,16 @@ import {
   type JsonRpcResponse,
 } from "./jsonrpc.js";
 import { bindFailure, isLocalOrigin, parseListen, warnIfExposed, DEFAULT_LISTEN } from "./proxy.js";
-import { buildReplayIndex, diagnoseMiss, fingerprint, matchResponse, missError, type OnMissMode } from "./replay.js";
+import {
+  buildReplayIndex,
+  diagnoseMiss,
+  fingerprint,
+  LiveAppender,
+  matchResponse,
+  missError,
+  type OnMissMode,
+} from "./replay.js";
+import { MiniClient, type Target } from "./client.js";
 import { redactFrame } from "./redact.js";
 
 /** "none" (default) emits chunks back to back; "recorded" honors the offsets the recorder stamped. */
@@ -40,15 +49,20 @@ export type Timing = "none" | "recorded";
 export interface HttpReplayOptions {
   /** "host:port" to bind; defaults to 127.0.0.1:6402. */
   listen?: string;
-  /** "error" (default) or "warn". Passthrough forwards over the live client and is not wired here yet. */
+  /** "error" (default), "warn", or "passthrough" — which needs `serverCommand`. */
   onMiss?: OnMissMode;
   timing?: Timing;
+  /** The real server to forward misses to, for `--on-miss passthrough`. */
+  serverCommand?: string[];
 }
 
 export interface ReplayServer {
   url: string;
   /** Fingerprint misses so far — what decides the session's exit code. */
   misses(): number;
+  /** Interactions forwarded to the live server and appended, and how many forwards failed. */
+  appended(): number;
+  forwardFailures(): number;
   close(): Promise<void>;
 }
 
@@ -132,6 +146,13 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
         `replay it without --listen to serve it on stdio`
     );
   }
+  const onMiss = opts.onMiss ?? "error";
+  if (onMiss === "passthrough" && !opts.serverCommand?.length) {
+    throw new Error(
+      "replay --listen --on-miss passthrough needs the real server command: " +
+        "mcp-cassette replay <cassette> --listen <host:port> --on-miss passthrough -- <server command...>"
+    );
+  }
   const era: Era = cassetteEra(cassette.header);
   const index = buildReplayIndex(cassette);
   const statuses = recordedStatuses(cassette);
@@ -147,6 +168,28 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
   const open = new Set<http.ServerResponse>();
   let sessionId: string | undefined;
   let misses = 0;
+  let appended = 0;
+  let forwardFailures = 0;
+  // The spy machinery is v1's, unchanged: append synchronously to the file that
+  // already exists, re-key each live pair to its own `live-N`.
+  const spy = onMiss === "passthrough" ? new LiveAppender(cassettePath, cassette, index.redactRequests) : null;
+  // Connecting is memoized including failure, so a broken command fails every
+  // later miss fast instead of spawning one orphan process per miss.
+  let livePromise: Promise<MiniClient> | null = null;
+  /**
+   * What follows `--`: a lone http(s) URL is a live HTTP endpoint, anything else
+   * is a command to spawn. An HTTP cassette is usually recorded against an HTTP
+   * server, and only an HTTP answer can stream — a `chunks` append is
+   * unreachable through a stdio target.
+   */
+  const liveTarget = (): Target => {
+    const command = opts.serverCommand!;
+    return command.length === 1 && /^https?:\/\//i.test(command[0]!)
+      ? { kind: "http", url: command[0]! }
+      : { kind: "stdio", command };
+  };
+  const connectLive = (): Promise<MiniClient> =>
+    (livePromise ??= MiniClient.connect(liveTarget(), undefined, era).then((r) => r.client));
 
   /** RFC 9110: a 405 names what the resource does accept. */
   const allow = [standalone ? "GET" : "", "POST", sessioned ? "DELETE" : ""].filter(Boolean).join(", ");
@@ -266,8 +309,43 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
         `was already replayed earlier in this session`
       : diagnoseMiss(index, frame);
     warn(`fingerprint miss for "${frame.method}" — ${diagnosis}`);
+    if (spy) {
+      void forwardMiss(res, frame);
+      return;
+    }
     // 200: the transport worked. The *protocol* answer is the error.
     send(res, 200, missError(frame, diagnosis));
+  };
+
+  /**
+   * A miss becomes a live call, and the live call becomes cassette. The client
+   * gets the answer in the shape the live server gave it — streamed answers stay
+   * streamed — while the file gains the pair re-keyed to its own `live-N` id.
+   */
+  const forwardMiss = async (res: http.ServerResponse, frame: JsonRpcRequest): Promise<void> => {
+    try {
+      const client = await connectLive();
+      const answer = await client.request(frame.method, frame.params);
+      const streamed = client.lastStream;
+      const liveId = spy!.nextId();
+      spy!.frame("c2s", { ...frame, id: liveId });
+      if (streamed && streamed.length > 0) {
+        spy!.chunks(liveId, streamed.map((f) => (isResponse(f) ? { ...f, id: liveId } : f)));
+      } else {
+        spy!.frame("s2c", { ...answer, id: liveId });
+      }
+      appended++;
+      if (streamed && streamed.length > 0) {
+        await emit(res, streamed.map((f) => ({ t: 0, frame: f })), { terminate: true, rekey: frame.id });
+        return;
+      }
+      send(res, 200, { ...answer, id: frame.id });
+    } catch (err) {
+      forwardFailures++;
+      const message = `mcp-cassette replay: passthrough to live server failed: ${(err as Error).message}`;
+      warn(message);
+      send(res, 200, { jsonrpc: "2.0", id: frame.id, error: { code: -32603, message } });
+    }
   };
 
   return new Promise<ReplayServer>((resolve, reject) => {
@@ -308,6 +386,8 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       resolve({
         url: bound,
         misses: () => misses,
+        appended: () => appended,
+        forwardFailures: () => forwardFailures,
         close: async () => {
           // A held-open stream is exactly the dangling socket that would keep the
           // process alive, so the session ends them itself rather than waiting on
@@ -323,6 +403,8 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
                 })
             )
           );
+          const live = livePromise;
+          if (live) await live.then((c) => c.close()).catch(() => undefined);
           await new Promise<void>((done) => {
             server.close(() => done());
             // A connection whose client aborted mid-response is neither active
@@ -343,7 +425,17 @@ export async function runHttpReplay(cassettePath: string, opts: HttpReplayOption
     const stop = () => void server.close().then(resolve);
     for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, stop);
   });
-  if (server.misses() > 0) warn(`${server.misses()} fingerprint miss(es) this session`);
+  const onMiss = opts.onMiss ?? "error";
+  if (server.misses() > 0) {
+    warn(
+      onMiss === "passthrough"
+        ? `${server.misses()} miss(es), ${server.appended()} interaction(s) appended to ${cassettePath} (origin:"live")` +
+            (server.forwardFailures() > 0 ? `, ${server.forwardFailures()} forward(s) FAILED` : "")
+        : `${server.misses()} fingerprint miss(es) this session`
+    );
+  }
   // error mode is the strict one: a session that missed is a failed session.
-  process.exitCode = (opts.onMiss ?? "error") === "error" && server.misses() > 0 ? 1 : 0;
+  // passthrough is clean only when every forward actually reached the server.
+  process.exitCode =
+    (onMiss === "error" && server.misses() > 0) || (onMiss === "passthrough" && server.forwardFailures() > 0) ? 1 : 0;
 }
