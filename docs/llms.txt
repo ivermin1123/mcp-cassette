@@ -31,6 +31,7 @@ Every finding carries a stable rule id in parentheses. Match on the id, not the 
 
 - [README](https://github.com/ivermin1123/mcp-cassette#readme): full reference, CI workflow, safety rules, SARIF output.
 - [Site](https://mcpcassette.dev/): the same material as a page.
+- [How replay works](https://mcpcassette.dev/replay/): why a cassette serves any client in any language, the WHATWG event-stream parsing rules, the two protocol lifecycles a cassette tells apart, and the deferred header.
 - [Cassette format v2](https://github.com/ivermin1123/mcp-cassette/blob/main/docs/cassette-format-v2.md): the on-disk format.
 - [CHANGELOG](https://github.com/ivermin1123/mcp-cassette/blob/main/CHANGELOG.md): what changed and what breaks.
 
