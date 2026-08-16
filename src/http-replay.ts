@@ -33,11 +33,14 @@ import {
 import { bindFailure, isLocalOrigin, parseListen, warnIfExposed, DEFAULT_LISTEN } from "./proxy.js";
 import {
   buildReplayIndex,
-  diagnoseMiss,
+  diagnoseMissReason,
   fingerprint,
+  formatMiss,
   LiveAppender,
   matchResponse,
   missError,
+  type MissEvent,
+  type MissReason,
   type OnMissMode,
 } from "./replay.js";
 import { MiniClient, type Target } from "./client.js";
@@ -60,6 +63,12 @@ export interface ReplayServer {
   url: string;
   /** Fingerprint misses so far — what decides the session's exit code. */
   misses(): number;
+  /**
+   * Take the misses recorded since the last call, and forget them. Unlike
+   * `misses()` this is a drain, so a caller can attribute misses to one slice
+   * of a session (a single test, typically) instead of to the whole run.
+   */
+  takeMisses(): MissEvent[];
   /** Interactions forwarded to the live server and appended, and how many forwards failed. */
   appended(): number;
   forwardFailures(): number;
@@ -183,6 +192,11 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
   const open = new Set<http.ServerResponse>();
   let sessionId: string | undefined;
   let misses = 0;
+  // Two separate things on purpose. `misses` is cumulative and decides the
+  // session's exit code, so nothing may reset it. `missLog` is drainable: a
+  // caller that wants to attribute misses to whatever it was doing at the time
+  // — a single test, say — has to be able to take them and start clean.
+  const missLog: MissEvent[] = [];
   let appended = 0;
   let forwardFailures = 0;
   // The spy machinery is v1's, unchanged: append synchronously to the file that
@@ -319,10 +333,13 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       return;
     }
     misses++;
-    const diagnosis = streams.recorded.has(fp)
-      ? `this request's answer was recorded as a stream ${streams.recorded.get(fp)} time(s), but every one ` +
-        `was already replayed earlier in this session`
-      : diagnoseMiss(index, frame);
+    // A spent stream pool is a miss cause the stdio front-end cannot have, so
+    // it is named here rather than inside the shared diagnosis.
+    const reason: MissReason = streams.recorded.has(fp)
+      ? { kind: "stream-exhausted", fingerprint: fp, recordedCount: streams.recorded.get(fp)! }
+      : diagnoseMissReason(index, frame);
+    missLog.push({ method: frame.method, request: frame, reason });
+    const diagnosis = formatMiss(reason);
     warn(`fingerprint miss for "${frame.method}" — ${diagnosis}`);
     if (spy) {
       void forwardMiss(res, frame);
@@ -406,6 +423,7 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       resolve({
         url: bound,
         misses: () => misses,
+        takeMisses: () => missLog.splice(0),
         appended: () => appended,
         forwardFailures: () => forwardFailures,
         close: async () => {
