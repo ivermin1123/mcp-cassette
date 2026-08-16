@@ -89,6 +89,25 @@ function portHolder(port: number): string {
   }
 }
 
+/**
+ * The loud bind failure §2.2 mandates — a deterministic endpoint is part of the
+ * client's configuration, so a taken port names its holder and stops, it never
+ * hops to a free one. Replay binds under the same rule (§3.2), hence the
+ * caller-supplied command name.
+ */
+export function bindFailure(command: string, host: string, port: number, err: NodeJS.ErrnoException): Error {
+  return err.code === "EADDRINUSE"
+    ? new Error(`${command}: ${host}:${port} is already in use by ${portHolder(port)} — stop it or pass --listen`)
+    : new Error(`${command}: could not listen on ${host}:${port}: ${err.message}`);
+}
+
+/** Non-loopback binds are reachable beyond this machine; the operator typed it, but should hear it. */
+export function warnIfExposed(command: string, host: string): void {
+  if (host !== "127.0.0.1" && host !== "localhost") {
+    process.stderr.write(`mcp-cassette ${command}: WARNING listening on ${host} — reachable beyond this machine\n`);
+  }
+}
+
 /** A running proxy: the address the client should be pointed at, and a way to stop it. */
 export interface RecordingProxy {
   url: string;
@@ -263,10 +282,7 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
     }
 
     server.on("error", (err: NodeJS.ErrnoException) => {
-      const failure =
-        err.code === "EADDRINUSE"
-          ? new Error(`record: ${host}:${port} is already in use by ${portHolder(port)} — stop it or pass --listen`)
-          : new Error(`record: could not listen on ${host}:${port}: ${err.message}`);
+      const failure = bindFailure("record", host, port, err);
       // Discard rather than close: a startup that never happened must not leave
       // a header behind for the next `--mode once` run to trip over. Reject only
       // once the file has settled, so a caller that retries immediately sees the
@@ -275,9 +291,7 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
     });
 
     server.listen(port, host, () => {
-      if (host !== "127.0.0.1" && host !== "localhost") {
-        process.stderr.write(`mcp-cassette: WARNING listening on ${host} — reachable beyond this machine\n`);
-      }
+      warnIfExposed("record", host);
       const bound = `http://${host}:${(server.address() as { port: number }).port}/`;
       process.stderr.write(`mcp-cassette: recording ${bound} → ${opts.url}\n`);
       resolve({

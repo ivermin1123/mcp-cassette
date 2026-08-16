@@ -55,6 +55,7 @@ export {
 } from "./client.js";
 export { HttpStatusError } from "./transport.js";
 export { runHttpRecord, startHttpRecord, type HttpRecordOptions, type RecordingProxy } from "./proxy.js";
+export { runHttpReplay, startHttpReplay, type HttpReplayOptions, type ReplayServer } from "./http-replay.js";
 export { lintTool, LINT_RULES, type LintFinding } from "./lint.js";
 export { runCheck, printReport, type CheckReport, type CheckFinding } from "./check.js";
 export {

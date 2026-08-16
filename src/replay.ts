@@ -219,7 +219,8 @@ function describeNearestParams(candidates: unknown[], incoming: unknown, what: s
   return `method and tool match a recording, but ${what} differ at: ${shown}${more}`;
 }
 
-function missError(frame: JsonRpcRequest, diagnosis: string): JsonRpcResponse {
+/** The one miss answer, shared by both front-ends: a diagnosis a human can act on. */
+export function missError(frame: JsonRpcRequest, diagnosis: string): JsonRpcResponse {
   return {
     jsonrpc: "2.0",
     id: frame.id,
