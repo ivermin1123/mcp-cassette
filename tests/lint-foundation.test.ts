@@ -26,6 +26,29 @@ const byId = (id: string): LintRule => {
   return rule;
 };
 
+/**
+ * Every CAS-L id that has shipped in a release.
+ *
+ * docs/llms.txt tells machine readers to match on the id and not the wording,
+ * which makes each of these a published contract: somewhere there is a CI gate
+ * or a SARIF suppression keyed on it. Dropping one is a breaking change and
+ * belongs under `### BREAKING` in the CHANGELOG. Adding one is not, so the
+ * assertion below is containment, never equality.
+ */
+const RELEASED_RULE_IDS = [
+  "CAS-L001", "CAS-L002", "CAS-L003", "CAS-L004", "CAS-L005", "CAS-L006",
+  "CAS-L007", "CAS-L008", "CAS-L009", "CAS-L010", "CAS-L011", "CAS-L012",
+  "CAS-L013", "CAS-L014", "CAS-L015", "CAS-L016",
+];
+
+describe("released rule ids stay released", () => {
+  it("still ships every id a consumer may already match on", () => {
+    const shipped = new Set(LINT_RULES.map((r) => r.id));
+    const missing = RELEASED_RULE_IDS.filter((id) => !shipped.has(id));
+    expect(missing, "renaming or removing a released rule id breaks consumers").toEqual([]);
+  });
+});
+
 describe("rules cite the standard they implement", () => {
   it("gives every rule a stable CAS-Lxxx id, with no duplicates", () => {
     const ids = LINT_RULES.map((r) => r.id);
