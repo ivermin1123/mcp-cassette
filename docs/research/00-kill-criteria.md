@@ -1,5 +1,60 @@
 # Kill criteria
 
+## LUẬT SỐ 1 — ĐÂY LÀ OPEN SOURCE, KHÔNG PHẢI ĐỂ BÁN. Đọc trước mọi phân tích.
+
+`mcp-cassette` là OSS (Apache-2.0). Không bán, không có khách trả tiền, không có
+doanh thu trong bất kỳ ô nào dưới đây.
+
+**Thước đo đúng:**
+
+1. Có ai **cài và dùng** không — kể cả chính owner.
+2. **Thời gian** của owner đổi lấy gì — dùng được · học được · uy tín.
+3. Có ai **đóng góp cùng** không.
+
+**Cấm dùng làm khung:** "bán được không" · "thị trường đủ lớn" · "khách hàng" ·
+"sẵn sàng chi trả" · "độ khẩn đủ để móc ví" · TAM/segment.
+
+**Dùng thay vào:** *"cái này có ĐỠ MỆT HƠN cách họ đang làm không?"* — đó là
+toàn bộ rào adoption của OSS, và nó thấp hơn rào mua hàng rất nhiều.
+
+**Ba hệ quả về bằng chứng, áp cho mọi kết luận trong báo cáo:**
+
+- **a. Vắng tiếng kêu = bằng chứng YẾU, không phải bằng chứng ngược.** OSS thì
+  người ta cài trước, kêu sau, hoặc không bao giờ kêu. Không được dùng "0 ca
+  phàn nàn" một mình để giết một hướng. Ngưỡng "cầu thật ≥ 8 ca" (Box E) chỉ
+  **ủng hộ** được, **không giết** được.
+- **b. Đối thủ đáng sợ là thứ MIỄN PHÍ và ĐÃ NẰM SẴN TRONG TAY họ** —
+  in-memory/linked transport của SDK chính thức, MCP Inspector — chứ không phải
+  sản phẩm thương mại nào. Một sản phẩm thương mại làm cùng việc **không** tính
+  là chiếm chỗ (Box C).
+- **c. Đối thủ thật sự là sự LƯỜI CÀI THÊM DEPENDENCY.** Lập luận "việc này tự
+  viết 20–50 dòng là xong" **nặng hơn** dưới khung OSS, không nhẹ đi. Mỗi tính
+  năng phải trả lời được: vì sao người ta chịu rước thêm một dependency thay vì
+  tự viết? (Box D)
+
+**Chấm ba tính năng RIÊNG** — `replay` · `snapshot --check` · `check` poisoning.
+Chấm gộp thì một tính năng chết sẽ kéo hai cái kia chết oan.
+
+> *English gloss:* this project is Apache-2.0 OSS with no buyer and no revenue.
+> Judge it by whether anyone installs and uses it, what the owner's time buys,
+> and whether anyone contributes — never by salability. The adoption test is
+> "is this less tiring than what they do today?", not willingness to pay.
+
+---
+
+## Note on the freeze (added 2026-08-16, after the criteria were committed)
+
+The section above and the `[OSS]` annotations on individual boxes were added
+after `22ab114` and **before** any measurement result was read. **No threshold
+was changed.** Numbers stay exactly as frozen: 15%, 12 repositories, 50%,
+50 lines, 8 cases.
+
+Lowering a threshold after re-framing, while wanting the project to survive, is
+moving the goalposts. Annotating which boxes carry a commercial assumption is
+not. This note exists so a later reader can tell the two apart.
+
+---
+
 Written **before** any measurement, and frozen. Every number, definition, and
 decision rule below was fixed while the answers were still unknown. Nothing here
 may be edited once data collection starts — not the thresholds, not the field
@@ -74,6 +129,13 @@ catches comments and constants and would inflate the number.
 
 ## Box A — "The market does not exist"
 
+> **[OSS] This box carries a commercial assumption in its name.** Under Law №1
+> there is no market to exist or not exist. Read it strictly as *"almost nobody
+> is doing the thing this tool serves"* — and remember that under OSS a low
+> number is weaker evidence than it looks, because the tool only has to be less
+> tiring than what people do today, not worth paying for. **Threshold unchanged:
+> 15% and 12 repositories.**
+
 Triggers only when **both** conditions hold:
 
 - `(b1+b2)` **< 15%** of the sample, **and**
@@ -88,6 +150,11 @@ in the thousands, is still real users doing the real thing.
 ---
 
 ## Box B — "Swallowed by infrastructure"
+
+> **[OSS] This is the box Law №1(b) points at.** The official SDKs' in-memory
+> transport and MCP Inspector are free and already installed — that is what
+> makes them dangerous, and no commercial tool can reach this box at all.
+> **Threshold unchanged: 50%.**
 
 Scored **per feature**, never as one verdict for the whole tool.
 
@@ -112,6 +179,10 @@ announced.**
 
 ## Box C — "Someone already occupies it"
 
+> **[OSS] A commercial product doing the same job does not occupy anything.**
+> Condition 2 below is the whole point of this box, not a qualifier on it: the
+> only occupiers that count are free, or already sitting in the user's hands.
+
 A tool occupies a feature when **all three** hold:
 
 1. it does the same job for MCP (adjacent does not count),
@@ -130,6 +201,12 @@ For OSS the dangerous competitor is the thing that is **free** and the thing
 ---
 
 ## Box D — "The lazy-install barrier"
+
+> **[OSS] This box gets heavier under Law №1, not lighter.** The real competitor
+> is unwillingness to add a dependency. "I can write that in 30 lines" defeats a
+> free tool more easily than it defeats a paid one, because there is no
+> purchasing process to make the alternative feel expensive. **Threshold
+> unchanged: 50 lines.**
 
 For each feature, estimate the lines a competent developer writes to replace it
 themselves. If that is **≤ 50 lines** and no surviving reason explains why they
@@ -161,6 +238,10 @@ as "no one needs this", and it may not move anything toward a stop box.
 
 **Class: supporting only. Never killing.** This is the field most likely to be
 misread, so it is fenced off by construction.
+
+> **[OSS] Fenced twice, on purpose.** Law №1(a): silence is weak evidence, never
+> counter-evidence. A report that reaches a stop verdict and cites this field as
+> part of the reason has broken the criteria. **Threshold unchanged: 8 cases.**
 
 ---
 
