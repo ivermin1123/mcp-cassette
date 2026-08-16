@@ -149,6 +149,64 @@ jobs:
             exit 1
           fi
 
+  # The other half of `check --format sarif`. The suite already validates the
+  # document against the OASIS schema; what it cannot prove is that GitHub
+  # *accepts* it — a schema-valid SARIF can still be rejected for rules the
+  # schema does not express. So this uploads a real document from a real run.
+  #
+  # Pull requests only, deliberately. Code scanning alerts uploaded from a PR
+  # branch are scoped to that PR; uploading on push to main would leave six
+  # permanent "prompt injection" alerts on the repository's Security tab, all of
+  # them describing a fixture that exists to be poisoned.
+  sarif:
+    name: sarif (upload findings to code scanning)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The only permission the upload needs. A public repository needs nothing
+      # enabled in Settings beyond this.
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # TINY_EVIL makes the fixture serve a poisoned tool and a broken schema,
+      # so the document carries real findings rather than an empty `results`.
+      # `check` exits non-zero on error-level findings by design, and the file is
+      # written before it does — the gate firing is the point, not a failure.
+      - name: Scan the poisoned fixture
+        continue-on-error: true
+        run: |
+          node dist/cli.js check \
+            --stdio "env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs" \
+            --format sarif > mcp-cassette.sarif
+
+      - name: Show what is about to be uploaded
+        run: |
+          node -e '
+            const s = JSON.parse(require("fs").readFileSync("mcp-cassette.sarif", "utf8"));
+            const r = s.runs[0];
+            console.log("driver:", r.tool.driver.name, r.tool.driver.version);
+            console.log("rules:", r.tool.driver.rules.length, "results:", r.results.length);
+            console.log("ruleIds:", r.results.map((x) => x.ruleId).join(", "));
+          '
+
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: mcp-cassette.sarif
+          # Keeps these results in their own bucket, so they never merge with
+          # findings from another tool scanning the same commit.
+          category: mcp-cassette
+
   smoke-canary:
     name: smoke-canary (unpinned reference server, non-blocking)
     runs-on: ubuntu-latest
