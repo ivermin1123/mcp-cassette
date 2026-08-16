@@ -100,11 +100,24 @@ a `chunks` entry type for this:
 }
 ```
 
-The HTTP recorder writes these today: an SSE answer becomes one `chunks` entry
-when its stream ends, with two fields the sketch did not name —
-`id` (absent on the legacy standalone GET stream, which answers no request) and
-`via` (`"post"` by default and then omitted, `"get"` for that GET stream).
-`docs/design/http-record-replay.md` §1.3 is the authority on both.
+The HTTP recorder writes these today, and the HTTP replayer serves them: an SSE
+answer becomes one `chunks` entry when its stream ends, with two fields the
+sketch did not name — `id` (absent on the legacy standalone GET stream, which
+answers no request) and `via` (`"post"` by default and then omitted, `"get"` for
+that GET stream). `docs/design/http-record-replay.md` §1.3 is the authority on
+both.
+
+On replay, an id-bearing entry is emitted as SSE and the stream closes after its
+final frame; only that final frame is re-keyed to the incoming request id, so a
+progress notification is replayed exactly as recorded. A `via:"get"` entry is
+served on GET and held open, because it answered no request and so completes
+none. A cassette may hold more than one `via:"get"` entry — a session can open
+the standalone stream more than once — but there is only one endpoint to serve
+them from, so replay serves the first and says so on stderr rather than choosing
+in silence.
+
+`replay --on-miss passthrough` appends `chunks` entries too, carrying
+`origin:"live"`, when the live answer arrived as a stream.
 
 Design intent, firmed up in §1.3 of that document:
 

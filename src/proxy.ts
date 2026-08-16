@@ -134,7 +134,8 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
     writer.frame(dir, redact ? (redactFrame(frame) as JsonRpcFrame) : frame, status ? { status } : undefined);
   };
   /**
-   * §4.1: the first *successful* lifecycle exchange decides, never a probe. A
+   * §4.1: the first *successful* exchange decides, never a probe — success is
+   * the whole test, not whether the method was a lifecycle one. A
    * dual-era client that tries `server/discover`, gets an error, and falls back
    * to `initialize` is recorded honestly and still classified legacy.
    */
