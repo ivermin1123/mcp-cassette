@@ -44,6 +44,13 @@ export interface Transport {
   setProtocolVersion(version: string): void;
   /** The era the wire speaks. Only HTTP changes shape between eras. */
   setEra(era: Era): void;
+  /**
+   * Every frame of the last answer, when it arrived as a stream — undefined
+   * when it was plain JSON. MiniClient's own callers want the answer and
+   * nothing else, but a passthrough recording has to write down what actually
+   * crossed the wire, notifications included (§1.3).
+   */
+  readonly lastStream?: JsonRpcFrame[];
   close(): Promise<void>;
 }
 
@@ -166,6 +173,8 @@ export class StdioTransport implements Transport {
  * need answers, not pacing (recorded pacing is a cassette concern).
  */
 export class HttpTransport implements Transport {
+  /** Frames of the last streamed answer; undefined when the answer was plain JSON. */
+  lastStream?: JsonRpcFrame[];
   private sessionId?: string;
   private protocolVersion?: string;
   private era: Era = "legacy";
@@ -208,6 +217,7 @@ export class HttpTransport implements Transport {
   }
 
   private async send(frame: JsonRpcFrame, timeoutMs: number): Promise<JsonRpcResponse | null> {
+    this.lastStream = undefined; // it describes the answer we are about to get, not the last one
     const headers: Record<string, string> = {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
@@ -240,13 +250,21 @@ export class HttpTransport implements Transport {
         return JSON.parse(text) as JsonRpcResponse;
       }
       if (ct.includes("text/event-stream")) {
+        // Keep every frame, not just the answer: a passthrough recording of a
+        // streamed answer is a `chunks` entry, and that is all of them.
+        const frames: JsonRpcFrame[] = [];
+        let answer: JsonRpcResponse | undefined;
         for (const line of text.split("\n")) {
           if (!line.startsWith("data:")) continue;
           const parsed = parseFrame(line.slice(5));
-          if (parsed && isResponse(parsed) && "id" in frame && String(parsed.id) === String((frame as JsonRpcRequest).id)) {
-            return parsed;
+          if (!parsed) continue;
+          frames.push(parsed);
+          if (isResponse(parsed) && "id" in frame && String(parsed.id) === String((frame as JsonRpcRequest).id)) {
+            answer ??= parsed;
           }
         }
+        this.lastStream = frames;
+        if (answer) return answer;
         throw new Error("no matching response found in SSE stream");
       }
       throw new Error(`unexpected content-type: ${ct}`);

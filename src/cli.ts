@@ -7,6 +7,7 @@
  *   verify    re-fire recorded requests at a live server, diff the responses
  *   check     health + safety check of a live server (CI exit codes)
  *   snapshot  contract snapshot & breaking-change detection
+ *   lint      check a cassette's header against its own frames
  *   redact    redact (or audit) secrets in an existing cassette
  */
 
@@ -20,6 +21,7 @@ import { printVerifyReport, verifyAgainstServer, verifyFailed } from "./verify.j
 import { runCheck, printReport } from "./check.js";
 import { readCassette, writeCassette } from "./cassette.js";
 import { redactCassette, scanCassette } from "./redact.js";
+import { lintCassette } from "./lint.js";
 import { VERSION } from "./version.js";
 import {
   captureContract,
@@ -136,10 +138,12 @@ program
         throw new Error(`replay: unknown --timing "${opts.timing}" (expected none or recorded)`);
       }
       if (opts.listen !== undefined) {
-        if (opts.onMiss === "passthrough") {
-          throw new Error("replay --listen does not support --on-miss passthrough yet (it lands with HTTP passthrough)");
-        }
-        await runHttpReplay(cassette, { listen: opts.listen, onMiss: opts.onMiss, timing: opts.timing });
+        await runHttpReplay(cassette, {
+          listen: opts.listen,
+          onMiss: opts.onMiss,
+          timing: opts.timing,
+          serverCommand: command,
+        });
         return;
       }
       // Pacing only means something for a streamed answer, and only HTTP serves those.
@@ -157,6 +161,26 @@ program
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
+
+program
+  .command("lint")
+  .description("Check a cassette's header against its own frames (era and transport consistency)")
+  .argument("<cassette>", "path to a .cassette.jsonl file")
+  .action((cassette: string) => {
+    try {
+      const findings = lintCassette(readCassette(cassette));
+      for (const f of findings) process.stdout.write(`${f.rule}: ${f.message}\n`);
+      process.stdout.write(
+        findings.length === 0
+          ? `${cassette}: header and frames agree\n`
+          : `${cassette}: ${findings.length} inconsistency(ies)\n`
+      );
+      process.exitCode = findings.length > 0 ? 1 : 0;
+    } catch (err) {
+      process.stderr.write(`${(err as Error).message}\n`);
+      process.exit(1);
+    }
+  });
 
 program
   .command("verify")
