@@ -10,13 +10,18 @@ sold"*.
 
 ## BÀN GIAO
 
+> **Cập nhật sau khi chạy thí nghiệm quyết định (§8).** Bản đầu của báo cáo này
+> kết luận **DỪNG**, dựa trên README và mã nguồn của đối thủ mà chưa cài, chưa
+> chạy. Đã cài và chạy cả ba đối thủ. **Phán quyết đổi thành NARROW.** Phần dưới
+> là kết luận sau thí nghiệm; §8 ghi lại đã chạy gì và cái gì lật.
+
 | | |
 |---|---|
-| **Rơi vào ô nào** | **DỪNG LẠI** — cả ba tính năng đều rơi vào Box C ("đã có người chiếm"). Theo luật phán quyết đã khoá: *all three features DEAD → STOP*. |
+| **Rơi vào ô nào** | **NARROW** (thu hẹp). Một tính năng chết, hai tính năng sống. Luật đã khoá, áp theo thứ tự: quy tắc 1 (STOP) không kích hoạt vì chỉ 1 trong 3 chết; quy tắc 3 (NARROW) kích hoạt. Chết: **`snapshot --check`**. Sống: **`replay`** và **`check` poisoning**. |
 | **Tỉ lệ trường (b)** | **52.5% chặt / 56.3% lỏng** (83 / 89 trên 158 server). Ngưỡng là **<15% VÀ <12 repo**. Không chạm ngưỡng, thậm chí không gần. **Box A KHÔNG kích hoạt.** |
-| **Tính năng rủi ro bị nuốt nhất** | **`replay`** — nhưng không phải bởi hạ tầng chính thức. In-memory transport của SDK chỉ chiếm 19.2% trong nhóm có test giao thức (ngưỡng 50% → Box B KHÔNG kích hoạt). Thứ nuốt nó là **mcp-observatory** (MIT, npm `@kryptosai/mcp-observatory`, 80 bản phát hành, hơn cassette 5 tháng tuổi) — có `record`/`replay`/`verify` và một lớp `RecordingTransport` ghi JSON-RPC vào thứ chính họ gọi là *cassette*. An toàn nhất là **`check` poisoning**, và "an toàn nhất" ở đây vẫn là bị chiếm — bởi `snyk/agent-scan` (Apache-2.0, ★2913). |
-| **Điều làm tôi đổi ý nhất** | Tôi vào cuộc đo với giả thuyết của chính bộ tiêu chí: *"chưa ai test MCP ở tầng giao thức"*. Sai hẳn — hơn một nửa đã làm. Cái giết dự án là điều ngược lại hoàn toàn với thứ bộ tiêu chí được dựng để bắt: **chỗ này không trống, nó đông** — cassette là người thứ tư, và trẻ nhất 5 tháng. Ba người đi trước: `agent-vcr` (2026-02, ★7, chết sau đúng một ngày commit), `mcp-recorder` (2026-02, ★9, đứng im từ tháng 3), `mcp-observatory` (2026-03, ★176, còn sống, đẩy commit hôm qua). |
-| **Một câu** | **DỪNG** — không phải vì không ai cần (56% chứng minh ngược lại), mà vì đúng ba việc này đã có người làm xong, miễn phí, và làm trước 5 tháng. |
+| **Tính năng rủi ro bị nuốt nhất** | **`snapshot --check`** — và nó đã bị nuốt thật, không phải "rủi ro". mcp-observatory chạy `test` rồi `diff --fail-on-schema-drift high` bắt đủ cả ba thay đổi tôi cố tình gài (xoá tool, thêm tham số bắt buộc, thêm tham số tuỳ chọn), phân đúng tầng high/high/info, thoát mã 1 khi có trôi và 0 khi không. Chạy được ngay sau khi cài. An toàn nhất là **`replay`** — vì lý do ngược với điều tôi viết ở bản đầu: `replay` của observatory **không phải replay**, nó chạy kiểm tra của chính nó offline rồi trả báo cáo văn bản; không client nào cắm vào được. |
+| **Điều làm tôi đổi ý nhất** | Hai lần, ngược chiều nhau. Lần một: tôi vào cuộc với giả thuyết của chính bộ tiêu chí — *"chưa ai test MCP ở tầng giao thức"* — và sai hẳn, hơn một nửa đã làm. Lần hai, và mạnh hơn: **đọc mã nguồn đối thủ không thay được việc cài nó xuống và bấm chạy.** Tôi đã thấy `recording-transport.ts`, `replay-transport.ts`, `record`/`replay` trong `src/commands/` của observatory và kết luận `replay` bị nuốt. Cài xuống thì CLI **không có lệnh `record` lẫn `replay`** — chúng chỉ tồn tại dưới dạng MCP tool cho agent, và `replay` không phục vụ cassette như một server. Một phán quyết DỪNG suýt được ký dựa trên danh sách tên file. |
+| **Một câu** | **ĐI TIẾP, nhưng hẹp lại** — bỏ `snapshot --check` (đã có người làm xong, chạy được, hơn 5 tháng tuổi), dồn thời gian vào `replay` và `check`, là hai chỗ chưa ai làm xong mà không kèm điều kiện. |
 
 ---
 
@@ -159,10 +164,20 @@ JSON-RPC message into entries it calls `CassetteEntry`;
 removed properties, type changes), `src/commands/{record-replay,lock,diff}.ts`,
 and 83 test files.
 
-**Ranking the three features by swallow risk:** `replay` highest — three prior
-implementations, one alive and bundled into a bigger product. `snapshot --check`
-next — same tool, plus the self-write argument in §4. `check` safest, and still
-occupied, by a scanner with 2,913 stars and Snyk behind it.
+**Ranking the three features by swallow risk, after running them (§8):**
+`snapshot --check` highest, and no longer a risk but a fact — observatory does
+it today, correctly, out of the box. `check` next: constrained on both sides,
+but neither competitor closes it (agent-scan needs a Snyk account, observatory
+caught 4 of 6). `replay` safest, for the opposite of the reason this section
+originally gave — observatory's `replay` is not a replay at all, and the one
+tool that does replay properly ships broken.
+
+The observatory row above lists capability as its source tree and README present
+it. The gap between that and what the shipped CLI exposes is the subject of §8:
+`record` and `replay` exist in `src/`, and in observatory's **MCP tool surface**
+for agents, but **not as CLI commands**. `lock` likewise appears only as the
+`lock_verify` MCP tool. Of that row, the commands a CI job can actually call are
+`test`, `diff`, `verify`, `scan` and `watch`.
 
 ---
 
@@ -192,18 +207,27 @@ can fix the criteria rather than discover this again.
 **B-general (ii) and (iii):** no official SDK and not the Inspector ships session
 record/replay or contract diffing. Does not fire.
 
-### Box C — "someone already occupies it" → **FIRES ON ALL THREE**
+### Box C — "someone already occupies it" → **FIRES ON ONE OF THREE**
 
-Conditions: same job for MCP · free or already in hand · installable today from a
-published release · and more established.
+Conditions: same job for MCP (adjacent does not count) · free or already in hand
+· installable today from a published release · **and** more established. The
+frozen text adds the release valve that decides two of these three rows: *"If it
+exists but is **partial**, newer, or smaller: contested, recorded as
+supporting-against, not killing."*
 
-| Feature | Occupier | Same job | Free | Installable | More established |
+Every row below was settled by installing the tool and running it (§8), not by
+reading its README.
+
+| Feature | Candidate occupier | Same job? | Free / in hand? | Runs today? | Verdict |
 |---|---|---|---|---|---|
-| `replay` | mcp-observatory (`record`/`replay`/`verify`, RecordingTransport) | ✓ | MIT | npm v1.36.5 | 5 mo older, 80 vs 5 releases, ★176 vs ★0, 5 vs 1 contributors |
-| `snapshot --check` | mcp-observatory (`lock` + `diff` + `schema-drift` with severity tiers) | ✓ | MIT | npm v1.36.5, action v1.28.0 | as above |
-| `check` poisoning | snyk/agent-scan; also observatory's `scan` | ✓ | Apache-2.0 | `uvx snyk-agent-scan@latest` | 16 mo older, ★2913 vs ★0 |
+| `replay` | mcp-observatory | **No** — its `replay` runs *observatory's own checks* against the cassette and prints a report; nothing external can connect. Also not a CLI command, only an MCP tool for agents. | MIT | yes | condition 1 fails → **not an occupier** |
+| `replay` | mcp-recorder | Yes — `replay` really does start a mock MCP server from a cassette | OSS | **No.** A clean `pip install` crashes on start (`Starlette.__init__() got an unexpected keyword argument 'on_startup'`); only ran after manually pinning `starlette<0.42`. HTTP-only, no stdio. Stalled since 2026-03-24. | **partial → contested, not killing** |
+| `replay` | agent-vcr | claims record/replay/diff | OSS | npm 0.1.0, 4 weekly downloads, created and abandoned on 2026-02-09 | **contested, not killing** |
+| `snapshot --check` | mcp-observatory | **Yes** — `test` then `diff --fail-on-schema-drift high` caught all three planted changes at the right severities and gated correctly | MIT | **yes**, straight after install | **OCCUPIED → KILLING** |
+| `check` poisoning | snyk/agent-scan | Yes on paper | Apache-2.0 source, but **the analysis refuses to run without a `SNYK_TOKEN`**; the only offline mode (`inspect`) verifies nothing and flagged none of four poisoned tools | not without a Snyk account | condition 2 fails in substance → **contested, not killing** |
+| `check` poisoning | mcp-observatory | Partly — caught 4 of 6 findings; missed the exfiltration description and the malformed JSON Schema | MIT | yes | **partial → contested, not killing** |
 
-All three occupied. **Killing, per feature.**
+**One feature occupied: `snapshot --check`.**
 
 ### Box D — "the lazy-install barrier" → fires on nothing, but nearly took `snapshot --check`
 
@@ -218,30 +242,39 @@ nothing to the verdict, by construction.
 
 ### Verdict
 
-Frozen rule 1: **STOP** if all three features are DEAD.
-
 | Feature | B | C | D | Verdict |
 |---|---|---|---|---|
-| `replay` | no | **FIRES** | no | **DEAD** |
+| `replay` | no | no | no | **ALIVE** |
 | `snapshot --check` | no | **FIRES** | no | **DEAD** |
-| `check` poisoning | no | **FIRES** | no | **DEAD** |
+| `check` poisoning | no | no | no | **ALIVE** |
 
-→ **STOP.**
+The frozen rules, applied mechanically and in order:
 
-Said plainly, because the criteria demand the box be named even when it is this
-one: as measured against thresholds fixed before the data, mcp-cassette does not
-justify more months. Not because nobody tests MCP servers — over half do — and
-not because nobody complains, which proves nothing. Because all three things it
-does already exist, free, in tools that are older, more released, and more
-contributed to.
+1. **STOP** — needs all three DEAD, or Box A plus ≥2 DEAD. One is dead and Box A
+   did not fire. **Does not apply.**
+2. **AUDIENCE-LIMITED** — needs all three ALIVE and Box A firing. **Does not apply.**
+3. **NARROW** — ≥1 ALIVE and ≥1 DEAD, rule 1 having not fired. **Applies.**
+4. CONTINUE would also be satisfied on its own terms (2 ALIVE, Box A quiet), but
+   the rules are applied in order and rule 3 fires first. **NARROW governs.**
+
+→ **NARROW.** Continue on `replay` and `check`. Stop spending time on
+`snapshot --check` — including the schema-diff completeness work sitting open in
+[`BACKLOG.md`](../../BACKLOG.md) — regardless of how finished it already is.
+That is the frozen rule's own wording, and it is the part that costs something.
+
+Said plainly: mcp-cassette does justify more months, on two of its three
+features. Not because anybody has complained — nobody has, and that proves
+nothing — but because over half of public MCP servers already test through the
+protocol, and the two surviving features are things no free tool does today
+without an asterisk.
 
 ---
 
 ## 5. Evidence classes used
 
-**Killing evidence in this report:** exactly one kind — Box C occupancy, resting
-on released artefacts and verified source files of mcp-observatory and
-snyk/agent-scan.
+**Killing evidence in this report:** exactly one kind — Box C occupancy of
+`snapshot --check`, resting on mcp-observatory being installed, run against a
+planted breaking change, and observed to gate correctly (§8).
 
 **Supporting evidence, which moved nothing on its own:** field (b) at 52.5%
 (which argues *for* continuing and defused Box A), the 1.5% snapshot rate, the
@@ -296,23 +329,137 @@ About 15% in each direction, cancelling. Field (b)'s honest bracket is 45–60%.
 distance to the threshold is enormous. This is the one number in the report I
 would defend without qualification.
 
-**The verdict, by contrast, is fragile in a specific way.** It rests entirely on
-Box C, which rests on one repository — mcp-observatory — being what its source
-files say it is. I verified the source exists and is substantive (real transport
-decorators, a real schema differ with severity tiers, 83 test files, 5
-contributors, 80 releases). I did **not** install it, run it against a real
-server, or compare its output to cassette's. If it turns out to be impressive
-scaffolding that does not work, Box C loses its strongest occupier for `replay`
-and `snapshot --check` — though `check` would still be occupied by snyk/agent-scan
-independently, and the verdict would move from STOP to NARROW rather than to
-CONTINUE. **This is the single check most worth doing before acting on this
-report.**
+**The verdict was fragile in a specific way, and that fragility has now been
+resolved — against the first verdict.** The original STOP rested entirely on
+Box C, which rested on one repository being what its source files said it was.
+I had verified the source existed and was substantive; I had not installed it.
+Installing it moved the verdict from STOP to NARROW, exactly as this paragraph
+originally predicted it might, and for reasons the prediction got wrong: not
+because observatory is scaffolding — it works well — but because **the shipped
+CLI does not expose the features its source tree contains**, and because
+snyk/agent-scan turns out to need a vendor account. §8 has the record.
+
+**What is fragile now** is the poisoning comparison. The poisoned fixture in §8
+was written by me from cassette's own documented rule list, so it is biased in
+cassette's favour by construction; observatory catching 4 of 6 on *my* fixture
+is weaker evidence than it looks. A fixture drawn from an independent corpus —
+or from observatory's own rule list — could easily reverse the ratio. The two
+misses are at least concrete and independently checkable (an exfiltration
+instruction naming `~/.ssh/id_rsa` and a collector URL; an `inputSchema` with
+`type: "nonsense-type"`), but one hand-built fixture is not a coverage study.
+
+---
+
+## 8. The bake-off — what was actually run
+
+Everything in §4's Box C table comes from here. Two throwaway MCP servers were
+built as fixtures: `server-v1` with three tools (`add`, `slugify`, `greet`), and
+`server-v2` planting three contract changes — `slugify` removed, `add` gaining a
+**required** `precision`, `greet` gaining an **optional** `mode`. A third,
+`server-poisoned`, carries four attack shapes plus one malformed schema. Both
+tools were installed from their published releases into a clean directory, the
+way a user would get them.
+
+### Contract drift — the one cassette loses
+
+```
+mcp-cassette snapshot --check
+  [BREAKING]  slugify: tool removed (tool-removed)
+  [BREAKING]  add: parameter "precision" is now required (input-property-became-required)
+  [BREAKING]  add: parameter "precision" added (required) (input-property-added-required)
+  [DANGEROUS] greet: parameter "mode" added (input-property-added-optional)
+  → exit 1
+
+mcp-observatory diff --fail-on-schema-drift high
+  add     (tools, high): added required field 'precision', added property 'precision'
+  slugify (tools, high): removed
+  greet   (tools, info): added property 'mode'
+  → exit 1     (and exit 0 on an unchanged control run)
+```
+
+Same detections, same severity ordering, working gate, out of the box. One trap
+worth recording: `--fail-on-regression` — the obvious-looking flag — exits **0**
+here, because a removed tool counts as schema drift, not as a regression. The
+flag that works is `--fail-on-schema-drift`. Anyone benchmarking observatory with
+the wrong flag would wrongly conclude its gate is broken. Mine nearly did.
+
+Observatory's workflow is heavier (run `test` twice, keep both artifacts, then
+`diff`) against cassette's one command versus one committed file. Box C asks
+whether it does the same job, not whether it is as pleasant. It does.
+
+### Replay — where the README and the shipped CLI disagree
+
+The `mcp-observatory --help` command list contains **no `record` and no
+`replay`**. Its `verify` needs a live server and rejects a run artifact with
+`Invalid cassette file … Expected { version: 1, entries: [...] }` — a format no
+CLI command produces. Pointing cassette at observatory's own MCP server
+(`mcp-cassette check --stdio "npx @kryptosai/mcp-observatory serve"` → 13 tools,
+clean) shows where they went: `record` and `replay` ship as **MCP tools for an
+AI agent**, not as commands for a CI job or a test suite.
+
+Driven through that MCP surface, both work — `record` captured 17 entries — but
+`replay` returns *observatory's own health report*, replayed offline:
+
+```
+Replay of node (17 entries):
+  [pass] tools: Advertised capability responded with the minimal expected shape (3 items).
+  [pass] tools-invoke: 3 tool(s) found but none are safe to invoke …
+```
+
+That is not what `replay` means here. The decisive test: **rename the real
+server file away**, then connect a plain official-SDK client to
+`mcp-cassette replay session.cassette.jsonl`:
+
+```
+connected to: mcp-cassette replay
+tools/list → 3 tools: add, slugify, greet
+real server process launched: NO (only the replay binary)
+```
+
+The cassette *is* the server. Any client, any language, any test suite.
+Observatory offers no equivalent — so on this feature it is not doing the same
+job, and Box C's first condition fails.
+
+`mcp-recorder` does do the same job — with the real server renamed away, an
+official-SDK client connected to `mcp-recorder replay --port 5557` and got all
+three tools. Two caveats keep it in the "partial" column: it replays over
+**HTTP only** (most servers in the sample are stdio), and a clean
+`pip install mcp-recorder` produces a tool that **crashes on start** against
+current Starlette; it ran only after manually pinning `starlette<0.42`.
+
+### Poisoning — and the account gate
+
+On `server-poisoned`, cassette reported 5 errors and 1 warning with stable rule
+IDs (`CAS-L001` instruction override, `CAS-L003` concealment, `CAS-L005`
+sensitive material and exfiltration target, `CAS-L006` invisible Unicode,
+`CAS-L012` command execution, `CAS-C005` invalid JSON Schema), exit 1.
+Observatory found 4 — instruction override, stealth instruction, hidden Unicode,
+command execution — verdict `quarantine`, exit 1. It did not flag the
+`sync_notes` exfiltration description, and its schema-quality check rated the
+malformed `type: "nonsense-type"` schema as *info*, not an error.
+
+`snyk/agent-scan` never got that far. Both `scan --ci` and plain `scan` stop at:
+
+```
+To use Agent Scan, set the SNYK_TOKEN environment variable.
+```
+
+Its one offline mode, `inspect`, listed the four tools and verified nothing. A
+2,913-star Apache-2.0 scanner that cannot lint a server without registering for
+a vendor account is not "free and already in their hands" in the sense Law №1(b)
+means, so it does not occupy this feature — though it plainly constrains how
+much room is left in it.
+
+**Fixture bias, stated up front:** `server-poisoned` was written from
+mcp-cassette's own documented rule list. It is biased in cassette's favour and
+should be read as "observatory misses these two specific shapes", never as a
+coverage score.
 
 ---
 
 ## Unresolved questions
 
-1. Does mcp-observatory actually work? Running `npx @kryptosai/mcp-observatory record/replay/diff` against a real server, and comparing its findings to `mcp-cassette snapshot --check`, is the one experiment that could move this verdict.
-2. Is the standalone-proxy architecture (any language, no code wiring) worth a project on its own, given observatory's decorator approach requires touching the server's own code? The frozen criteria have no box for "same job, different shape".
+1. Would an independently-authored poisoned corpus reverse the 6-versus-4 result? The §8 fixture was built from cassette's own rule list, so the poisoning comparison is the weakest evidence in this report.
+2. `snapshot --check` is dead by the frozen rule, but cassette's stable rule IDs and one-command-against-a-committed-file workflow are genuinely lighter than observatory's two-artifact diff. Is that worth keeping alive as a deliberate override of the criteria — a decision for the owner, not for this report?
 3. Field (h) is structurally unmeasurable from public repositories. Is there a way to see whether internal enterprise MCP servers break their consumers — or should that question simply be dropped rather than answered with public-repo silence?
-4. `snapshot --check` survived Box D only on its classification layer, not on snapshotting. Is the rule-ID and severity-tier design genuinely better than observatory's `schema-diff.ts` tiers, or merely different?
+4. Observatory's `record`/`replay` exist as MCP tools today and are one release away from being CLI commands. If they surface, `replay` moves from ALIVE to occupied. How much warning would that give, and is there anything worth doing before it happens?
