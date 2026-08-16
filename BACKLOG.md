@@ -116,3 +116,12 @@ classify what it cannot resolve. See the Unreleased section of
 The design's four open questions go with them; none needs an answer now. The
 feature that exists keeps working and keeps being maintained — this cancels
 further investment, not the command.
+
+**Known to be better, deliberately not done.** The `$ref` guard reports once per
+tool, having scanned the whole schema. Now that the walk is recursive it could
+report at the node holding the `$ref`, with a JSON Pointer, which would be a
+more useful message. It is not being done, for two reasons worth separating: it
+is polish rather than a defect, which is exactly what the stop above is for; and
+it would change how many findings a diff produces, which is a real change for
+anyone counting them in CI. Recording it so the next reader knows the current
+shape was chosen, not overlooked.
