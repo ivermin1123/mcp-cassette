@@ -87,6 +87,54 @@ CI does exactly that in a separate weekly `smoke-canary` job, which is
 non-blocking — it warns about upstream drift without failing anyone's PR. If you
 bump the pin, do it as its own commit so the reason stays visible in history.
 
+## Changing `release.yml`
+
+`release.yml` runs only on a tag push, so there is no way to try a change before
+it matters — and the version it would break is the one you are shipping. The
+v0.2.0 release job carried two defects for exactly this reason.
+
+So prove the shell logic outside the workflow. Extract the step's script
+*verbatim* from the file rather than retyping it, put a stub `git` ahead of the
+real one on `PATH`, and run it against every ref shape you care about:
+
+```bash
+# the line range is whatever the step's `run:` block currently occupies —
+# find it with: grep -n 'Move the floating' .github/workflows/release.yml
+sed -n '104,121p' .github/workflows/release.yml | sed 's/^          //' > /tmp/step.sh
+mkdir -p /tmp/fakebin && printf '#!/bin/sh\necho "GIT $*"\n' > /tmp/fakebin/git
+chmod +x /tmp/fakebin/git
+
+for ref in v0.3.0 v0.4.0 v1.0.0 v0.4.0-rc.1; do
+  echo "--- $ref ---"
+  PATH=/tmp/fakebin:$PATH GITHUB_REF_NAME="$ref" GITHUB_SHA=deadbeef sh /tmp/step.sh
+done
+```
+
+Extracting rather than retyping is the point: a copy you typed out proves your
+copy works. Include the resulting table in the PR description.
+
+For changes that need the real registry rather than the real tag push, the
+Release workflow has a `workflow_dispatch` that runs `verify-publish` alone
+against a version already on npm. The publish job is gated to tag pushes, so a
+dispatch cannot publish.
+
+## Where decisions get written down
+
+- **[BACKLOG.md](BACKLOG.md)** — work that needs an argument before it needs
+  code, usually because it touches something consumers already depend on. If you
+  are about to add an input, a rule, or a tier, check whether it is already
+  being argued here.
+- **[README roadmap](README.md#roadmap)** — things not built yet that need no
+  argument.
+- **[RELEASING.md](RELEASING.md)** — how a release actually happens, including
+  the parts that are only discoverable by getting them wrong.
+- **`docs/`** — the published site (mcpcassette.dev) and the format and design
+  documents behind it.
+- **`plans/`** — git-ignored on purpose. Session reports, handoffs and scratch
+  notes live here and are not expected to survive a fresh clone. Anything that
+  should outlive the machine it was written on does not belong in `plans/`;
+  promote it to one of the files above.
+
 ## Commits
 
 Use [Conventional Commits](https://www.conventionalcommits.org/):
@@ -134,6 +182,8 @@ must be green before merge.
 | `src/client.ts` | `MiniClient` — the small MCP client used by `check`/`snapshot` |
 | `tests/` | Unit tests plus an end-to-end suite against a fixture server |
 | `scripts/smoke.sh` | End-to-end dogfood run against the reference server |
+| `action.yml` | The composite GitHub Action wrapping `check` and `snapshot` |
+| `BACKLOG.md` | Decisions owed before code — see above |
 
 ## Reporting security issues
 

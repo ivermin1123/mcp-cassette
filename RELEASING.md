@@ -4,7 +4,7 @@ Releases are cut by pushing a `v*` tag. The
 [`release.yml`](.github/workflows/release.yml) workflow does the rest: it
 verifies the tag matches `package.json`, runs the tests, publishes to npm with
 provenance, creates the GitHub Release with generated notes, and moves the
-floating `v0` tag onto the new release.
+floating `v0` and `v0.<minor>` tags onto the new release.
 
 Nothing is published from a laptop. If you find yourself running `npm publish`
 locally, something has gone wrong — fix the workflow instead.
@@ -36,39 +36,58 @@ it is undone:
   all. The version is pinned rather than `@latest` so a new npm major cannot
   land in the release path unannounced.
 
-## The floating `v0` tag
+## The floating tags
 
 The repository ships a GitHub Action as well as an npm package, and the two are
 distributed on completely different mechanisms. npm resolves `mcp-cassette@0.1.2`
-from the registry. `uses: ivermin1123/mcp-cassette@v0` resolves a **git ref** —
-a tag, not a range. Nothing about `@v0` means "the latest 0.x"; it means
-"whatever commit the tag `v0` currently names".
+from the registry. `uses: ivermin1123/mcp-cassette@v0.3` resolves a **git ref** —
+a tag, not a range. Nothing about `@v0.3` means "the latest 0.3.x"; it means
+"whatever commit the tag `v0.3` currently names".
 
-So the last step of `release.yml` force-moves `v0` onto the commit just
+So the last step of `release.yml` force-moves both floats onto the commit just
 released:
 
 ```bash
-git tag -f v0 "$GITHUB_SHA"
-git push -f origin refs/tags/v0
+git tag -f v0   "$GITHUB_SHA" && git push -f origin refs/tags/v0
+git tag -f v0.3 "$GITHUB_SHA" && git push -f origin refs/tags/v0.3
 ```
 
-Three properties of that step are deliberate:
+Two floats, because one cannot express both promises. While the major version is
+`0` a minor may break, so `@v0` cannot be the recommended pin — 0.3.0 moved it
+onto eight new lint rules, three at `error`, and consumers who had changed
+nothing saw a red gate. `@v0.<minor>` only ever gains patches, which is what
+[the README recommends](README.md#which-tag-to-pin); `@v0` stays for people who
+want every release and have said so.
+
+Four properties of that step are deliberate:
 
 - **It runs last.** npm and the GitHub Release both have to succeed first, so
-  `@v0` can never resolve to a version that failed to ship.
-- **The major is derived from the tag** (`v0.1.2` → `v0`), so nothing needs
-  editing at v1. The step keeps working across the major bump.
-- **Prereleases are skipped.** A `v0.2.0-rc.1` tag leaves `v0` where it is —
-  a release candidate must not become what every consumer's `@v0` points at.
+  neither float can resolve to a version that failed to ship.
+- **Both names are derived from the tag** (`v0.3.1` → `v0` and `v0.3`), so
+  nothing needs editing at v1 or at any new minor. The step keeps working across
+  both bumps.
+- **Prereleases are skipped**, and the check happens *before* the names are
+  derived. A `v0.2.0-rc.1` tag leaves both floats where they are — a release
+  candidate must not become what a consumer's pin points at — and `%.*` on such
+  a tag would yield `v0.2.0-rc`, which is nobody's float and should not reach a
+  log line.
+- **The floats move by force-push, which does not re-trigger this workflow.**
+  Pushes made with `GITHUB_TOKEN` do not start new runs, so the step cannot
+  recurse. A float pushed *by hand* does start a run, and that run fails at the
+  version check — see [BACKLOG.md](BACKLOG.md).
 
-Without this step the action is not broken in any way CI would catch: `v0`
-simply stays frozen at the first release it was cut from, consumers pin to it
+Without this step the action is not broken in any way CI would catch: the floats
+simply stay frozen at the release they were cut from, consumers pin to them
 happily, and no one ever receives an update. That failure is silent, which is
 why the mechanism is written down here rather than left to whoever cut the tag.
 
 A floating tag is mutable by design, which is the trade GitHub's own actions
 make. Anyone who wants immutability pins a full version (`@v0.1.2`) or a commit
-SHA, and both keep working — moving `v0` never rewrites the tag it moved from.
+SHA, and both keep working — moving a float never rewrites the tag it moved
+from. The same mutability is why a local checkout lies about them: `git fetch`
+will not clobber an existing local tag ref, so `git rev-parse v0` keeps
+answering with the SHA from whenever you last force-fetched. Use
+`git ls-remote --tags origin` when the answer has to be true.
 
 ### One-time setup: the trusted publisher
 
@@ -183,16 +202,23 @@ block again and revoke the token.
    npx mcp-cassette@latest check --stdio "npx -y @modelcontextprotocol/server-everything stdio"
    ```
 
-8. **Confirm `v0` moved**, so the action consumers pin actually updated:
+8. **Confirm both floats moved**, so the action consumers pin actually updated:
 
    ```bash
-   git fetch --tags --force
-   git rev-parse v0 v0.1.2      # both must print the same SHA
+   git ls-remote --tags origin | grep -E 'refs/tags/(v0|v0\.1|v0\.1\.2)$'
+   # all three lines must show the same SHA
    ```
 
-   They will disagree if the release run stopped before its last step. Fix it
-   by moving the tag by hand — `git tag -f v0 v0.1.2 && git push -f origin
-   refs/tags/v0` — rather than by cutting another release.
+   Ask the remote, not the checkout: `git fetch` refuses to clobber an existing
+   local tag ref, so `git rev-parse v0` will keep reporting the previous
+   release's SHA until you `git fetch --tags --force`. The remote listing needs
+   no local state to be right.
+
+   They will disagree if the release run stopped before its last step. Fix it by
+   moving the tags by hand — `git tag -f v0 v0.1.2 && git push -f origin
+   refs/tags/v0`, and the same for `v0.1` — rather than by cutting another
+   release. Expect each hand push to leave one failed Release run behind; that
+   is the version gate doing its job, not a broken release.
 
 ## If a release fails
 
