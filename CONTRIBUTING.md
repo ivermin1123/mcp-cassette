@@ -11,6 +11,26 @@ saves you from writing code that doesn't fit the direction, and it gives the
 change a place to be designed in the open. Small fixes — a bug, a typo, a
 missing edge case — go straight to a PR.
 
+## Language
+
+**Everything committed to this repository is in English.** Code, comments, docs,
+research reports, commit messages, issues, PR descriptions — all of it, with no
+exception for a file that "only the owner will read". A repository is read by
+strangers, and a document a stranger cannot read cannot be checked, which is the
+whole point of publishing the research files.
+
+This is a rule about the repository, not about conversation. Working in another
+language while a change is being built is fine; what lands in a commit is
+English.
+
+The rule was written down after two research documents were drafted in
+Vietnamese and had to be translated afterwards. Translating a **frozen** document
+is the expensive part: `docs/research/00-kill-criteria.md` had to be re-expressed
+in another language after its answers were already known, which is exactly the
+moment when softening a threshold is tempting and invisible. If you ever have to
+do this, translate only — hold the numbers, the structure, and the self-criticism
+where they are, and prove it with a diff a reviewer can check.
+
 ## Dev setup
 
 Requires Node.js >= 20.

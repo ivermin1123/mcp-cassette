@@ -8,26 +8,28 @@ sold"*.
 
 ---
 
-## BÀN GIAO
+## HANDOVER
 
-> **Cập nhật sau khi chạy thí nghiệm quyết định (§8).** Bản đầu của báo cáo này
-> kết luận **DỪNG**, dựa trên README và mã nguồn của đối thủ mà chưa cài, chưa
-> chạy. Đã cài và chạy cả ba đối thủ. **Phán quyết đổi thành NARROW.** Phần dưới
-> là kết luận sau thí nghiệm; §8 ghi lại đã chạy gì và cái gì lật.
+> **Updated after running the decisive experiment (§8).** The first draft of this
+> report concluded **STOP**, on the strength of the competitors' READMEs and
+> source code, without installing or running any of them. All three have now been
+> installed and run. **The verdict changes to NARROW.** What follows is the
+> post-experiment conclusion; §8 records what was run and what it overturned.
 >
-> **Hiệu chỉnh sau phản biện coordinator (§9).** Coordinator chỉ ra §8 vẫn bỏ sót
-> hai lệnh của đối thủ, vì tôi đọc `--help` qua `head -35` và bị cắt. Đã chạy lại
-> `lock create`/`lock verify` và `audit`. Phán quyết tổng **không đổi**, nhưng
-> cửa thoát cuối của `snapshot --check` đóng lại, và con số 4/6 giờ đến từ đúng
-> cổng bảo mật của họ chứ không phải một lệnh không nêu tên.
+> **Corrected after coordinator review (§9).** The coordinator pointed out that §8
+> still missed two of a competitor's commands, because I read `--help` through
+> `head -35` and it was truncated. `lock create`/`lock verify` and `audit` have
+> been re-run. The overall verdict is **unchanged**, but the last escape hatch for
+> `snapshot --check` closes, and the 4/6 figure now comes from their actual
+> security gate rather than from a command I never named.
 
 | | |
 |---|---|
-| **Rơi vào ô nào** | **NARROW** (thu hẹp). Một tính năng chết, hai tính năng sống. Luật đã khoá, áp theo thứ tự: quy tắc 1 (STOP) không kích hoạt vì chỉ 1 trong 3 chết; quy tắc 3 (NARROW) kích hoạt. Chết: **`snapshot --check`**. Sống: **`replay`** và **`check` poisoning**. |
-| **Tỉ lệ trường (b)** | **52.5% chặt / 56.3% lỏng** (83 / 89 trên 158 server). Ngưỡng là **<15% VÀ <12 repo**. Không chạm ngưỡng, thậm chí không gần. **Box A KHÔNG kích hoạt.** |
-| **Tính năng rủi ro bị nuốt nhất** | **`snapshot --check`** — và nó đã bị nuốt thật, không phải "rủi ro". mcp-observatory chạy `test` rồi `diff --fail-on-schema-drift high` bắt đủ cả ba thay đổi tôi cố tình gài (xoá tool, thêm tham số bắt buộc, thêm tham số tuỳ chọn), phân đúng tầng high/high/info, thoát mã 1 khi có trôi và 0 khi không. Chạy được ngay sau khi cài. An toàn nhất là **`replay`** — vì lý do ngược với điều tôi viết ở bản đầu: `replay` của observatory **không phải replay**, nó chạy kiểm tra của chính nó offline rồi trả báo cáo văn bản; không client nào cắm vào được. |
-| **Điều làm tôi đổi ý nhất** | Hai lần, ngược chiều nhau. Lần một: tôi vào cuộc với giả thuyết của chính bộ tiêu chí — *"chưa ai test MCP ở tầng giao thức"* — và sai hẳn, hơn một nửa đã làm. Lần hai, và mạnh hơn: **đọc mã nguồn đối thủ không thay được việc cài nó xuống và bấm chạy.** Tôi đã thấy `recording-transport.ts`, `replay-transport.ts`, `record`/`replay` trong `src/commands/` của observatory và kết luận `replay` bị nuốt. Cài xuống thì CLI **không có lệnh `record` lẫn `replay`** — chúng chỉ tồn tại dưới dạng MCP tool cho agent, và `replay` không phục vụ cassette như một server. Một phán quyết DỪNG suýt được ký dựa trên danh sách tên file. |
-| **Một câu** | **ĐI TIẾP, nhưng hẹp lại** — bỏ `snapshot --check` (đã có người làm xong, chạy được, hơn 5 tháng tuổi), dồn thời gian vào `replay` và `check`, là hai chỗ chưa ai làm xong mà không kèm điều kiện. |
+| **Which box it lands in** | **NARROW**. One feature dead, two alive. The frozen rules, applied in order: rule 1 (STOP) does not fire because only 1 of 3 is dead; rule 3 (NARROW) fires. Dead: **`snapshot --check`**. Alive: **`replay`** and **`check` poisoning**. |
+| **Field (b) rate** | **52.5% strict / 56.3% loose** (83 / 89 of 158 servers). The threshold is **<15% AND <12 repositories**. Not reached, not even close. **Box A does NOT fire.** |
+| **Feature at greatest swallow risk** | **`snapshot --check`** — and it has genuinely been swallowed, not merely "at risk". mcp-observatory running `test` and then `diff --fail-on-schema-drift high` caught all three changes I planted (tool removed, required parameter added, optional parameter added), tiered them correctly as high/high/info, and exited 1 on drift and 0 without it. Working straight after install. The safest is **`replay`** — for the opposite of the reason I gave in the first draft: observatory's `replay` **is not a replay**; it runs its own checks offline and returns a text report, and no client can connect to it. |
+| **What changed my mind most** | Twice, in opposite directions. First: I went in holding the criteria's own hypothesis — *"nobody tests MCP at the protocol layer"* — and was flatly wrong; more than half do. Second, and more forcefully: **reading a competitor's source is no substitute for installing it and pressing run.** I had seen `recording-transport.ts`, `replay-transport.ts`, and `record`/`replay` under observatory's `src/commands/`, and concluded `replay` was swallowed. Installed, the CLI has **neither a `record` nor a `replay` command** — they exist only as MCP tools for an agent, and its `replay` does not serve a cassette as a server. A STOP verdict was nearly signed on the strength of a list of filenames. |
+| **In one sentence** | **CONTINUE, but narrower** — drop `snapshot --check` (someone has already finished it, it works, and it is over 5 months old), and put the time into `replay` and `check`, the two places nobody has finished without an asterisk. |
 
 ---
 
@@ -463,122 +465,128 @@ coverage score.
 
 ---
 
-## 9. Hiệu chỉnh sau phản biện coordinator
+## 9. Correction after coordinator review
 
-Coordinator chỉ ra hai lỗ. Cả hai đều đúng, và cả hai đều do **cùng một sai lầm
-tôi đã tự ghi vào §8 rồi vẫn mắc lại**: kết luận về đối thủ dựa trên thứ mình
-nhìn thấy, chứ không phải thứ mình chạy. Lần này cơ chế khác — không phải đọc
-README, mà là **cắt output**.
+The coordinator pointed out two holes. Both are correct, and both come from **the
+same mistake I had already written down in §8 and then made again**: concluding
+things about a competitor from what I looked at rather than from what I ran. The
+mechanism differed this time — not an unread README, but **truncated output**.
 
-Không mở đợt đo mới, không đổi tiêu chí đã khoá. Chỉ chạy hai phép thử.
+No new measurement round was opened and no frozen criterion was changed. Only two
+tests were run.
 
-### 9.0 Gói đã cài — xác minh trước, vì mọi thứ khác phụ thuộc vào nó
+### 9.0 Which package was installed — verified first, because everything else rests on it
 
-Coordinator cảnh báo gói npm tên trần `mcp-observatory` là placeholder. Đã kiểm:
-gói tên trần là `1.0.0`, `bin: null`, mô tả *"MCP Observatory - Coming Soon"*.
-Gói tôi đã cài và chạy suốt §8 là `@kryptosai/mcp-observatory@1.36.5`, đúng gói
-coordinator xác nhận. **Không phải cài nhầm, nên không phải đo lại từ đầu.**
+The coordinator warned that the bare npm name `mcp-observatory` is a placeholder.
+Checked: the bare-name package is `1.0.0`, `bin: null`, described as *"MCP
+Observatory - Coming Soon"*. The package I installed and ran throughout §8 is
+`@kryptosai/mcp-observatory@1.36.5`, the one the coordinator confirmed. **Not the
+wrong package, so nothing has to be measured again from scratch.**
 
-### 9.1 Lỗi gốc: `head -35`
+### 9.1 The root error: `head -35`
 
-Cả hai lỗ có chung một nguyên nhân. Tôi đọc danh sách lệnh bằng
-`--help | head -35`, và nó cắt đúng sau `setup-ci`. Chín lệnh biến mất khỏi tầm
-nhìn của tôi: **`lock`**, **`audit`**, `enforce`, `receipt`, `risk-graph`,
-`attack-sim`, `skill-scan`, `cloud`, `smithery`.
+Both holes share one cause. I read the command list with `--help | head -35`, and
+it cut off right after `setup-ci`. Nine commands disappeared from my view:
+**`lock`**, **`audit`**, `enforce`, `receipt`, `risk-graph`, `attack-sim`,
+`skill-scan`, `cloud`, `smithery`.
 
-Mọi câu trong §8 nói observatory "không có" một thứ gì đó đều được viết dựa trên
-danh sách bị cắt đó. §8 tự cảnh báo về việc dùng sai flag rồi vẫn dùng sai lệnh.
+Every sentence in §8 saying observatory "does not have" something was written
+against that truncated list. §8 warns about using the wrong flag, and then goes on
+to use the wrong command.
 
-### 9.2 LỖ 1 — `lock create` / `lock verify`: lợi thế công thái học KHÔNG TỒN TẠI
+### 9.2 HOLE 1 — `lock create` / `lock verify`: the ergonomic advantage DOES NOT EXIST
 
-Chạy thật trên đúng server mồi cũ:
+Actually run, against the same fixture servers as before:
 
 ```
 mcp-observatory lock create --config ./cfg.json     → .mcp-observatory/lock.json
-mcp-observatory lock verify --config ./cfg.json     → exit 0   (không đổi gì)
-# trỏ cfg sang v2 (hợp đồng đã đổi)
+mcp-observatory lock verify --config ./cfg.json     → exit 0   (nothing changed)
+# point cfg at v2 (the contract has changed)
 mcp-observatory lock verify --config ./cfg.json     → exit 1
     → tools/slugify: removed
     → tools/add: schema changed
     → tools/greet: schema changed
 ```
 
-Đếm, không cảm nhận:
+Counted, not felt:
 
-| | lệnh để đi từ zero tới "CI đỏ khi hợp đồng đổi" | file phải commit |
+| | commands to get from zero to "CI red when the contract changes" | files to commit |
 |---|---|---|
 | `mcp-cassette` | **2** (`snapshot`, `snapshot --check`) | **1** (`mcp-contract.snapshot.json`) |
 | `mcp-observatory` | **2** (`lock create`, `lock verify`) | **2** (`cfg.json` + `lock.json`) |
 
-**Cùng số lệnh. Chênh đúng một file cấu hình** — và file đó là MCP config chuẩn,
-thứ nhiều dự án đã có sẵn.
+**The same number of commands. Exactly one configuration file apart** — and that
+file is a standard MCP config, something many projects already have.
 
-Kết luận §8 rằng họ cần "hai run artifact" là **sai**: đó là mô tả đường `diff`,
-là đường duy nhất tôi tìm thấy vì `lock` đã bị `head -35` cắt mất. **Lợi thế công
-thái học mà báo cáo nêu không tồn tại**, và câu hỏi mở #2 của §8 — "có đáng giữ
-`snapshot --check` sống như một quyết định cố ý đè lên tiêu chí không" — mất căn
-cứ. Cửa thoát duy nhất của `snapshot --check` đóng lại. Phán quyết **CHẾT** cho
-tính năng này không đổi, nhưng bây giờ nó đứng vững hơn trước, không phải yếu đi.
+§8's conclusion that they need "two run artifacts" is **wrong**: that describes
+the `diff` path, the only path I found because `head -35` had cut `lock` away.
+**The ergonomic advantage the report claimed does not exist**, and §8's open
+question #2 — whether `snapshot --check` is worth keeping alive as a deliberate
+override of the criteria — loses its premise. The one escape hatch `snapshot
+--check` had closes. The **DEAD** verdict for this feature is unchanged, but it
+now stands on firmer ground than before, not weaker.
 
-Một khác biệt còn lại, ghi làm quan sát và **không** nâng thành cửa thoát mới:
-`lock verify` báo `tools/add: schema changed`, còn `snapshot --check` báo
+One remaining difference, recorded as an observation and **not** promoted into a
+new escape hatch: `lock verify` reports `tools/add: schema changed`, while
+`snapshot --check` reports
 `[BREAKING] add: parameter "precision" is now required (input-property-became-required)`
-— có tầng và có rule ID ổn định. Đó là khác biệt về độ mịn của đầu ra, không phải
-về quy trình, và một mình nó không lật được ô Box C.
+— tiered, with a stable rule ID. That is a difference in output granularity, not
+in workflow, and on its own it does not overturn Box C.
 
-### 9.3 LỖ 2 — chạy lại bằng `audit`: vẫn 4/6, nhưng lần này có nêu tên lệnh
+### 9.3 HOLE 2 — re-run with `audit`: still 4/6, but this time the command is named
 
-§8 viết "observatory bắt 4 trên 6" mà **không nói đã chạy lệnh nào** — tự vi phạm
-tiêu chuẩn mà chính §8 đặt ra. Con số đó đến từ `test --security`. Cổng bảo mật
-thật là `audit`.
+§8 wrote "observatory caught 4 of 6" **without saying which command was run** —
+breaking the standard §8 itself had set. That figure came from `test --security`.
+The real security gate is `audit`.
 
-Chạy lại trên đúng fixture độc cũ:
+Re-run against the same poisoned fixture:
 
 ```
 mcp-observatory audit --profile nsa-mcp --fail-on-high node server-poisoned.mjs   → exit 1
 ```
 
-Lưu ý cách gọi: truyền lệnh server thành **argv rời**. Truyền dạng chuỗi trong
-ngoặc kép (`"node …"`) làm audit không dựng nổi phiên stdio và trả về
-`run/fatal-error` — đúng cái bẫy §8 đã ghi với `--fail-on-regression`, gặp lại
-lần thứ hai trong cùng một buổi.
+Note the invocation: the server command is passed as **separate argv**. Passing it
+as a quoted string (`"node …"`) leaves audit unable to establish a stdio session
+and it returns `run/fatal-error` — the same trap §8 recorded for
+`--fail-on-regression`, met a second time in the same sitting.
 
-Đối chiếu trên 6 dạng đã gài:
+Compared across the 6 planted shapes:
 
-| # | dạng gài | `audit` | rule của họ |
+| # | planted shape | `audit` | their rule |
 |---|---|---|---|
-| 1 | ghi đè chỉ thị (`read_notes`) | ✔ | `attack-sim/tool-poisoning/hidden-instruction` |
-| 2 | chỉ thị giấu người dùng (`read_notes`) | ✔ | `attack-sim/tool-poisoning/stealth-instruction` |
-| 3 | rút dữ liệu ra URL ngoài (`sync_notes`) | ✘ | — không finding nào nhắc `sync_notes` |
-| 4 | Unicode tàng hình (`summarize`) | ✔ | `unicode-obfuscation-description` |
-| 5 | lệnh shell trong mô tả (`summarize`) | ✔ | `shell-injection` |
-| 6 | `inputSchema` không hợp lệ | ✘ | chỉ `info` "missing description" |
+| 1 | instruction override (`read_notes`) | ✔ | `attack-sim/tool-poisoning/hidden-instruction` |
+| 2 | instruction concealed from the user (`read_notes`) | ✔ | `attack-sim/tool-poisoning/stealth-instruction` |
+| 3 | exfiltration to an external URL (`sync_notes`) | ✘ | — no finding mentions `sync_notes` |
+| 4 | invisible Unicode (`summarize`) | ✔ | `unicode-obfuscation-description` |
+| 5 | shell command in the description (`summarize`) | ✔ | `shell-injection` |
+| 6 | invalid `inputSchema` | ✘ | only `info` "missing description" |
 
-**Vẫn 4/6, và sót đúng hai chỗ cũ.** Đã thử profile khác: chỉ tồn tại một profile
-(`nsa-mcp`) — công cụ tự trả lời `Available profiles: nsa-mcp`.
+**Still 4/6, missing exactly the same two.** Another profile was tried: only one
+profile exists (`nsa-mcp`) — the tool answers `Available profiles: nsa-mcp`
+itself.
 
-Vậy điểm "`check` SỐNG" **không phải hạ**. Nhưng lý do phải sửa: §8 dựa vào
-`test --security` và không nói ra; giờ nó dựa vào cổng bảo mật thật, có nêu tên
-lệnh, và ra cùng con số.
+So the "`check` is ALIVE" finding is **not** downgraded. But its reasoning had to
+be repaired: §8 rested on `test --security` without saying so; it now rests on the
+real security gate, names the command, and produces the same number.
 
-### 9.4 Fixture độc vẫn là bằng chứng yếu nhất
+### 9.4 The poisoned fixture is still the weakest evidence here
 
-Kết quả không đổi chiều, nên không có gì để cám dỗ. Nhưng ghi lại cho rõ: fixture
-vẫn do tôi viết từ danh sách rule của mcp-cassette, vẫn thiên vị theo cấu tạo,
-và việc nó sống sót qua một lần chạy lại bằng lệnh đúng **không** nâng nó lên
-hạng bằng chứng mạnh. Câu hỏi mở #1 giữ nguyên.
+The result did not change direction, so there was nothing to be tempted by. But to
+say it plainly: the fixture is still one I wrote from mcp-cassette's own rule
+list, still biased by construction, and surviving a re-run with the correct
+command does **not** promote it to strong evidence. Open question #1 stands.
 
-### 9.5 Điều mục này đổi và không đổi
+### 9.5 What this section changes and what it does not
 
-| | trước hiệu chỉnh | sau |
+| | before the correction | after |
 |---|---|---|
-| Phán quyết tổng | NARROW | **NARROW** (không đổi) |
-| `snapshot --check` | CHẾT, còn một cửa thoát công thái học | **CHẾT**, cửa thoát đã đóng |
-| `check` poisoning | SỐNG, đếm 4/6 từ lệnh không nêu tên | **SỐNG**, đếm 4/6 từ `audit`, có nêu tên |
-| `replay` | SỐNG | **SỐNG** (không có phép thử mới) |
+| Overall verdict | NARROW | **NARROW** (unchanged) |
+| `snapshot --check` | DEAD, with one ergonomic escape hatch left | **DEAD**, the escape hatch is closed |
+| `check` poisoning | ALIVE, 4/6 counted from an unnamed command | **ALIVE**, 4/6 counted from `audit`, named |
+| `replay` | ALIVE | **ALIVE** (no new test was run) |
 
-Việc code đi theo: schema-diff dừng hẳn sau khi vá xong hai defect đã tái hiện
-được. Chi tiết trong [BACKLOG.md](../../BACKLOG.md).
+The consequence for the code: schema-diff stops entirely once the two reproducible
+defects are patched. Details in [BACKLOG.md](../../BACKLOG.md).
 
 ---
 
