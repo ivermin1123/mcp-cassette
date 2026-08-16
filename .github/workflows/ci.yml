@@ -44,6 +44,31 @@ jobs:
         env:
           FAST_CHECK_SEED: '20260815'
 
+  # The safety lint reads text an attacker wrote. A pattern with catastrophic
+  # backtracking would turn the job that inspects a hostile tool into a denial
+  # of service against itself, so "these regexes look fine" is not the standard:
+  # recheck decides it by analysis. It also fails when a rule matches with a
+  # regex it never published, which is how a new pattern could otherwise slip
+  # past the gate.
+  regex:
+    name: regex (every lint pattern proven free of blowup)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Analyse every pattern in LINT_RULES
+        run: node scripts/recheck-rules.mjs
+
   smoke:
     name: smoke (dogfood the CLI end-to-end)
     runs-on: ubuntu-latest
