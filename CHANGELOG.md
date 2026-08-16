@@ -6,17 +6,34 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
-## [Unreleased]
+## [0.4.0] - 2026-08-16
+
+Two things this tool claimed to do, and did not. `snapshot --check` stayed
+silent on breaking changes nested inside a schema, and every SARIF document
+`check` produced was accepted by GitHub code scanning and then thrown away
+without creating a single alert. Both are fixed here.
+
+That is also why this is a release rather than a wait. A feature that is
+frozen tells you nothing; a feature that answers wrongly tells you something
+false, and 0.3.0 is on npm answering wrongly today.
 
 ### BREAKING
 
-- `snapshot --check` now walks nested schemas. Previously the conservative
+- **`snapshot --check` now walks nested schemas.** Previously the conservative
   fallback asked whether the *whole tool* had produced any finding, so a single
   `minor` at the root swallowed every breaking change underneath it. A tool
   that exists to catch silent contract drift was producing silent contract
-  drift. The fallback is now per node. **This can turn a previously green build
-  red without anyone changing their server**, in exactly the cases where it
-  should have been red already. `--fail-on` remains the release valve.
+  drift. The fallback is now per node.
+
+  *What you see:* a build that was green under 0.3.0 can go red against a
+  server nobody touched. The diff reports breaking changes that were always
+  there and were being hidden by a `minor` finding above them in the same tool.
+
+  *What to do:* read the findings before assuming a regression in your server.
+  In every case this changes, the correct answer under 0.3.0 was already red;
+  what moved is whether you were told. If you need to land the release first
+  and deal with the contract after, `--fail-on` remains the release valve, and
+  the rule ids in the output are the list of what to come back to.
 
 ### Fixed
 
@@ -31,12 +48,54 @@ below.
   `input-annotation-changed` at `info` instead of landing in the
   conservative-breaking bucket. Editing prose was turning consumers' CI red.
 
+- **The `$ref` guard was hiding the findings it sits next to.** The guard
+  returned as soon as it saw a `$ref` anywhere in either schema, so a removed
+  parameter went unreported when a reference happened to sit in a sibling
+  property: the diff said `input-schema-ref-unclassified` alone where it should
+  have said `input-property-removed` as well. The walk now runs to completion
+  and the guard is appended rather than substituted. Same defect class as the
+  per-tool fallback above, and it survived for the same reason: no probe had
+  ever put a reference beside a concrete change.
+
+- **GitHub code scanning kept none of the findings `check --format sarif`
+  produced.** Every document uploaded successfully and was then discarded with
+  `locationFromSarifResult: expected a physical location`, once per finding,
+  creating no alerts. 0.3.0 shipped `logicalLocations` only, on the reasoning
+  that `check` inspects a live server so there is no file to point at. The
+  reasoning was half right: there is no *source* file, but there is a committed
+  contract snapshot, and that is where a reader goes to see what a server
+  advertises. Findings now carry a `physicalLocation` anchored to a real file at
+  a real line, `logicalLocations` is kept alongside for consumers that read it,
+  and the anchor is never invented: a path outside the working directory is an
+  error rather than a silent downgrade. Verified against code scanning itself,
+  not only against the schema.
+
 ### Added
 
 - `input-schema-ref-unclassified` (breaking). Reference resolution is not
   implemented, so when a changed schema contains `$ref` the diff says that
   plainly rather than emitting a specific rule ID about a shape it never
   resolved.
+
+- **`check --sarif-location <file>`**: name the file SARIF findings anchor to.
+  Left unset, the anchor is resolved in a stated order (an existing
+  `mcp-contract.snapshot.json`, then the server script from `--stdio` when a
+  token of it is a real file), and when nothing resolves the document is still
+  emitted and `check` warns on stderr that code scanning will drop every
+  result. Silence was the old behaviour and it cost every alert.
+
+### Changed
+
+- The strings the program prints were rewritten to drop the punctuation that
+  reads as machine-made: 68 strings across 22 files, including the npm
+  description, every `--help` line, the error and warning text, the pull-request
+  comment `action.yml` renders, and the message half of the lint and SARIF
+  rules. Information is unchanged in every one; only the punctuation joining
+  the clauses moved. The five tests that pinned those sentences were updated in
+  the same change, because a test that pins a sentence is the contract for it.
+
+- The README now states the scope boundary of `snapshot --check` directly:
+  what it compares, and what it does not resolve.
 
 ### Note
 
@@ -241,6 +300,7 @@ Packaging fixes for the first release.
 First public release: stdio record/replay, contract snapshots, safety checks,
 secrets redaction, and the `verify` command.
 
+[0.4.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.4.0
 [0.3.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.2.0
 [0.1.2]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.1.2
