@@ -80,6 +80,10 @@ runs:
           *) echo "::error::comment must be true or false (got '$COMMENT')"; exit 1 ;;
         esac
 
+        case "$VERSION" in
+          ''|*[!0-9A-Za-z.+-]*) echo "::error::version must be 'local' or a version string (got '$VERSION')"; exit 1 ;;
+        esac
+
         if [ "$VERSION" = "local" ]; then
           CLI_BIN="$ACTION_PATH/dist/cli.js"
           if [ ! -f "$CLI_BIN" ]; then
@@ -88,7 +92,26 @@ runs:
           fi
           echo "cli=node $CLI_BIN" >> "$GITHUB_OUTPUT"
         else
-          echo "cli=npx -y mcp-cassette@$VERSION" >> "$GITHUB_OUTPUT"
+          # npx resolves a package against the *local project* before the
+          # registry, and a bare name match is enough: from a checkout of
+          # mcp-cassette itself, this package.json's `bin.mcp-cassette` makes
+          # npx discard the `@$VERSION` pin entirely. On a runner with no
+          # node_modules that is `sh: 1: mcp-cassette: not found` (exit 127);
+          # on a machine that has a stale build it is worse — the wrong
+          # version answers and exits 0, so a release nobody tested reads as
+          # verified.
+          #
+          # `--prefix` moves where the CLI is *resolved* without moving the
+          # process cwd, so `server-command` and `snapshot-file` still resolve
+          # against the caller's checkout. Those two directories are separate
+          # on purpose and must not be collapsed back into one.
+          #
+          # Harmless for consumers, whose repo is not named mcp-cassette — but
+          # it is exactly how this repo dogfoods the action against its own
+          # published tarball in the release workflow's verify-publish job.
+          CLI_PREFIX="$RUNNER_TEMP/mcp-cassette-cli-$VERSION"
+          mkdir -p "$CLI_PREFIX"
+          echo "cli=npx --prefer-online --prefix $CLI_PREFIX -y mcp-cassette@$VERSION" >> "$GITHUB_OUTPUT"
         fi
 
     # `check` and `snapshot` record their exit codes instead of aborting: the
