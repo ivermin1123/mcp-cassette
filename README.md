@@ -482,7 +482,9 @@ The hash is not a security boundary. It is an unsalted, truncated SHA-256 of the
 
 ## Roadmap
 
-Configurable redaction rules, `vitest`/`jest` + `pytest` adapters, a GitHub Action, smarter replay matching (custom matchers, volatile-field config), server-initiated flows (tasks/MRTR), scenario `state`/`seq`, `Last-Event-ID` resumability, and contributed scenarios for the official conformance suite. Issues and PRs welcome.
+Configurable redaction rules, a `jest` adapter, a GitHub Action, smarter replay matching (custom matchers, volatile-field config), server-initiated flows (tasks/MRTR), scenario `state`/`seq`, `Last-Event-ID` resumability, and contributed scenarios for the official conformance suite. Issues and PRs welcome.
+
+A `pytest` adapter was on this list and is cancelled. A second, unrelated `mcp-cassette` has been on PyPI since 2026-07-25 and already ships a pytest plugin, so a `pytest-mcp-cassette` published beside it would read as that tool's adapter no matter what its README said. The measurement and the decision are in [`docs/research/02-name-collision.md`](docs/research/02-name-collision.md).
 
 Changes that need an argument before they need code, meaning anything that could turn a passing gate red, are worked out in [BACKLOG.md](BACKLOG.md) first.
 

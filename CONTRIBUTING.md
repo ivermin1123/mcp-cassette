@@ -62,6 +62,20 @@ risk map in the same file, and the fixture pair in `tests/lint-rules.test.ts`.
 The `CAS-C*` ids are under the same law but have no freeze gate; they live in
 `src/check.ts` and `src/sarif.ts`.
 
+## Negative claims decay
+
+**"This exists" stays true. "Nobody has done this" and "the name is free" stop
+being true the moment someone publishes.** Any negative claim in this repository
+carries the date it was measured and the URL that was opened, and is re-measured
+at the moment a decision rests on it. It is never inherited from an earlier
+document.
+
+The rule was written down after a research sweep dated 2026-08-16 listed the
+tools doing this job, and a second `mcp-cassette` had been on PyPI since
+2026-07-25 the whole time. One planned feature was built on the sweep's silence
+and had to be cancelled a day later:
+[`docs/research/02-name-collision.md`](docs/research/02-name-collision.md).
+
 ## Dev setup
 
 Requires Node.js >= 20.
