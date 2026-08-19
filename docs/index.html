@@ -217,6 +217,8 @@ footer {
   <li><strong>Catch poisoned tools.</strong> <code>check</code> lints tool descriptions for the
   known shapes of tool-poisoning attacks (instruction overrides, concealment directives,
   exfiltration URLs, invisible Unicode) and validates every schema (draft-07 and 2020-12).
+  That is prompt injection with the payload in the tool description rather than the user's
+  message: untrusted text your agent reads as instructions and a user rarely sees at all.
   Heuristics, not proofs: treat findings as review triggers, and pair with a dedicated security
   scanner for depth.</li>
 </ul>

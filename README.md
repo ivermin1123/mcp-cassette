@@ -67,7 +67,7 @@ mcp-cassette snapshot --check --stdio "node dist/my-server.js"
 result: FAIL (2 breaking, 1 dangerous, 0 minor, 0 info; gate: breaking)
 ```
 
-**A poisoned tool description is a finding, not a surprise.** Sixteen rules, each citing the OWASP MCP Top 10 risk and SAFE-MCP technique it implements.
+**A poisoned tool description is a finding, not a surprise.** Prompt injection does not need a user to type it; it arrives in the tool description your agent was never going to show anyone. Sixteen rules, each citing the OWASP MCP Top 10 risk and SAFE-MCP technique it implements.
 
 ```bash
 mcp-cassette check --stdio "node dist/my-server.js" --format sarif --sarif-location mcp-contract.snapshot.json > mcp-cassette.sarif
