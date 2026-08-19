@@ -215,7 +215,7 @@ footer {
 
 <p>A test suite for an MCP client needs a server. There are two usual ways to get one, and both charge you.</p>
 
-<p><strong>Run the real server.</strong> Correct by construction, and it costs what real things cost: credentials in CI, rate limits, network failures you did not schedule, state that survives runs, and a counterparty free to change its answers without telling you. Tolerable once; not on every push.</p>
+<p><strong>Run the real server.</strong> Correct by construction, and it costs what real things cost: credentials in CI, rate limits, flaky network failures you did not schedule, state that survives runs, and a counterparty free to change its answers without telling you. Tolerable once; not on every push.</p>
 
 <p><strong>Write a fake and run it in the same process.</strong> Fast, hermetic, no credentials, and two properties easy to miss while writing it. It is a library for one language, so a team with clients in two languages writes and maintains two fakes. And it is assembled from your reading of the specification rather than from what a server put on the wire, with nothing keeping the two in step. It passes because it agrees with you.</p>
 

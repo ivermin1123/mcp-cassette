@@ -5,7 +5,10 @@
 Record one session against a real Model Context Protocol server, then run agent
 tests against the recording with no credentials, no rate limits and no network.
 The same binary gates a tool contract against breaking changes and lints tool
-descriptions for poisoning.
+descriptions for poisoning. That lint is the prompt injection check: a tool
+description is untrusted input an agent reads as instructions, so `check` looks
+for the instruction overrides, concealment directives and exfiltration URLs a
+tool-poisoning attack needs to work.
 
 ## Install
 
