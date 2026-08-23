@@ -22,13 +22,21 @@ sold"*.
 > been re-run. The overall verdict is **unchanged**, but the last escape hatch for
 > `snapshot --check` closes, and the 4/6 figure now comes from their actual
 > security gate rather than from a command I never named.
+>
+> **Corrected again after calling the commands directly (§10).** Both §3 and §8
+> said observatory's `record` and `replay` are not CLI commands. They are CLI
+> commands, declared `{ hidden: true }` so the root `--help` list omits them, in
+> all 16 published releases from 1.36.5 to 1.43.0. The verdict for `replay` is
+> **unchanged**, and so is the overall NARROW: what settles that row is what
+> their `replay` *does*, not where it is invoked from. What §10 repairs is the
+> reasoning, and the lesson drawn from it.
 
 | | |
 |---|---|
 | **Which box it lands in** | **NARROW**. One feature dead, two alive. The frozen rules, applied in order: rule 1 (STOP) does not fire because only 1 of 3 is dead; rule 3 (NARROW) fires. Dead: **`snapshot --check`**. Alive: **`replay`** and **`check` poisoning**. |
 | **Field (b) rate** | **52.5% strict / 56.3% loose** (83 / 89 of 158 servers). The threshold is **<15% AND <12 repositories**. Not reached, not even close. **Box A does NOT fire.** |
 | **Feature at greatest swallow risk** | **`snapshot --check`**, and it has genuinely been swallowed, not merely "at risk". mcp-observatory running `test` and then `diff --fail-on-schema-drift high` caught all three changes I planted (tool removed, required parameter added, optional parameter added), tiered them correctly as high/high/info, and exited 1 on drift and 0 without it. Working straight after install. The safest is **`replay`**, for the opposite of the reason I gave in the first draft: observatory's `replay` **is not a replay**; it runs its own checks offline and returns a text report, and no client can connect to it. |
-| **What changed my mind most** | Twice, in opposite directions. First: I went in holding the criteria's own hypothesis, *"nobody tests MCP at the protocol layer"*, and was flatly wrong; more than half do. Second, and more forcefully: **reading a competitor's source is no substitute for installing it and pressing run.** I had seen `recording-transport.ts`, `replay-transport.ts`, and `record`/`replay` under observatory's `src/commands/`, and concluded `replay` was swallowed. Installed, the CLI has **neither a `record` nor a `replay` command**; they exist only as MCP tools for an agent, and its `replay` does not serve a cassette as a server. A STOP verdict was nearly signed on the strength of a list of filenames. |
+| **What changed my mind most** | Three times, and the third one is a layer under the second. First: I went in holding the criteria's own hypothesis, *"nobody tests MCP at the protocol layer"*, and was flatly wrong; more than half do. Second: **reading a competitor's source is no substitute for installing it and pressing run.** I had seen `recording-transport.ts`, `replay-transport.ts`, and `record`/`replay` under observatory's `src/commands/`, and concluded `replay` was swallowed; installing it and running its `replay` showed that it prints observatory's own report instead of serving a cassette, which is why `replay` is still alive. A STOP verdict was nearly signed on the strength of a list of filenames. Third (§10): that lesson is right and stops one step short. I did install it and press run, on `--help`, and then wrote that the CLI has no `record` and no `replay`. Both are real CLI commands carrying `{ hidden: true }` (`dist/src/commands/record-replay.js:19` and `:56`), present in all 16 published releases from 1.36.5 to 1.43.0. **`--help` is an edited surface, and running `--help` is not running the command.** To learn whether a command exists, call `<tool> <command> --help` and read what it answers; do not infer it from the list the root `--help` chooses to print. |
 | **In one sentence** | **CONTINUE, but narrower**: drop `snapshot --check` (someone has already finished it, it works, and it is over 5 months old), and put the time into `replay` and `check`, the two places nobody has finished without an asterisk. |
 
 ---
@@ -181,11 +189,12 @@ originally gave. Observatory's `replay` is not a replay at all, and the one
 tool that does replay properly ships broken.
 
 The observatory row above lists capability as its source tree and README present
-it. The gap between that and what the shipped CLI exposes is the subject of §8:
-`record` and `replay` exist in `src/`, and in observatory's **MCP tool surface**
-for agents, but **not as CLI commands**. `lock` likewise appears only as the
-`lock_verify` MCP tool. Of that row, the commands a CI job can actually call are
-`test`, `diff`, `verify`, `scan` and `watch`.
+it. What the shipped CLI actually exposes was the subject of §8, and that reading
+has been corrected twice since: `lock create` / `lock verify` are CLI commands
+(§9.2), and so are `record` and `replay` (§10), which carry `{ hidden: true }`
+and are therefore missing from the root `--help` list while answering normally
+when called. Of that row, `record`, `replay`, `verify`, `lock`, `diff` and `scan`
+are all commands a CI job can call today.
 
 ---
 
@@ -228,7 +237,7 @@ reading its README.
 
 | Feature | Candidate occupier | Same job? | Free / in hand? | Runs today? | Verdict |
 |---|---|---|---|---|---|
-| `replay` | mcp-observatory | **No.** Its `replay` runs *observatory's own checks* against the cassette and prints a report; nothing external can connect. Also not a CLI command, only an MCP tool for agents. | MIT | yes | condition 1 fails → **not an occupier** |
+| `replay` | mcp-observatory | **No.** Its `replay` runs *observatory's own checks* against the cassette and prints a report; nothing external can connect. (It is a real CLI command, hidden from the root `--help`; §10 re-checked this row and did not change it.) | MIT | yes | condition 1 fails → **not an occupier** |
 | `replay` | mcp-recorder | Yes, `replay` really does start a mock MCP server from a cassette | OSS | **No.** A clean `pip install` crashes on start (`Starlette.__init__() got an unexpected keyword argument 'on_startup'`); only ran after manually pinning `starlette<0.42`. HTTP-only, no stdio. Stalled since 2026-03-24. | **partial → contested, not killing** |
 | `replay` | agent-vcr | claims record/replay/diff | OSS | npm 0.1.0, 4 weekly downloads, created and abandoned on 2026-02-09 | **contested, not killing** |
 | `snapshot --check` | mcp-observatory | **Yes.** `test` then `diff --fail-on-schema-drift high` caught all three planted changes at the right severities and gated correctly | MIT | **yes**, straight after install | **OCCUPIED → KILLING** |
@@ -396,6 +405,12 @@ Observatory's workflow is heavier (run `test` twice, keep both artifacts, then
 whether it does the same job, not whether it is as pleasant. It does.
 
 ### Replay: where the README and the shipped CLI disagree
+
+> **Premise corrected in §10; text left as written.** There is no disagreement to
+> report: `record` and `replay` are CLI commands carrying `{ hidden: true }`, and
+> `record` does write the cassette format this subsection says no CLI command
+> produces. What the subsection measured about *what their `replay` does* stands,
+> and the verdict it reaches is unchanged.
 
 The `mcp-observatory --help` command list contains **no `record` and no
 `replay`**. Its `verify` needs a live server and rejects a run artifact with
@@ -590,9 +605,119 @@ defects are patched. Details in [BACKLOG.md](../../BACKLOG.md).
 
 ---
 
+## 10. Correction after calling the commands directly
+
+Measured 2026-08-21 on `@kryptosai/mcp-observatory@1.43.0`, and re-checked on
+`1.36.5`, the version §8 and §9 were run against.
+
+§8 and §9 both read observatory's command inventory out of `mcp-observatory
+--help`. §9.1 recorded one way that failed: `head -35` cut the list short. This
+section records a second way, which an untruncated list does not fix.
+
+### 10.1 What was run
+
+```
+npm i @kryptosai/mcp-observatory@1.43.0
+
+mcp-observatory --help          -> command list contains no record, no replay
+mcp-observatory record --help   -> Usage: mcp-observatory record [options] [command...]
+                                   Record a server session to a cassette file for replay.
+mcp-observatory replay --help   -> Usage: mcp-observatory replay [options] <cassette>
+                                   Replay a cassette file offline — no live server needed.
+```
+
+Both commands exist and answer. Their source says why they are not listed:
+
+```
+dist/src/commands/record-replay.js:19   .command("record", { hidden: true })
+dist/src/commands/record-replay.js:56   .command("replay", { hidden: true })
+```
+
+`hidden` is a Commander flag that keeps a command out of the parent's help output
+while leaving it fully callable. Every published release from 1.36.5 to 1.43.0
+was pulled with `npm pack` and checked, 16 of them, and all 16 carry both
+declarations at those same two line numbers. Nothing changed in their software
+between §8 and this section; the report was wrong when it was written. Which
+parts of a CLI to advertise is the author's call about their own surface, not a
+defect.
+
+### 10.2 The sentences that were wrong, kept here rather than erased
+
+The HANDOVER and §3 said:
+
+> Installed, the CLI has **neither a `record` nor a `replay` command**; they
+> exist only as MCP tools for an agent, and its `replay` does not serve a
+> cassette as a server.
+
+The first two clauses are false. The third is true, and it is the one the verdict
+rests on; §10.3 re-checks it.
+
+§8 also said observatory's `verify` rejects a run artifact because it wants
+`{ version: 1, entries: [...] }`, "a format no CLI command produces". That is
+false for the same reason. Run here:
+
+```
+mcp-observatory record npx @kryptosai/mcp-observatory serve
+  -> Cassette saved: .mcp-observatory/cassettes/<ts>--kryptosai-mcp-observatory.cassette.json
+     29 entries recorded
+     top-level keys: version, targetId, recordedAt, transport, entries
+
+mcp-observatory verify <that file> npx @kryptosai/mcp-observatory serve
+  -> 2 changed, 0 missing out of 14 responses
+```
+
+`record` is the CLI producer of the format `verify` consumes. The pair works from
+a shell, without an agent.
+
+### 10.3 The verdict does not change
+
+`replay` stays **ALIVE**, and mcp-observatory is still **not an occupier** of it,
+for the reason §8 gave, which was never about where the command is invoked from:
+
+- `record-replay.js` builds a `ReplayTransport` in-process (lines 10, 70, 71) and
+  runs observatory's own checks across it.
+- That file contains no `StdioServerTransport`, no `listen(`, no `createServer`.
+- The only shipped file that mentions `StdioServerTransport` is `server.js`,
+  which backs `serve`, a different command doing a different job.
+
+So their `replay` replays a cassette *into their own checker*, not *to a client*.
+Nothing external can connect to it. Condition 1 of Box C still fails, on evidence
+rather than on a missing help entry.
+
+| | before this correction | after |
+|---|---|---|
+| Overall verdict | NARROW | **NARROW** (unchanged) |
+| `replay` | ALIVE, on one false premise and one true one | **ALIVE**, on the true one alone |
+| `record` / `replay` as CLI commands | claimed absent | **present and hidden in all 16 releases 1.36.5 to 1.43.0** |
+| `record` as a producer of `verify`'s format | claimed nonexistent | **it is that producer** |
+
+### 10.4 The lesson, one layer under the one §8 drew
+
+§8's lesson was **"reading a competitor's source is no substitute for installing
+it and pressing run."** That stands. It is what turned a STOP into a NARROW, and
+nothing here weakens it.
+
+It is also not deep enough, and this correction is the proof: the tool *was*
+installed and run *was* pressed. It was pressed on `--help`. The layer below:
+
+> **`--help` is an edited surface.** It is the author's chosen presentation of the
+> tool, not an inventory of it, and a single flag removes a command from it while
+> leaving the command intact. **Running `--help` is not running the command.** To
+> find out whether a command exists, ask it directly: `<tool> <command> --help`.
+> Never conclude a command is absent from the list the root `--help` prints.
+
+Both misreadings in this report are the same mistake at different depths: a list
+*about* the program was trusted in place of the program. §9.1's was self-inflicted
+by a pipe and could have been avoided by reading more carefully. This one could
+not have been. It could only have been avoided by asking the program a different
+question.
+
+---
+
 ## Unresolved questions
 
 1. Would an independently-authored poisoned corpus reverse the 6-versus-4 result? The §8 fixture was built from cassette's own rule list, so the poisoning comparison is the weakest evidence in this report.
 2. ~~`snapshot --check` is dead by the frozen rule, but cassette's one-command-against-a-committed-file workflow is genuinely lighter than observatory's two-artifact diff. Is that worth keeping alive as a deliberate override?~~ **Answered and closed in §9.2:** the premise was wrong. `lock create` / `lock verify` is also one command against one committed file, so there is no ergonomic gap to override the criteria for.
 3. Field (h) is structurally unmeasurable from public repositories. Is there a way to see whether internal enterprise MCP servers break their consumers, or should that question simply be dropped rather than answered with public-repo silence?
-4. Observatory's `record`/`replay` exist as MCP tools today and are one release away from being CLI commands. If they surface, `replay` moves from ALIVE to occupied. How much warning would that give, and is there anything worth doing before it happens?
+4. ~~Observatory's `record`/`replay` exist as MCP tools today and are one release away from being CLI commands. If they surface, `replay` moves from ALIVE to occupied. How much warning would that give, and is there anything worth doing before it happens?~~ **Answered and closed in §10:** the premise was wrong. They have been CLI commands the whole time, hidden from the root `--help`, in all 16 published releases from 1.36.5 to
+1.43.0. There is no release to wait for and no warning to plan around. `replay` stays ALIVE regardless, because the reason it is not occupied was never about where the command is invoked from: their `replay` runs their own checks in-process and serves nothing a client can connect to.
