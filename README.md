@@ -159,6 +159,7 @@ jobs:
 | `mode` | `both` | `check` (health + safety lint), `snapshot` (contract drift), or `both`. |
 | `fail-on` | `breaking` | Lowest drift tier that fails the job. `dangerous` also gates enum widening, default-value drift and added optional parameters. |
 | `lint-fail-on` | `error` | Lowest `CAS-L` safety-lint finding level that fails the job. `warn` is the stricter setting: it also gates the warn tier. `never` keeps the lint reporting without gating on it, and reaches the description lint only. |
+| `sarif-file` | *(empty)* | Write the check's findings, `CAS-C` and `CAS-L` alike, as SARIF to this path, for a later `upload-sarif` step. Empty writes nothing. See [SARIF from the action](#sarif-from-the-action). |
 | `comment` | `true` | Post and afterwards update one results comment. Ignored outside pull requests. |
 | `version` | pinned | Version of `mcp-cassette` to run from npm. |
 | `github-token` | `${{ github.token }}` | Needs `pull-requests: write` to comment. A fork's read-only token makes the action warn, not fail. |
@@ -402,6 +403,52 @@ steps:
       category: mcp-cassette    # keeps these results in their own bucket
 ```
 
+#### SARIF from the action
+
+If you gate with the composite action rather than the CLI, set `sarif-file` and
+upload what it writes. The action never uploads for you: that needs
+`security-events: write`, and an action should not assume a permission on its
+caller's behalf.
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write          # the results comment
+  security-events: write        # the only permission the upload needs
+
+steps:
+  - uses: ivermin1123/mcp-cassette@v0.6
+    id: contract
+    continue-on-error: true     # let the upload happen even when the gate fails
+    with:
+      server-command: node dist/my-server.js
+      sarif-file: mcp-cassette.sarif
+
+  - if: steps.contract.outputs.sarif-file != ''
+    uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: ${{ steps.contract.outputs.sarif-file }}
+      category: mcp-cassette
+
+  # `continue-on-error` above kept the job green so the upload could run, so
+  # turn the gate back into a job result yourself.
+  - if: steps.contract.outcome == 'failure'
+    run: exit 1
+```
+
+Findings are anchored to `snapshot-file` when that file exists, and otherwise
+by the CLI's own resolution below. The path the action wrote is exposed as the
+`sarif-file` output, and that output stays empty when the input was unset or
+when no document was produced, so the upload step is never handed a file that
+is not a SARIF document. The `if:` on the upload step is what turns that empty
+output into a skipped step: passed an empty `sarif_file`, `upload-sarif` fails
+with `Input required and not supplied` rather than falling back to its default,
+which would end the job at the upload with an error about the wrong thing.
+
+Setting `sarif-file` starts your server a second time. One `check` run emits one
+format, and both are wanted: the human-readable run is what the job log and the
+pull-request comment show, the SARIF run is what code scanning ingests.
+
 **Findings are anchored to a file, and that file has to be a real one.** `check` inspects a *live server*, so nothing it finds lives in a source file. GitHub code scanning nonetheless discards any result without a `physicalLocation`, so the anchor is the **contract snapshot**: your server's tool surface is recorded in that committed file, at a line, and it is where you go to read what your server advertises. `mcp-cassette` resolves one in this order, and never invents a path:
 
 1. `--sarif-location <file>`, when you name it. A missing file, or one outside the working directory, is an error rather than a silent downgrade.
@@ -419,7 +466,7 @@ The output is validated against the official OASIS SARIF 2.1.0 schema in the tes
 >
 > It has also been verified in the failing direction, which is why the anchor exists. The same job on an earlier PR, emitting `logicalLocations` only, uploaded successfully and then recorded `results=0` with `locationFromSarifResult: expected a physical location` once per finding, creating no alerts. An upload reporting success is not evidence that anything was kept.
 
-That upload is not repeated on every pull request, and the reason is worth stating, because the snippet above is the right thing for *your* server and the wrong thing for this repository. The document above comes from a fixture that is poisoned on purpose, so uploading it per pull request would attach six alerts and a permanent red check to every branch this project ever opens; a check that is always red is one nobody reads by the second week, including the week it goes red for a real reason. Scanning a clean fixture instead would be worse, because an empty `results` array uploads perfectly happily, so the job would stay green through exactly the regression it exists to catch. The proof above was worth running once. What runs now is a split: [ci.yml](.github/workflows/ci.yml) asserts on every pull request that each finding is anchored to a real file at a real line, without uploading anything, and a weekly non-blocking job in [foundation-canary.yml](.github/workflows/foundation-canary.yml) does the real upload and asks the API what survived, parking its alerts on a `ci/sarif-canary` branch so they touch neither main nor any pull request.
+That upload is not repeated on every pull request, and the reason is worth stating, because the snippet above is the right thing for *your* server and the wrong thing for this repository. The document above comes from a fixture that is poisoned on purpose, so uploading it per pull request would attach six alerts and a permanent red check to every branch this project ever opens; a check that is always red is one nobody reads by the second week, including the week it goes red for a real reason. Scanning a clean fixture instead would be worse, because an empty `results` array uploads perfectly happily, so the job would stay green through exactly the regression it exists to catch. The proof above was worth running once. What runs now is a split: [ci.yml](.github/workflows/ci.yml) asserts on every pull request that each finding is anchored to a real file at a real line, without uploading anything, and a weekly non-blocking job in [foundation-canary.yml](.github/workflows/foundation-canary.yml) does the real upload and asks the API what survived, parking its alerts on a `ci/sarif-canary` branch so they touch neither main nor any pull request. Both halves cover the action as well as the CLI: the pull-request half additionally asserts that the action passes `snapshot-file` through as the anchor, and the weekly half uploads the action's own document to the same parking branch in its own bucket.
 
 ## Cassette format (open, v2)
 

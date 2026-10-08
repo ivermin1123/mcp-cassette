@@ -119,7 +119,7 @@ jobs:
               echo "The latest official SDK still drives a classic-lifecycle stdio server the way mcp-cassette expects."
             else
               echo "**Signal:** the latest official SDK did not complete the classic lifecycle against the fixture server."
-              echo "This is upstream news, not a defect here — read the log before changing anything."
+              echo "This is upstream news, not a defect here. Read the log before changing anything."
             fi
             echo
             echo '```'
@@ -202,7 +202,7 @@ jobs:
           $CONFORMANCE server --help > "$RUNNER_TEMP/server-help.txt" 2>&1 || true
           if grep -qiE -- '--stdio|--command' "$RUNNER_TEMP/server-help.txt"; then
             echo "stdio=yes" >> "$GITHUB_OUTPUT"
-            echo "stdio support is present — running the suite against our replay"
+            echo "stdio support is present: running the suite against our replay"
             # The flag name follows the request in #258. If upstream shipped a
             # different spelling this run fails loudly here, which is the
             # correct outcome for a probe: the log then says what to change.
@@ -211,7 +211,7 @@ jobs:
             echo "run_status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
           else
             echo "stdio=no" >> "$GITHUB_OUTPUT"
-            echo "no stdio option yet — 'conformance server' still takes --url only"
+            echo "no stdio option yet: 'conformance server' still takes --url only"
             echo "tracking: https://github.com/modelcontextprotocol/conformance/issues/258"
           fi
 
@@ -262,7 +262,7 @@ jobs:
               echo "- stdio support: **present**"
               echo "- our replay against the active suite: **${PASS:-?} passed, ${FAIL:-?} failed**"
             else
-              echo "- stdio support: not yet — \`conformance server\` still takes \`--url\` only"
+              echo "- stdio support: not yet, \`conformance server\` still takes \`--url\` only"
               echo "- the suite cannot be pointed at \`replay\` until it does:"
               echo "  <https://github.com/modelcontextprotocol/conformance/issues/258>"
             fi
@@ -342,60 +342,113 @@ jobs:
           ref: refs/heads/ci/sarif-canary
           sha: ${{ steps.parking.outputs.sha }}
 
+      # The same question for the composite action, which asks the CLI for the
+      # document rather than writing one itself. ci.yml already proves on every
+      # pull request that it passes the anchor through; what only a real upload
+      # can answer is whether code scanning keeps what comes out of that path
+      # too. Same fixture, same parking branch, its own bucket.
+      - name: Scan the poisoned fixture through the action
+        id: action-scan
+        continue-on-error: true
+        uses: ./
+        with:
+          server-command: env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs
+          snapshot-file: tests/fixtures/tiny-server-evil.snapshot.json
+          mode: check
+          version: local
+          sarif-file: mcp-cassette-action.sarif
+          comment: 'false'
+
+      - name: Upload the action's document to the parking branch
+        id: upload-action
+        if: steps.action-scan.outputs.sarif-file != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.action-scan.outputs.sarif-file }}
+          category: mcp-cassette-action-canary
+          ref: refs/heads/ci/sarif-canary
+          sha: ${{ steps.parking.outputs.sha }}
+
       # The upload succeeding still proves nothing. Ask the API what it kept.
+      #
+      # Each document is looked up by its own sarif id rather than by "the
+      # latest analysis on the branch": two uploads land here now, and whichever
+      # finished last would otherwise answer for both.
       - name: Ask the API what survived
         id: verdict
         env:
           GH_TOKEN: ${{ github.token }}
-          SARIF_ID: ${{ steps.upload.outputs.sarif-id }}
+          CLI_SARIF_ID: ${{ steps.upload.outputs.sarif-id }}
+          ACTION_SARIF_ID: ${{ steps.upload-action.outputs.sarif-id }}
         run: |
           set -uo pipefail
-          STATUS=$(gh api "repos/$GITHUB_REPOSITORY/code-scanning/sarifs/$SARIF_ID" \
-            --jq '.processing_status' 2>/dev/null || echo "unreachable")
-          ANALYSIS=$(gh api \
-            "repos/$GITHUB_REPOSITORY/code-scanning/analyses?ref=refs/heads/ci/sarif-canary&per_page=1" \
-            --jq '.[0] | "\(.results_count)\t\(.error)"' 2>/dev/null || printf 'unreachable\t')
-          COUNT=${ANALYSIS%%$'\t'*}
-          ERROR=${ANALYSIS#*$'\t'}
 
-          echo "processing_status=$STATUS  results_count=$COUNT  error=${ERROR:-<empty>}"
-          {
-            echo "status=$STATUS"
-            echo "count=$COUNT"
-            echo "error=$ERROR"
-          } >> "$GITHUB_OUTPUT"
+          # $1 output prefix, $2 human label, $3 sarif id ('' when not uploaded)
+          verdict() {
+            local prefix="$1" label="$2" id="$3"
+            if [ -z "$id" ]; then
+              echo "::warning::$label uploaded nothing, so there is no analysis to read"
+              {
+                echo "${prefix}_status=absent"
+                echo "${prefix}_count="
+                echo "${prefix}_error="
+              } >> "$GITHUB_OUTPUT"
+              return
+            fi
 
-          # Warnings, never failures. Nothing in this file blocks a merge, and a
-          # red mark here means "go look at GitHub", not "this branch is bad".
-          if [ "$STATUS" != "complete" ]; then
-            echo "::warning::code scanning reports processing_status=$STATUS"
-          fi
-          if [ -n "$ERROR" ]; then
-            echo "::warning::code scanning recorded an error: $ERROR"
-          fi
-          case "$COUNT" in
-            ''|*[!0-9]*)
-              echo "::warning::could not read results_count (got '$COUNT')" ;;
-            0)
-              echo "::warning::the analysis kept 0 findings; code scanning is discarding what we emit" ;;
-          esac
+            local status analysis count error
+            status=$(gh api "repos/$GITHUB_REPOSITORY/code-scanning/sarifs/$id" \
+              --jq '.processing_status' 2>/dev/null || echo "unreachable")
+            analysis=$(gh api \
+              "repos/$GITHUB_REPOSITORY/code-scanning/analyses?ref=refs/heads/ci/sarif-canary&sarif_id=$id&per_page=1" \
+              --jq '.[0] | "\(.results_count)\t\(.error)"' 2>/dev/null || printf 'unreachable\t')
+            count=${analysis%%$'\t'*}
+            error=${analysis#*$'\t'}
+
+            echo "$label: processing_status=$status  results_count=$count  error=${error:-<empty>}"
+            {
+              echo "${prefix}_status=$status"
+              echo "${prefix}_count=$count"
+              echo "${prefix}_error=$error"
+            } >> "$GITHUB_OUTPUT"
+
+            # Warnings, never failures. Nothing in this file blocks a merge, and
+            # a red mark here means "go look at GitHub", not "this branch is bad".
+            if [ "$status" != "complete" ]; then
+              echo "::warning::$label: code scanning reports processing_status=$status"
+            fi
+            if [ -n "$error" ]; then
+              echo "::warning::$label: code scanning recorded an error: $error"
+            fi
+            case "$count" in
+              ''|*[!0-9]*)
+                echo "::warning::$label: could not read results_count (got '$count')" ;;
+              0)
+                echo "::warning::$label: the analysis kept 0 findings; code scanning is discarding what we emit" ;;
+            esac
+          }
+
+          verdict cli "the CLI document" "$CLI_SARIF_ID"
+          verdict action "the action document" "$ACTION_SARIF_ID"
 
       - name: Summarize
         if: always()
         env:
-          STATUS: ${{ steps.verdict.outputs.status }}
-          COUNT: ${{ steps.verdict.outputs.count }}
-          ERROR: ${{ steps.verdict.outputs.error }}
+          CLI_STATUS: ${{ steps.verdict.outputs.cli_status }}
+          CLI_COUNT: ${{ steps.verdict.outputs.cli_count }}
+          CLI_ERROR: ${{ steps.verdict.outputs.cli_error }}
+          ACTION_STATUS: ${{ steps.verdict.outputs.action_status }}
+          ACTION_COUNT: ${{ steps.verdict.outputs.action_count }}
+          ACTION_ERROR: ${{ steps.verdict.outputs.action_error }}
         run: |
           set -uo pipefail
           {
             echo "### sarif-ingest"
-            echo "- processing status: \`${STATUS:-unknown}\`"
-            echo "- findings kept: **${COUNT:-?}**"
-            if [ -n "${ERROR:-}" ]; then
-              echo "- error: \`${ERROR}\`"
-            else
-              echo "- error: none"
-            fi
+            echo
+            echo "| source | processing status | findings kept | error |"
+            echo "| --- | --- | --- | --- |"
+            echo "| CLI | \`${CLI_STATUS:-unknown}\` | **${CLI_COUNT:-?}** | \`${CLI_ERROR:-none}\` |"
+            echo "| action | \`${ACTION_STATUS:-unknown}\` | **${ACTION_COUNT:-?}** | \`${ACTION_ERROR:-none}\` |"
+            echo
             echo "- alerts live on \`ci/sarif-canary\`, deliberately off main and off every pull request"
           } >> "$GITHUB_STEP_SUMMARY"

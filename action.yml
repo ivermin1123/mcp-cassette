@@ -41,6 +41,20 @@ inputs:
       be inspected at all.
     required: false
     default: error
+  sarif-file:
+    description: >-
+      Write the check's findings, CAS-C and CAS-L alike, as SARIF 2.1.0 to this
+      path, for a later github/codeql-action/upload-sarif step. A parent
+      directory that does not exist is created. Empty (the default) writes
+      nothing.
+      Findings are anchored to the contract snapshot named by snapshot-file when
+      that file exists, because code scanning discards a result that carries no
+      physical location. Setting this starts the server a second time: the job
+      log and the comment need the human-readable run. This action never
+      uploads; uploading needs security-events write, which an action should not
+      assume on its caller's behalf.
+    required: false
+    default: ''
   comment:
     description: >-
       Post (and afterwards update in place) a single results comment on the pull
@@ -59,6 +73,15 @@ inputs:
       Token used to write the pull-request comment. Needs `pull-requests: write`.
     required: false
     default: ${{ github.token }}
+
+outputs:
+  sarif-file:
+    description: >-
+      Path the SARIF document was written to, or empty when sarif-file was unset
+      or the check produced no document. Guard the upload step on this output:
+      an empty value is not the same as an unset input to the step that reads
+      it.
+    value: ${{ steps.check.outputs.sarif-file }}
 
 runs:
   using: composite
@@ -103,7 +126,7 @@ runs:
         if [ "$VERSION" = "local" ]; then
           CLI_BIN="$ACTION_PATH/dist/cli.js"
           if [ ! -f "$CLI_BIN" ]; then
-            echo "::error::version 'local' needs a built CLI at $CLI_BIN — run 'npm run build' first"
+            echo "::error::version 'local' needs a built CLI at $CLI_BIN, run 'npm run build' first"
             exit 1
           fi
           echo "cli=node $CLI_BIN" >> "$GITHUB_OUTPUT"
@@ -134,6 +157,14 @@ runs:
     # comment is the point of this action, and a job that dies before writing it
     # reports drift only to whoever opens the raw log. The gate step at the end
     # turns those codes back into a job result.
+    #
+    # `set +e` is what makes that true, and it is not decoration. Actions runs
+    # every `shell: bash` step as `bash --noprofile --norc -eo pipefail {0}`, so
+    # `-e` is already on before the first line of this script, and a `set -uo
+    # pipefail` line does not clear it: `set` only turns options on. Without the
+    # `+e` these steps died on the failing command, the `status=` line below
+    # never ran, and the Report and Gate steps were skipped as dependents of a
+    # failed step. The comment went missing in exactly the case it exists for.
     - name: Health + safety check
       id: check
       if: inputs.mode == 'check' || inputs.mode == 'both'
@@ -142,15 +173,61 @@ runs:
         CLI: ${{ steps.setup.outputs.cli }}
         SERVER_COMMAND: ${{ inputs.server-command }}
         LINT_FAIL_ON: ${{ inputs.lint-fail-on }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+        SNAPSHOT_FILE: ${{ inputs.snapshot-file }}
       run: |
         set -uo pipefail
+        set +e
+
         # The gate goes to the CLI rather than being applied to the exit code
         # here. Only `check` can tell a waived CAS-L finding from the two things
         # `never` must never hide: a structural CAS-C error, and a server that
         # could not be inspected at all. From out here they are all exit 1 or 2.
         $CLI check --lint-fail-on "$LINT_FAIL_ON" --stdio "$SERVER_COMMAND" 2>&1 \
           | tee "$RUNNER_TEMP/mcp-cassette-check.log"
-        echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        STATUS=${PIPESTATUS[0]}
+
+        if [ -n "$SARIF_FILE" ]; then
+          # A second run, because one invocation emits one format and both are
+          # wanted: the text above is what the log and the comment show, this is
+          # what code scanning ingests. The anchor is passed only when the
+          # snapshot exists; naming a missing file is an error in the CLI, while
+          # omitting the flag lets it fall back to its own resolution and warn.
+          sarif_run() {
+            if [ -f "$SNAPSHOT_FILE" ]; then
+              $CLI check --lint-fail-on "$LINT_FAIL_ON" --stdio "$SERVER_COMMAND" \
+                --format sarif --sarif-location "$SNAPSHOT_FILE"
+            else
+              $CLI check --lint-fail-on "$LINT_FAIL_ON" --stdio "$SERVER_COMMAND" --format sarif
+            fi
+          }
+          # The redirect, not the CLI, creates the file, so a path under a
+          # directory that does not exist fails before the run starts and
+          # leaves nothing behind.
+          mkdir -p "$(dirname "$SARIF_FILE")"
+          sarif_run > "$SARIF_FILE" 2> "$RUNNER_TEMP/mcp-cassette-sarif.err"
+          SARIF_STATUS=$?
+          # The no-anchor warning lives here, and a consumer who never sees it
+          # uploads a document code scanning accepts and then discards.
+          cat "$RUNNER_TEMP/mcp-cassette-sarif.err" >&2 || true
+          # A document exists only when the run reached its own exit at 0 or 1
+          # and wrote something. A usage error from an older pinned release, an
+          # uncaught exception, and a failed redirect all exit 1 too, and leave
+          # an empty file or none at all; exit 2 means the server could not be
+          # inspected or the anchor was rejected. Exposing the path in any of
+          # those cases hands the upload step a file that is not SARIF.
+          # Removing it and warning is better than a stub, and it stays a
+          # warning: the text run above already decided the gate, and this must
+          # not turn a passing job red on its own.
+          if [ "$SARIF_STATUS" -ge 2 ] || [ ! -s "$SARIF_FILE" ]; then
+            rm -f "$SARIF_FILE"
+            echo "::warning::mcp-cassette wrote no SARIF (check exit $SARIF_STATUS), see the log above"
+          else
+            echo "sarif-file=$SARIF_FILE" >> "$GITHUB_OUTPUT"
+          fi
+        fi
+
+        echo "status=$STATUS" >> "$GITHUB_OUTPUT"
 
     - name: Contract drift
       id: snapshot
@@ -163,8 +240,9 @@ runs:
         FAIL_ON: ${{ inputs.fail-on }}
       run: |
         set -uo pipefail
+        set +e
         if [ ! -f "$SNAPSHOT_FILE" ]; then
-          echo "::error::no contract snapshot at $SNAPSHOT_FILE — create one with 'npx mcp-cassette snapshot --stdio \"<server>\"' and commit it"
+          echo "::error::no contract snapshot at $SNAPSHOT_FILE, create one with 'npx mcp-cassette snapshot --stdio \"<server>\"' and commit it"
           echo "status=2" >> "$GITHUB_OUTPUT"
           exit 0
         fi
@@ -175,7 +253,7 @@ runs:
         STATUS=$?
         cat "$RUNNER_TEMP/mcp-cassette-diff.err" >&2 || true
         if [ "$STATUS" -ge 2 ]; then
-          echo "::error::snapshot --check could not run — see the log above"
+          echo "::error::snapshot --check could not run, see the log above"
         fi
         echo "status=$STATUS" >> "$GITHUB_OUTPUT"
 

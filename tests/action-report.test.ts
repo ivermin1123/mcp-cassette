@@ -29,19 +29,36 @@ const CHECK_LOG = [
   "result: PASS (1 error(s), 0 warning(s), gate: error, lint: never)",
 ].join("\n");
 
-/** Renders one report, in its own RUNNER_TEMP, and returns the body. */
-function renderReport(env: Record<string, string>): string {
+interface Rendered {
+  /** What the script printed, which is what the job log shows. */
+  stdout: string;
+  /** What it left in RUNNER_TEMP for the rest of the job to read. */
+  file: string | null;
+}
+
+/** Renders one report, in its own RUNNER_TEMP. */
+function render(stepEnv: Record<string, string>): Rendered {
   const runnerTemp = fs.mkdtempSync(path.join(tmpDir, "run-"));
   fs.writeFileSync(path.join(runnerTemp, "mcp-cassette-check.log"), CHECK_LOG);
   const result = spawnSync(process.execPath, [REPORT], {
     encoding: "utf8",
-    // A bare env: inheriting GITHUB_* from a real Actions run would make the
-    // script try to post a comment on whatever pull request is building this.
-    env: { PATH: process.env.PATH ?? "", RUNNER_TEMP: runnerTemp, MODE: "check", ...env },
+    // A bare environment: inheriting GITHUB_* from a real Actions run would
+    // make the script try to post a comment on whatever pull request is
+    // building this.
+    env: Object.assign(
+      { PATH: process.env.PATH ?? "", RUNNER_TEMP: runnerTemp, MODE: "check" },
+      stepEnv
+    ),
   });
   expect(result.status, result.stderr).toBe(0);
-  return result.stdout;
+  const reportFile = path.join(runnerTemp, "mcp-cassette-report.md");
+  return {
+    stdout: result.stdout,
+    file: fs.existsSync(reportFile) ? fs.readFileSync(reportFile, "utf8") : null,
+  };
 }
+
+const renderReport = (stepEnv: Record<string, string>): string => render(stepEnv).stdout;
 
 describe("the action's pull-request comment", () => {
   it("names the lint gate, so a pass over findings can be accounted for", () => {
@@ -66,5 +83,39 @@ describe("the action's pull-request comment", () => {
     // is the honest fallback: that is the gate such a caller actually ran.
     const body = renderReport({ CHECK_STATUS: "0" });
     expect(body).toContain("**Safety check** (gate: `error`)");
+  });
+});
+
+/**
+ * The step summary file Actions hands a step is unique to that step, so nothing
+ * later in the job can read a report back out of it. RUNNER_TEMP spans the job,
+ * and the copy left there is what lets a workflow prove the report was rendered
+ * at all. That matters because the action used to skip rendering entirely when
+ * a gate failed, and a job that is merely red looks identical either way.
+ */
+describe("the rendered report left for the rest of the job", () => {
+  it("is written, and matches what the log showed", () => {
+    const { stdout, file } = render({ CHECK_STATUS: "0" });
+    expect(file).not.toBeNull();
+    expect(file!.trimEnd()).toBe(stdout.trimEnd());
+  });
+
+  it("records a failing gate, which is the case it exists for", () => {
+    const { file } = render({ CHECK_STATUS: "1" });
+    expect(file).toContain("### mcp-cassette: ❌ FAIL");
+    expect(file).toContain("CAS-L001");
+  });
+
+  it("is skipped rather than guessed at when there is no RUNNER_TEMP", () => {
+    // The script also runs outside Actions. Writing into the process cwd there
+    // would litter a consumer's checkout with a file they never asked for.
+    const elsewhere = fs.mkdtempSync(path.join(tmpDir, "no-runner-temp-"));
+    const result = spawnSync(process.execPath, [REPORT], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "", MODE: "check", CHECK_STATUS: "0" },
+      cwd: elsewhere,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(fs.readdirSync(elsewhere)).toEqual([]);
   });
 });

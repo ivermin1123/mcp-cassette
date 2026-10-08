@@ -203,6 +203,146 @@ jobs:
           fi
           exit "$FAILED"
 
+      # The comment is the action's main surface, and it used to go missing in
+      # the one case it exists for. A composite `shell: bash` step runs under
+      # `-e`, so a failing gate killed the step before it could record its exit
+      # code, and the Report step was skipped as a dependent of a failed step.
+      # Asserting the job went red proves nothing about that: it went red
+      # before the fix too, for the wrong reason. What distinguishes the two is
+      # whether the report was rendered at all, so that is what is asserted.
+
+      # Every run overwrites this file and none removes it, and the gates above
+      # already failed and rendered their own FAIL reports. Left in place, one
+      # of those satisfies the assertion below whether or not the step it
+      # covers rendered anything.
+      - name: Clear the previous report
+        run: rm -f "$RUNNER_TEMP/mcp-cassette-report.md"
+
+      - name: Fail a gate and expect the report to be written anyway
+        id: report-on-failure
+        continue-on-error: true
+        uses: ./
+        with:
+          server-command: env TINY_V2=1 node tests/fixtures/tiny-server.mjs
+          snapshot-file: tests/fixtures/tiny-server.snapshot.json
+          version: local
+          comment: 'false'
+
+      - name: Assert the gate fired and the report survived it
+        env:
+          OUTCOME: ${{ steps.report-on-failure.outcome }}
+        run: |
+          set -uo pipefail
+          FAILED=0
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::the contract gate passed a breaking diff (outcome: $OUTCOME)"
+            FAILED=1
+          fi
+          REPORT="$RUNNER_TEMP/mcp-cassette-report.md"
+          if [ ! -f "$REPORT" ]; then
+            echo "::error::the action failed its gate without rendering a report ($REPORT is missing)"
+            exit 1
+          fi
+          # Rendered, and rendered the failure: a report left by an earlier
+          # step would satisfy mere existence, which is why the step above
+          # removes it first.
+          if ! grep -q 'mcp-cassette: ❌ FAIL' "$REPORT"; then
+            echo "::error::the report exists but does not record the failure"
+            cat "$REPORT"
+            FAILED=1
+          fi
+          exit "$FAILED"
+
+      # SARIF from the action itself. The CLI's own anchoring is proven by the
+      # `sarif` job below; what is unproven until here is that the action asks
+      # for it correctly, passing the snapshot as the anchor and exposing the
+      # path it wrote.
+      - name: Write SARIF from the action (gate expected to fail)
+        id: action-sarif
+        continue-on-error: true
+        uses: ./
+        with:
+          server-command: env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs
+          snapshot-file: tests/fixtures/tiny-server-evil.snapshot.json
+          mode: check
+          version: local
+          # A subdirectory that no step creates. `results/` is the natural
+          # choice for a consumer, and upload-sarif defaults to one, so the
+          # action has to make the parent itself or it writes nothing.
+          sarif-file: out/action-check.sarif
+          comment: 'false'
+
+      - name: Assert the action's SARIF is anchored where code scanning keeps it
+        env:
+          SARIF_OUTPUT: ${{ steps.action-sarif.outputs.sarif-file }}
+        run: |
+          set -euo pipefail
+          if [ "$SARIF_OUTPUT" != "out/action-check.sarif" ]; then
+            echo "::error::the action did not expose the path it wrote (got '$SARIF_OUTPUT')"
+            exit 1
+          fi
+          node -e '
+            const fs = require("fs");
+
+            // The same six findings the `sarif` job pins for the CLI: five
+            // safety rules on `get_weather` and CAS-C005 on the malformed
+            // schema. Pinned for the same reason, that every other assertion
+            // here is trivially true of an empty results array.
+            const EXPECTED_RESULTS = 6;
+
+            const doc = JSON.parse(fs.readFileSync("out/action-check.sarif", "utf8"));
+            const run = doc.runs[0];
+            console.log("results:", run.results.length);
+
+            if (run.results.length !== EXPECTED_RESULTS) {
+              throw new Error(
+                `expected ${EXPECTED_RESULTS} findings from the poisoned fixture, got ${run.results.length}`
+              );
+            }
+
+            for (const result of run.results) {
+              const where = result.locations[0].physicalLocation;
+              if (!where) throw new Error(`${result.ruleId}: no physicalLocation, code scanning would drop it`);
+
+              const uri = where.artifactLocation.uri;
+              if (!fs.existsSync(uri)) {
+                throw new Error(`${result.ruleId}: anchored at ${uri}, which is not in the checkout`);
+              }
+              // The action was told to anchor on the snapshot; anything else
+              // means the input was not passed through.
+              if (uri !== "tests/fixtures/tiny-server-evil.snapshot.json") {
+                throw new Error(`${result.ruleId}: anchored at ${uri}, not at the snapshot the action was given`);
+              }
+
+              const line = where.region && where.region.startLine;
+              if (!Number.isInteger(line) || line < 1) {
+                throw new Error(`${result.ruleId}: startLine is ${line}, which points at no line of ${uri}`);
+              }
+
+              console.log(`  ${result.ruleId}  ${uri}:${line}`);
+            }
+          '
+
+      - name: Assert nothing is written when sarif-file is unset
+        id: no-sarif
+        uses: ./
+        with:
+          server-command: node tests/fixtures/tiny-server.mjs
+          snapshot-file: tests/fixtures/tiny-server.snapshot.json
+          mode: check
+          version: local
+          comment: 'false'
+
+      - name: Assert the SARIF output stays empty by default
+        env:
+          SARIF_OUTPUT: ${{ steps.no-sarif.outputs.sarif-file }}
+        run: |
+          set -euo pipefail
+          if [ -n "$SARIF_OUTPUT" ]; then
+            echo "::error::sarif-file was unset but the action reported writing '$SARIF_OUTPUT'"
+            exit 1
+          fi
+
   # Half of `check --format sarif`: the half that can afford to run on every
   # commit. The suite already validates the document against the OASIS schema.
   # What the schema cannot express is the one rule that actually costs findings,
@@ -239,7 +379,7 @@ jobs:
       # TINY_EVIL makes the fixture serve a poisoned tool and a broken schema,
       # so the document carries real findings rather than an empty `results`.
       # `check` exits non-zero on error-level findings by design, and the file is
-      # written before it does — the gate firing is the point, not a failure.
+      # written before it does: the gate firing is the point, not a failure.
       # The anchor is a committed snapshot of this same poisoned fixture, so
       # every finding points at the line in the repository that actually
       # declares the tool it is about. Anchoring to a file generated here and
