@@ -18,7 +18,9 @@
  * snapshot is present, the tool surface the finding describes **is** recorded
  * in that committed file, at a line this module can locate, and that file is
  * where a developer goes to see what their server advertises. Pointing there
- * invents nothing.
+ * invents nothing. A finding about a prompt or a resource gets the file and
+ * line 1, because a snapshot records tools: the file is still real, and the
+ * line is stated rather than guessed at.
  *
  * So: `physicalLocation` exists only when a real file was resolved, never
  * otherwise, and `logicalLocations` stays alongside it for consumers that read
@@ -30,8 +32,9 @@ import { createHash } from "node:crypto";
 import { LINT_RULES } from "./lint-rules.js";
 import { VERSION } from "./version.js";
 import type { CheckFinding, CheckReport, FindingLevel } from "./check.js";
+import type { SubjectKind } from "./lint.js";
 
-/** NUL cannot occur in a rule id or a tool name, so it cannot forge a collision. */
+/** NUL cannot occur in a rule id, a subject or a kind, so it cannot forge a collision. */
 const SEP = "\u0000";
 
 const SCHEMA_URL = "https://json.schemastore.org/sarif-2.1.0.json";
@@ -60,8 +63,12 @@ const CONTRACT_RULES: Array<[string, string]> = [
  */
 export interface SarifAnchor {
   uri: string;
-  /** 1-based line for a subject; 1 when the subject cannot be located in the file. */
-  lineOf(subject: string): number;
+  /**
+   * 1-based line for a subject; 1 when the subject cannot be located in the
+   * file. The kind is passed because a name alone does not identify a subject:
+   * a prompt and a tool may share one.
+   */
+  lineOf(subject: string, kind?: SubjectKind): number;
 }
 
 /**
@@ -133,7 +140,13 @@ export function snapshotToolLines(text: string): Map<string, number> {
 /** Anchor findings to a contract snapshot, mapping each tool to its own line. */
 export function snapshotAnchor(uri: string, text: string): SarifAnchor {
   const lines = snapshotToolLines(text);
-  return { uri, lineOf: (subject) => lines.get(subject) ?? 1 };
+  return {
+    uri,
+    // A snapshot records tools and nothing else, so a prompt that happens to
+    // share a tool's name must not borrow its line: that would send a reviewer
+    // to the wrong declaration with every appearance of precision.
+    lineOf: (subject, kind) => (kind && kind !== "tool" ? 1 : lines.get(subject) ?? 1),
+  };
 }
 
 /**
@@ -183,28 +196,38 @@ function describeRules(): SarifRule[] {
 /**
  * A fingerprint GitHub can use to recognise the same finding across runs.
  *
- * The rule and the subject tool, and deliberately nothing else. Not the
- * excerpt: it moves whenever the surrounding prose is reworded, and a
- * fingerprint that moved with it would report every edit as a brand-new alert
- * and drop whatever triage state the old one carried.
+ * The rule and the subject, and deliberately nothing else. Not the excerpt: it
+ * moves whenever the surrounding prose is reworded, and a fingerprint that
+ * moved with it would report every edit as a brand-new alert and drop whatever
+ * triage state the old one carried.
  *
  * The consequence is that one rule firing on two fields of the same tool
  * collapses into a single alert. That is the right trade: it is one problem
  * with one fix, and the message still names both fields.
+ *
+ * The kind joins them, because a name does not identify a subject across
+ * kinds: a prompt and a tool may both be called `search`, and hashing them
+ * together would merge two unrelated alerts into one. It joins them only when
+ * it is not a tool, and leaving the original surface out of the hash is what
+ * keeps every fingerprint issued before prompts were linted where it was.
  */
 function fingerprintOf(finding: CheckFinding): string {
-  const parts = [finding.code, finding.subject].join(SEP);
-  return createHash("sha256").update(parts).digest("hex").slice(0, 16);
+  const parts = [finding.code, finding.subject];
+  if (finding.kind && finding.kind !== "tool") parts.push(finding.kind);
+  return createHash("sha256").update(parts.join(SEP)).digest("hex").slice(0, 16);
 }
 
 function toResult(finding: CheckFinding, anchor?: SarifAnchor) {
   const location: Record<string, unknown> = {
-    logicalLocations: [{ fullyQualifiedName: finding.subject, kind: "member" }],
+    // SARIF leaves this field free text. `"member"` is what a tool subject has
+    // always carried and stays; a URI reads as a resource rather than a member
+    // of anything, so the other kinds name themselves.
+    logicalLocations: [{ fullyQualifiedName: finding.subject, kind: finding.kind ?? "member" }],
   };
   if (anchor) {
     location.physicalLocation = {
       artifactLocation: { uri: anchor.uri },
-      region: { startLine: anchor.lineOf(finding.subject) },
+      region: { startLine: anchor.lineOf(finding.subject, finding.kind) },
     };
   }
   return {

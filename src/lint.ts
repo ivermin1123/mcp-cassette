@@ -1,10 +1,17 @@
 /**
- * Tool-description safety lint.
+ * Safety lint for the text a server publishes to the model.
  *
  * Turns prose guidance from the MCP security literature (tool-poisoning
  * research, SAFE-MCP techniques, OWASP Agentic Top 10) into fast, explainable
  * heuristics. These are heuristics, not proofs: they catch the known shapes of
  * description-borne attacks and context abuse.
+ *
+ * Tool descriptions were the first surface and are still the best understood,
+ * but they are not the only text a model reads: a prompt template and a
+ * resource listing reach it the same way and are written by the same hand. So
+ * the rules are applied by one scanner over three kinds of subject, and what
+ * differs between `lintTool`, `lintPrompt` and `lintResource` is only which
+ * fields each hands over as text.
  */
 
 import type { Tool } from "./client.js";
@@ -18,42 +25,164 @@ export type { LintEvidence, LintRule, LintSeverity } from "./lint-rules.js";
 
 
 
+/**
+ * What a finding's `subject` names.
+ *
+ * `"tool"` is more than a label. It is the surface every rule in the set was
+ * written against and has been running on since the rule set existed, and the
+ * one whose findings are already triaged in somebody's Security tab. `check`
+ * and the SARIF writer both treat the others as new, and say so where they do.
+ */
+export type SubjectKind = "tool" | "prompt" | "resource" | "resource-template";
+
 export interface LintFinding {
   rule: string;
   severity: LintSeverity;
-  toolName: string;
+  /** What `subject` names. */
+  kind: SubjectKind;
+  /** The tool, prompt or resource whose text matched. */
+  subject: string;
   message: string;
   excerpt?: string;
 }
 
+/**
+ * The model-facing parts of a prompt, as `prompts/list` returns them.
+ *
+ * Declared structurally rather than imported from the client because that is
+ * all the lint needs to be true: it reads strings off whatever the server
+ * sent, in either protocol era, and nothing here depends on the rest of the
+ * listing being well formed.
+ */
+export interface PromptArgument {
+  name?: string;
+  title?: string;
+  description?: string;
+  [key: string]: unknown;
+}
 
-export function lintTool(tool: Tool): LintFinding[] {
+export interface Prompt {
+  name?: string;
+  title?: string;
+  description?: string;
+  arguments?: PromptArgument[];
+  [key: string]: unknown;
+}
+
+/**
+ * The same for `resources/list` and `resources/templates/list`. A template is
+ * a resource that carries a `uriTemplate` where a resource carries a `uri`;
+ * everything the lint reads is common to both.
+ */
+export interface Resource {
+  uri?: string;
+  uriTemplate?: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  [key: string]: unknown;
+}
+
+/** Collect a field only when it holds text; a number carries no instructions. */
+function pushText(out: Array<[string, string]>, where: string, value: unknown): void {
+  if (typeof value === "string") out.push([where, value]);
+}
+
+/** A subject a reader can act on, even from a server that sent no identifier. */
+function subjectOf(value: unknown, kind: SubjectKind): string {
+  return typeof value === "string" && value.length > 0 ? value : `(unnamed ${kind})`;
+}
+
+/**
+ * Run every rule over every surface of one subject.
+ *
+ * The shared half of the lint. A rule that fires on a tool description fires
+ * on a prompt description for the same reason, so there is one loop and the
+ * callers differ only in what they collect.
+ */
+function scan(kind: SubjectKind, subject: string, surfaces: Array<[string, string]>): LintFinding[] {
   const findings: LintFinding[] = [];
-  const surfaces: Array<[string, string]> = [];
-  if (typeof tool.description === "string") surfaces.push(["description", tool.description]);
-  if (typeof tool.title === "string") surfaces.push(["title", tool.title]);
-  // Attackers also hide instructions inside the schema — and not only in its
-  // descriptions. SAFE-T1501 calls it full-schema poisoning.
-  collectSchemaText(tool.inputSchema, "inputSchema", surfaces);
-  // Annotations are rendered to the user and read by the model just the same,
-  // so they are part of the schema an attacker gets to write.
-  collectSchemaText(tool.annotations, "annotations", surfaces);
-
   for (const [where, text] of surfaces) {
     for (const rule of LINT_RULES) {
       const evidence = rule.find(text);
       if (evidence !== null) {
+        // Several rules describe themselves as what a *tool* declares, which
+        // is what they were written for and what a tool finding must keep
+        // saying, byte for byte. On the other kinds the subject is named
+        // instead, and the field is prefixed with it, because "description" on
+        // its own no longer says what was read.
+        const describe = kind === "tool" ? rule.describe : rule.describe.replace(/^tool\b/, kind);
         findings.push({
           rule: rule.id,
           severity: rule.severity,
-          toolName: tool.name,
-          message: `${rule.describe} (in ${where})`,
+          kind,
+          subject,
+          message: `${describe} (in ${kind === "tool" ? where : `${kind} ${where}`})`,
           excerpt: evidence,
         });
       }
     }
   }
   return findings;
+}
+
+export function lintTool(tool: Tool): LintFinding[] {
+  const surfaces: Array<[string, string]> = [];
+  pushText(surfaces, "description", tool.description);
+  pushText(surfaces, "title", tool.title);
+  // Attackers also hide instructions inside the schema, and not only in its
+  // descriptions. SAFE-T1501 calls it full-schema poisoning.
+  collectSchemaText(tool.inputSchema, "inputSchema", surfaces);
+  // Annotations are rendered to the user and read by the model just the same,
+  // so they are part of the schema an attacker gets to write.
+  collectSchemaText(tool.annotations, "annotations", surfaces);
+  return scan("tool", tool.name, surfaces);
+}
+
+/**
+ * A prompt: a template the server hands the model, with the arguments it takes.
+ *
+ * Its `name` is not read, because it is what `prompts/get` is called with, and
+ * linting identifiers would report the server's own naming as an attack. A
+ * resource's `name` is the opposite case; see `lintResource`.
+ */
+export function lintPrompt(prompt: Prompt): LintFinding[] {
+  // A listing may hold anything a broken server put there. Skipping the entry
+  // is what `check` did before it linted these surfaces, and the alternative
+  // is a throw its caller reports as the listing having failed.
+  if (!prompt || typeof prompt !== "object") return [];
+  const surfaces: Array<[string, string]> = [];
+  pushText(surfaces, "description", prompt.description);
+  pushText(surfaces, "title", prompt.title);
+  if (Array.isArray(prompt.arguments)) {
+    prompt.arguments.forEach((argument, i) => {
+      if (!argument || typeof argument !== "object") return;
+      pushText(surfaces, `arguments[${i}].description`, argument.description);
+      pushText(surfaces, `arguments[${i}].title`, argument.title);
+    });
+  }
+  return scan("prompt", subjectOf(prompt.name, "prompt"), surfaces);
+}
+
+/**
+ * A resource, or a resource template.
+ *
+ * Here `name` *is* read, because it is display text: the specification has it
+ * stand in for `title` when none is given, and `resources/read` is keyed by
+ * `uri`, so the name is never what a client calls with. That `uri` (the
+ * `uriTemplate`, for a template) is the identifier, and it is what the finding
+ * names.
+ */
+export function lintResource(resource: Resource): LintFinding[] {
+  // See `lintPrompt`: a listing entry that is not an object is skipped.
+  if (!resource || typeof resource !== "object") return [];
+  const surfaces: Array<[string, string]> = [];
+  pushText(surfaces, "name", resource.name);
+  pushText(surfaces, "title", resource.title);
+  pushText(surfaces, "description", resource.description);
+  const isTemplate = typeof resource.uriTemplate === "string";
+  const kind: SubjectKind = isTemplate ? "resource-template" : "resource";
+  return scan(kind, subjectOf(isTemplate ? resource.uriTemplate : resource.uri ?? resource.name, kind), surfaces);
 }
 
 /**

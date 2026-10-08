@@ -7,7 +7,7 @@
 
 **The cassette is itself an MCP server, so any client in any language connects to it exactly as it connects to the live one: no library to import, no product code to change, no transport to wrap.**
 
-Record one session against a real [Model Context Protocol](https://modelcontextprotocol.io) server, then run your agent tests against the recording: no credentials, no rate limits, no network. The same binary gates your tool contract against breaking changes and lints tool descriptions for poisoning.
+Record one session against a real [Model Context Protocol](https://modelcontextprotocol.io) server, then run your agent tests against the recording: no credentials, no rate limits, no network. The same binary gates your tool contract against breaking changes and lints the text your server publishes to the model for poisoning.
 
 ```bash
 npx mcp-cassette check --stdio "npx -y @modelcontextprotocol/server-everything stdio"
@@ -373,7 +373,7 @@ The measurements behind this decision, including where they contradict claims ma
 
 ### Safety lint rules
 
-Heuristics distilled from tool-poisoning research and the MCP security literature (SAFE-MCP, OWASP Agentic Top 10). They scan tool descriptions *and* schema-level descriptions:
+Heuristics distilled from tool-poisoning research and the MCP security literature (SAFE-MCP, OWASP Agentic Top 10). They scan every model-facing text a server publishes: tool descriptions, schema-level descriptions, and the prompts, resources and resource templates it lists.
 
 Each rule cites the [OWASP MCP Top 10](https://owasp.org/www-project-mcp-top-10/) risk and the [SAFE-MCP](https://github.com/fkautz/safe-mcp) technique it implements, and both travel with the finding in `--json`.
 
@@ -403,11 +403,24 @@ The **evidence** column is the one to read first. It says whether text alone can
 
 They scan the tool's `description` and `title`, its `annotations`, and, because an attacker writes the whole schema rather than just its prose ([SAFE-T1501](https://github.com/fkautz/safe-mcp), full-schema poisoning), every `description`, `title`, `default`, `const`, `enum` and `examples` string at any depth of the input schema.
 
+A tool description is not the only text a server writes for a model, so the same rules run over the rest of what it publishes:
+
+| Subject | What is scanned | How a finding names it |
+|---|---|---|
+| tool | `description`, `title`, `annotations`, the whole input schema | the tool name |
+| prompt | `description`, `title`, and each argument's `description` and `title` | the prompt name |
+| resource | `name`, `title`, `description` | the resource URI |
+| resource template | the same, from `resources/templates/list` | the URI template |
+
+A resource's `name` is read because it is display text: the specification has it stand in for `title` when none is given, and `resources/read` is keyed by `uri`, so the name is never what a client calls with. A prompt's `name` is not read, because it is what `prompts/get` is called with, and linting identifiers would report a server's own naming as an attack. A server that advertises `resources` and then fails `resources/templates/list` in any way, method-not-found included, is not reported either: having no templates is not a fault.
+
+Findings on the prompt and resource surfaces are reported at `warn` in this release whatever level their rule carries, and graduate to the rule's own level no earlier than the next minor. See the paragraph below: a rule pointed at a surface it did not scan before is held to the same discipline as a new rule. Which of them graduate is an open decision with measurements behind it, in [BACKLOG.md](BACKLOG.md#which-rules-belong-on-a-name-and-on-a-prompt-description): a resource name is not a sentence, and the rules that read it as one are the ones to reconsider first.
+
 `check` fails on error-level findings only. `check --fail-on warn` opts into the stricter gate, the same way `snapshot --fail-on` works.
 
 `check --lint-fail-on <error|warn|never>` moves the gate for these `CAS-L` rules alone, and is what the action's `lint-fail-on` input passes through. It defaults to whatever `--fail-on` is, so `--fail-on warn` still gates lint warnings exactly as it did before the flag existed. `never` reports every lint finding and gates on none; it does not reach the structural `CAS-C` checks (a duplicate tool name, an invalid `inputSchema`), which still fail, and every level still exits 2 when the server cannot be inspected at all.
 
-New rules reach you at `warn` first: a rule that is new to a release ships at `warn`, and may graduate to `error` only in a later minor and no sooner than four weeks after the release that introduced it. So at the default gate, an upgrade that adds rules cannot turn an unchanged server red on the day it lands. At `warn` you asked for the stricter gate and a new rule does fail you on arrival, which is the trade you made.
+New rules reach you at `warn` first, and so does an existing rule pointed at a surface it did not scan before: it ships at `warn`, and may graduate to `error` only in a later minor and no sooner than four weeks after the release that introduced it. So at the default gate, an upgrade that adds rules cannot turn an unchanged server red on the day it lands. At `warn` you asked for the stricter gate and a new rule does fail you on arrival, which is the trade you made.
 
 Heuristics, not proofs: treat findings as review triggers, and pair with a dedicated security scanner for depth.
 
@@ -434,6 +447,10 @@ Every pattern in the rule set is proven free of super-linear backtracking by [re
   ]
 }
 ```
+
+`partialFingerprints` is how code scanning recognises the same finding across runs, so it holds the rule and the subject and nothing that moves when the text is reworded. It also holds the subject kind, for a finding about a prompt, a resource or a resource template: a prompt and a tool may share a name, and one fingerprint for both would merge two unrelated alerts into one. A finding about a tool hashes exactly as it did before prompts were scanned, so alerts you have already triaged stay triaged.
+
+Anchoring works the same way. A contract snapshot records tools, so a tool finding points at the line declaring that tool, and a prompt or resource finding points at the snapshot at line 1 rather than borrowing the line of a tool with the same name.
 
 This is the wiring, copied from [the job that runs it in this repository](.github/workflows/foundation-canary.yml):
 

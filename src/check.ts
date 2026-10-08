@@ -3,9 +3,11 @@
  *
  * Connects, performs the lifecycle handshake, lists tools/resources/prompts,
  * validates every tool inputSchema as JSON Schema 2020-12 (ajv), and runs the
- * description safety lint. Built for CI: the caller exits 1 on a finding at or
- * above its gate, `failOn` for the structural CAS-C checks and `lintFailOn` for
- * the CAS-L lint, and 2 when the server could not be inspected at all.
+ * safety lint over every model-facing text the server publishes: tools,
+ * prompts, resources and resource templates alike. Built for CI: the caller
+ * exits 1 on a finding at or above its gate, `failOn` for the structural CAS-C
+ * checks and `lintFailOn` for the CAS-L lint, and 2 when the server could not
+ * be inspected at all.
  */
 
 import Ajv2020 from "ajv/dist/2020.js";
@@ -32,7 +34,15 @@ function isDraft7(schema: unknown): boolean {
   return typeof id === "string" && id.includes("draft-07");
 }
 import { EraOption, MiniClient, Target, Tool } from "./client.js";
-import { lintTool, LintFinding } from "./lint.js";
+import {
+  lintPrompt,
+  lintResource,
+  lintTool,
+  type LintFinding,
+  type Prompt,
+  type Resource,
+  type SubjectKind,
+} from "./lint.js";
 
 export type FindingLevel = "error" | "warn" | "info";
 
@@ -40,6 +50,17 @@ export interface CheckFinding {
   level: FindingLevel;
   code: string;
   subject: string;
+  /**
+   * What `subject` names, when naming it is not enough.
+   *
+   * Absent for a tool, and for the list method CAS-C006 and CAS-C007 name.
+   * Writing `"tool"` out would be tidier and would also change the JSON and
+   * the SARIF fingerprint of every finding issued before prompts and resources
+   * were linted, and a fingerprint is triage state in somebody's Security
+   * tab. So absent is the old surface and present is a new one, in the report
+   * and in the hash alike.
+   */
+  kind?: SubjectKind;
   message: string;
   excerpt?: string;
 }
@@ -103,6 +124,31 @@ function fails(finding: CheckFinding, failOn: CheckFailOn, lintFailOn: LintFailO
   const gate = isLintFinding(finding) ? lintFailOn : failOn;
   if (gate === "never") return false;
   return gate === "warn" ? finding.level !== "info" : finding.level === "error";
+}
+
+/**
+ * A lint finding, as `check` reports it.
+ *
+ * A rule keeps its own severity on the tool surface, where it has been running
+ * since the rule set existed. On the prompt and resource surfaces it is capped
+ * at `warn` whatever the rule says, so an upgrade cannot turn an unchanged
+ * server's default gate red on the day it lands; they graduate to the rule's
+ * own level in the next minor. That is the discipline CONTRIBUTING states
+ * under "A new rule ships at `warn` before it may gate", and it covers an
+ * existing rule pointed at a surface it did not scan before exactly as it
+ * covers a new rule.
+ */
+function asFinding(finding: LintFinding): CheckFinding {
+  const isTool = finding.kind === "tool";
+  return {
+    level: isTool && finding.severity === "error" ? "error" : "warn",
+    code: finding.rule,
+    subject: finding.subject,
+    // Absent for a tool; see `kind` on CheckFinding.
+    ...(isTool ? {} : { kind: finding.kind }),
+    message: finding.message,
+    excerpt: finding.excerpt,
+  };
 }
 
 export async function runCheck(
@@ -179,24 +225,24 @@ export async function runCheck(
       }
 
       // ---- safety lint -----------------------------------------------------
-      for (const f of lintTool(tool)) {
-        findings.push({
-          level: f.severity === "error" ? "error" : "warn",
-          code: f.rule,
-          subject: f.toolName,
-          message: f.message,
-          excerpt: f.excerpt,
-        });
-      }
+      for (const f of lintTool(tool)) findings.push(asFinding(f));
     }
 
     // ---- optional surfaces -------------------------------------------------
+    // A prompt template and a resource listing are read by the model exactly
+    // as a tool description is, and are written by the same hand, so the same
+    // rules run over them. Both eras answer these methods with the same list
+    // shapes, and `listAll` is what knows the difference.
     let resourceCount: number | undefined;
     let promptCount: number | undefined;
     const caps = (init.capabilities ?? {}) as Record<string, unknown>;
     if (caps.resources) {
       try {
-        resourceCount = (await client.listAll("resources/list", "resources")).length;
+        const resources = await client.listAll<Resource>("resources/list", "resources");
+        resourceCount = resources.length;
+        for (const resource of resources) {
+          for (const f of lintResource(resource)) findings.push(asFinding(f));
+        }
       } catch (err) {
         findings.push({
           level: "warn",
@@ -205,10 +251,27 @@ export async function runCheck(
           message: `capability advertised but listing failed: ${(err as Error).message}`,
         });
       }
+      // Templates live under the same capability but a separate method, and a
+      // server that has none commonly answers it with "method not found"
+      // rather than an empty list. Reporting that would fire on servers doing
+      // nothing wrong, which is how a check stops being read; templates that
+      // *are* listed are linted like any other resource.
+      try {
+        const templates = await client.listAll<Resource>("resources/templates/list", "resourceTemplates");
+        for (const template of templates) {
+          for (const f of lintResource(template)) findings.push(asFinding(f));
+        }
+      } catch {
+        // Intentionally silent; see above.
+      }
     }
     if (caps.prompts) {
       try {
-        promptCount = (await client.listAll("prompts/list", "prompts")).length;
+        const prompts = await client.listAll<Prompt>("prompts/list", "prompts");
+        promptCount = prompts.length;
+        for (const prompt of prompts) {
+          for (const f of lintPrompt(prompt)) findings.push(asFinding(f));
+        }
       } catch (err) {
         findings.push({
           level: "warn",

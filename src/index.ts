@@ -68,11 +68,17 @@ export { runHttpRecord, startHttpRecord, type HttpRecordOptions, type RecordingP
 export { runHttpReplay, startHttpReplay, type HttpReplayOptions, type ReplayServer, type Timing } from "./http-replay.js";
 export {
   lintTool,
+  lintPrompt,
+  lintResource,
   lintCassette,
   LINT_RULES,
   type CassetteFinding,
   type LintFinding,
   type LintRule,
+  type Prompt,
+  type PromptArgument,
+  type Resource,
+  type SubjectKind,
 } from "./lint.js";
 export {
   runCheck,
