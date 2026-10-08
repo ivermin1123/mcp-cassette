@@ -27,6 +27,45 @@ below.
   Optional fields would have been the compatible shape and the wrong one:
   `printReport` would then render a gate the report does not actually know.
 
+- **Replay now originates the frames the recorded server sent on its own, at
+  their recorded position.** Until now a server-initiated notification was
+  counted and dropped (`N server-initiated frame(s) in the cassette are not
+  replayed in v1`). It is now anchored to the last client request whose answer
+  preceded it in the recording, and emitted immediately after replay answers
+  that request; a frame recorded while a request was still outstanding belongs
+  to that request and is emitted just before its answer, which is what keeps a
+  stdio `notifications/progress` behind the call it reports on. A client
+  therefore receives frames from a replay session that earlier releases never
+  sent it, and the legacy standalone `GET` stream no longer delivers its whole
+  content the moment it is opened: it is held open and fed at those anchors.
+
+  *What you see:* a test that asserted on the exact frames a replay sends can
+  now see extra notifications; a test that opened the `GET` stream without
+  sending the request its frames follow now reads nothing from it. Replay says
+  what it did on stderr: `N server-initiated frame(s) replayed at their recorded
+  position`, and `N recorded server-initiated frame(s) were not replayed: the
+  client never sent the request each one follows`.
+
+  *What to do:* for the `GET` stream, send the requests the recording sent, in
+  the order it sent them, and the frames arrive where they were recorded. A
+  client that does not want change notifications at all should not subscribe to
+  them; in the 2026-07-28 era replay sends nothing on a subscription the client
+  never opened.
+
+- **`ReplayIndex.skippedServerFrames` is now `serverInitiatedRequests`.** The
+  old field counted every server-initiated frame, because every one of them was
+  skipped. Notifications are replayed now, so the only frames still skipped are
+  server-to-client *requests* (legacy sampling, elicitation, roots), and the
+  field counts those and says so in its name. Library callers reading the old
+  field get `undefined`.
+
+- **`handleFrame` returns the first frame of an exchange, not the only one.** A
+  recording whose server pushed notifications has more to send after an answer,
+  and the new `handleExchange` returns all of them in order. `handleFrame` is
+  unchanged for every cassette without server-initiated frames. For a
+  `subscriptions/listen` it returns the recorded acknowledgment, where it used
+  to return a JSON-RPC error.
+
 ### Added
 
 - **`lint-fail-on` input on the action, and `check --lint-fail-on`.** The
@@ -56,6 +95,25 @@ below.
   `warn`, and may graduate to `error` only in a later minor and no sooner than
   four weeks after the release that introduced it.
 
+- **`subscriptions/listen` (2026-07-28) replays.** A recorded listen request is
+  answered by its recorded `notifications/subscriptions/acknowledged` and held
+  open (an SSE response stream over HTTP, the open request id on stdio), its
+  recorded change notifications are emitted at their anchors, and a recorded
+  graceful closure ends the subscription. `io.modelcontextprotocol/subscriptionId`
+  is re-keyed to the id the client's own listen request carried, exactly as a
+  recorded response is re-keyed to the incoming request id, so a client
+  correlates on the id it chose. Proven against `@modelcontextprotocol/client`
+  2.3.1 configured with `ClientOptions.listChanged`: it receives the change
+  notification from the replay alone, in both eras, with no server running.
+
+- **`handleExchange(index, frame, onMiss)`**, the complete single-frame API:
+  the answer followed by whatever the recording puts after it. Also exported:
+  `releaseInitial`, `releaseBefore`, `releaseAfter`, `pendingServerFrames`,
+  `matchListen`,
+  `acknowledgmentFor`, `subscriptionOf`, `resolveFrame`, `reportServerFrames`,
+  and the three names the subscription travels under (`LISTEN_METHOD`,
+  `ACKNOWLEDGED_METHOD`, `SUBSCRIPTION_ID_KEY`).
+
 ### Changed
 
 - **`check` names its gates in the report.** The text report's result line now
@@ -64,6 +122,26 @@ below.
   `result: PASS` over five error-level findings reads as a bug rather than as
   the level that was asked for. The interface change this implies is under
   BREAKING above.
+
+### Fixed
+
+- **A request the recording holds with no response is diagnosed as that.** It
+  used to be reported as `no recorded request has method "..."`, which is a
+  claim about the file that the file contradicts: the request is right there,
+  the server just never answered it before the session ended. The miss now says
+  so, for the exact request and for a drifted call of a method only recorded
+  unanswered. This was most visible on `subscriptions/listen`, which is answered
+  by its acknowledgment now and so is no longer a miss at all.
+
+- **Position is read from the recorded timestamps, not from file order.** An
+  HTTP recording writes a whole stream as one `chunks` entry when the stream
+  closes while stamping each frame as it arrived, so file order puts every frame
+  of a long-lived stream after requests it preceded.
+
+- **The HTTP `N streamed answer(s) in the cassette` count no longer includes
+  streams that answer nothing.** The legacy standalone `GET` stream and a
+  subscription stream are held open rather than handed to a request, so counting
+  them promised replies that never came.
 
 ## [0.5.0] - 2026-10-08
 

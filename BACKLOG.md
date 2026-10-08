@@ -193,9 +193,14 @@ row in the README, CHANGELOG 0.5.0.
 
 ---
 
-## `subscriptions/listen` cannot be replayed
+## `subscriptions/listen` cannot be replayed: DECIDED
 
-**Raised** 2026-10-08, from the 2026-07-28 revision.
+**Raised** 2026-10-08, from the 2026-07-28 revision. **Decided** 2026-10-08:
+the owner chose the faithful direction, *replay the notifications too*, at their
+recorded position relative to the client's requests. Shipped in the Unreleased
+section of [CHANGELOG.md](CHANGELOG.md); the position rule is in
+[`docs/cassette-format-v2.md`](docs/cassette-format-v2.md) and narrated on
+[the replay page](https://mcpcassette.dev/replay/).
 
 2026-07-28 replaced unsolicited change notifications with `subscriptions/listen`:
 one long-lived request, acknowledged by a `notifications/subscriptions/acknowledged`
@@ -216,14 +221,29 @@ this subscription on its own only when `ClientOptions.listChanged` is
 configured and the server advertises `listChanged`; when it fails, the client
 reports through `onerror` and carries on. So that client survives the miss, and the session still fails at exit.
 
-**Directions, none chosen:**
+**Directions considered:**
 
 - **Acknowledge and hold:** answer a recorded listen request with its recorded
   acknowledgment and keep it open, replaying no change notifications. Small,
-  and makes the miss go away honestly.
+  and makes the miss go away honestly. *(Not taken: it fixes the exit code
+  without making the client testable, which was the point.)*
 - **Replay the notifications too**, at their recorded position relative to the
   client's requests. The faithful version, and the first time replay would
-  originate frames on its own schedule.
+  originate frames on its own schedule. **Chosen.**
+
+**What shipped:** a listen request is answered by its recorded acknowledgment
+and held open; every server-initiated notification is anchored to the last
+client request whose answer preceded it and emitted right after replay answers
+that request, on stdio and on both HTTP stream kinds; the subscription id is
+re-keyed to the client's own listen id; a frame whose anchor the client never
+sends is reported rather than emitted out of place. The miss message for a
+request the recording holds with no response now says that, instead of claiming
+the method was never recorded. Server-to-client *requests* (legacy sampling,
+elicitation, roots) are still not originated, and are counted and named.
+
+**Proof:** `@modelcontextprotocol/client` 2.3.1 with `ClientOptions.listChanged`
+configured received the change notification from the replay alone, in both
+eras, with no server process running.
 
 **Related:** `buildReplayIndex` in `src/replay.ts`, `http-replay.ts` stream
 emission, the README roadmap's server-initiated flows.

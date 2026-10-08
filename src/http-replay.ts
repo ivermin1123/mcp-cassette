@@ -37,10 +37,18 @@ import {
   fingerprint,
   formatBorrowed,
   formatMiss,
+  acknowledgmentFor,
+  LISTEN_METHOD,
   LiveAppender,
   matchFallback,
+  matchListen,
   matchResponse,
   missError,
+  releaseAfter,
+  releaseBefore,
+  releaseInitial,
+  reportServerFrames,
+  subscriptionOf,
   type MissEvent,
   type MissReason,
   type OnMissMode,
@@ -128,6 +136,9 @@ function streamIndex(cassette: Cassette): {
     }
     const answered = requests.get(String(entry.id));
     if (!answered) continue;
+    // A subscription stream is not an answer to pool: it is held open and fed
+    // frame by frame, which is `buildReplayIndex`'s schedule rather than a pool.
+    if (answered.method === LISTEN_METHOD) continue;
     const fp = fingerprint(answered);
     if (!pools.has(fp)) pools.set(fp, []);
     pools.get(fp)!.push(entry);
@@ -191,10 +202,27 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
   const sessioned = era === "legacy" && cassette.header.sessioned === true;
   const version = recordedProtocolVersion(cassette);
   const timing = opts.timing ?? "none";
-  const streamCount = cassette.entries.filter((e) => e.type === "chunks").length;
+  // Answers only: the standalone GET stream and a subscription stream answer no
+  // request, and counting them here would promise replies that never come.
+  const streamCount = [...streams.recorded.values()].reduce((total, count) => total + count, 0);
   /** Streams currently being written. The session may end mid-emission; each one owns its close path. */
   const open = new Set<http.ServerResponse>();
+  /**
+   * A stream held open for the frames the server sends on its own: the legacy
+   * standalone GET stream, or a modern `subscriptions/listen` response stream.
+   * `subscription` is the id the client's own listen request carried, so a
+   * recording with two subscriptions feeds each one its own notifications.
+   */
+  const held: { res: http.ServerResponse; subscription?: JsonRpcId }[] = [];
+  /**
+   * Released frames with nowhere to go yet. A client may open the stream after
+   * the request a frame follows was already answered, and HTTP gives replay no
+   * way to push before that: the frame waits rather than being dropped.
+   */
+  const outbox: JsonRpcFrame[] = [];
   let sessionId: string | undefined;
+  let pushed = 0;
+  let subscriptions = 0;
   let misses = 0;
   // Two separate things on purpose. `misses` is cumulative and decides the
   // session's exit code, so nothing may reset it. `missLog` is drainable: a
@@ -284,6 +312,67 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
     res.end(JSON.stringify(body));
   };
 
+  /**
+   * Open a stream that answers nothing and so completes nothing: it stays open
+   * until the client leaves or the session ends, carrying whatever the recorded
+   * server pushed while it was open.
+   */
+  const holdOpen = (res: http.ServerResponse, subscription?: JsonRpcId) => {
+    open.add(res);
+    const stream = { res, subscription };
+    held.push(stream);
+    res.on("close", () => {
+      open.delete(res);
+      const i = held.indexOf(stream);
+      if (i !== -1) held.splice(i, 1);
+    });
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+    // A held stream may say nothing for a long time, and Node holds the headers
+    // back until the first write: the client would still be waiting to connect.
+    res.flushHeaders();
+  };
+
+  /**
+   * The held stream a pushed frame belongs on. A frame that names a
+   * subscription goes on that subscription's stream or nowhere: handing it to
+   * another open stream would tell that client its own subscription fired.
+   * An untagged frame belongs to the standalone GET stream, or, in a recording
+   * whose server left the tag off, to the one stream that is open.
+   */
+  const holderOf = (frame: JsonRpcFrame) => {
+    const id = subscriptionOf(frame);
+    if (id !== undefined) {
+      return held.find((h) => h.subscription !== undefined && String(h.subscription) === String(id));
+    }
+    return held.find((h) => h.subscription === undefined) ?? (held.length === 1 ? held[0] : undefined);
+  };
+
+  /** Deliver what the outbox can; anything with no stream open yet stays in it. */
+  const flush = () => {
+    for (let i = 0; i < outbox.length; ) {
+      const target = holderOf(outbox[i]!);
+      if (!target || target.res.writableEnded || target.res.destroyed) {
+        i++;
+        continue;
+      }
+      const frame = outbox.splice(i, 1)[0]!;
+      pushed++;
+      target.res.write(sseLine(frame));
+      // The server's own response to a listen is its graceful closure (§
+      // Cancellation): the subscription it answers ends with it.
+      if (isResponse(frame) && target.subscription !== undefined) {
+        held.splice(held.indexOf(target), 1);
+        if (!target.res.writableEnded) target.res.end();
+      }
+    }
+  };
+
+  /** Everything the recording puts around this answer, on its way to the client. */
+  const release = (answer: object, when: "before" | "after") => {
+    outbox.push(...(when === "before" ? releaseBefore(index, answer) : releaseAfter(index, answer)));
+    flush();
+  };
+
   /** §3.3: every one of these is a warning and a correct answer, never a 400. */
   const checkHeaders = (req: http.IncomingMessage, frame: JsonRpcRequest) => {
     const sent = req.headers["mcp-session-id"];
@@ -319,10 +408,30 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
     }
     checkHeaders(req, frame);
 
+    if (frame.method === LISTEN_METHOD) {
+      const listen = matchListen(index, frame);
+      if (listen) {
+        // The acknowledgment is the answer, the stream is the subscription, and
+        // neither ends here: the response, if the recording has one at all, is
+        // the server's graceful closure much later.
+        subscriptions++;
+        holdOpen(res, frame.id);
+        const acknowledgment = acknowledgmentFor(index, listen);
+        if (acknowledgment) {
+          pushed++;
+          res.write(sseLine(acknowledgment));
+        }
+        release(listen.request, "after");
+        return;
+      }
+    }
+
     const recorded = matchResponse(index, frame);
     if (recorded) {
       // Recorded status, re-keyed to the id the client actually used.
+      release(recorded, "before");
       send(res, statuses.get(recorded) ?? 200, { ...recorded, id: frame.id }, mint(frame));
+      release(recorded, "after");
       return;
     }
     if (frame.method === "ping") {
@@ -334,7 +443,11 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
     if (pool && pool.length > 0) {
       // Consumed exactly like a JSON answer, and before a byte goes out: the
       // client may disconnect mid-stream, and that must not hand the answer back.
-      void emit(res, pool.shift()!.chunks, { terminate: true, rekey: frame.id });
+      const answer = pool.shift()!;
+      // A streamed answer completes on its final frame, so what the recording
+      // puts after it waits for that frame, not for the stream to open.
+      release(answer, "before");
+      void emit(res, answer.chunks, { terminate: true, rekey: frame.id }).then(() => release(answer, "after"));
       return;
     }
     if (onMiss === "warn") {
@@ -344,7 +457,9 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       if (lent) {
         borrowed++;
         warn(formatBorrowed(frame.method, reason));
+        release(lent, "before");
         send(res, statuses.get(lent) ?? 200, { ...lent, id: frame.id }, mint(frame));
+        release(lent, "after");
         return;
       }
     }
@@ -412,8 +527,11 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       }
       // The legacy standalone stream: recorded once, opened by GET, and held
       // open: it never answered a request, so it never completes one either.
+      // What it carries arrives at the recorded position, which for a frame
+      // whose request was answered before the GET landed is right now.
       if (req.method === "GET" && standalone) {
-        void emit(res, standalone.chunks, { terminate: false });
+        holdOpen(res);
+        flush();
         return;
       }
       // A sessioned legacy cassette can end its session; everything else the
@@ -432,6 +550,12 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       const bound = `http://${host}:${(server.address() as { port: number }).port}/`;
       warn(`serving ${cassettePath} as a ${era} server at ${bound}`);
       if (streamCount > 0) warn(`${streamCount} streamed answer(s) in the cassette`);
+      if (index.serverInitiatedRequests > 0) {
+        warn(`${index.serverInitiatedRequests} server-initiated request(s) in the cassette are not replayed`);
+      }
+      // The recording opens with these: nothing precedes them, so they wait only
+      // for a stream to carry them.
+      outbox.push(...releaseInitial(index));
       // One GET endpoint, so one standalone stream. Serving the first is a
       // choice, not an accident, and a cassette with more should hear about it.
       if (standalone && streams.extraStandalone > 0) {
@@ -445,6 +569,9 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
         appended: () => appended,
         forwardFailures: () => forwardFailures,
         close: async () => {
+          // The session ends here on this front-end, so this is where the
+          // server-initiated side reports, exactly as the stdio one does.
+          reportServerFrames(index, pushed, subscriptions, warn, outbox.length);
           // A held-open stream is exactly the dangling socket that would keep the
           // process alive, so the session ends them itself rather than waiting on
           // connections built never to end. Ended gracefully, and awaited, so a

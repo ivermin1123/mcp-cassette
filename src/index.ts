@@ -4,20 +4,36 @@ export * from "./jsonrpc.js";
 export * from "./cassette.js";
 export { runRecord, type RecordMode, type RecordOptions } from "./record.js";
 export {
+  acknowledgmentFor,
   buildReplayIndex,
   diagnoseMiss,
   diagnoseMissReason,
   fingerprint,
   formatMiss,
+  handleExchange,
   handleFrame,
   matchFallback,
+  matchListen,
   matchResponse,
+  pendingServerFrames,
+  releaseAfter,
+  releaseBefore,
+  releaseInitial,
+  reportServerFrames,
+  resolveFrame,
   runReplay,
+  subscriptionOf,
+  ACKNOWLEDGED_METHOD,
+  LISTEN_METHOD,
+  SUBSCRIPTION_ID_KEY,
   type MissEvent,
   type MissReason,
   type OnMissMode,
+  type RecordedListen,
   type ReplayIndex,
   type ReplayOptions,
+  type Resolution,
+  type ServerFrameSchedule,
 } from "./replay.js";
 export { diffValues, escapePointerSegment, formatValue, splitPointer, type DiffEntry } from "./diff.js";
 export {
