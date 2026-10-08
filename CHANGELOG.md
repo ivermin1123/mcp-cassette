@@ -22,8 +22,8 @@ below.
   about.
 
   *What to do:* upgrade jest to 29 or newer, which is the oldest version the
-  adapter is tested against. `--legacy-peer-deps` silences the check if the
-  upgrade has to wait, at the cost of the check.
+  adapter has been verified against. `--legacy-peer-deps` silences the check if
+  the upgrade has to wait, at the cost of the check.
 
 ### Added
 
@@ -58,9 +58,10 @@ below.
   The package is ESM, so jest needs its native ESM mode: `transform: {}`,
   `testEnvironment: "node"` and `NODE_OPTIONS=--experimental-vm-modules`. That
   setup is in the README, and it is the one a fixture project runs on every
-  build rather than a snippet written from memory. Node 24.6.0 cannot run jest
-  in ESM mode at all, for a reason that has nothing to do with this package;
-  the README says what that looks like and which releases are unaffected.
+  test run rather than a snippet written from memory. Node 24.6.0 cannot run
+  jest in ESM mode at all, for a reason that has nothing to do with this
+  package; the README says what that looks like and which releases are
+  unaffected.
 
 ### Fixed
 

@@ -10,7 +10,10 @@
  * The design that matters is where a miss surfaces. The engine answers a miss
  * with a JSON-RPC error, which a test would happily swallow, so the adapter
  * drains `takeMisses()` after every test and throws. Draining per test is the
- * point: a miss belongs to the test that caused it, not to the file.
+ * point: a miss belongs to the test that caused it, not to the file. That
+ * attribution assumes the tests in a file run one at a time; concurrent tests
+ * share the one replay server, so a miss can be drained by whichever test
+ * finishes first and reported against it.
  *
  * HTTP and stdio are not symmetric, and this does not pretend otherwise.
  * An HTTP cassette is served in-process, so its whole lifecycle is real. A

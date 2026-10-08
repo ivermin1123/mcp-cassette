@@ -266,14 +266,15 @@ A process spawned by the client is a process the adapter does not own, so misses
 
 `mcp-cassette/jest` is the same adapter for jest: the same `useCassette`, the same options, the same two error classes. Everything the section above says about misses, the per-test drain and the HTTP/stdio split is true here too, so this section covers only what differs, which is the setup.
 
-The package is ESM, so jest needs its native ESM mode. That is two settings and one flag, and nothing else:
+The package is ESM, so jest needs its native ESM mode. A project still in CommonJS mode never reaches the adapter: jest fails every suite with `Must use import to load ES Module: <your spec>`. Switching is two settings and one flag, and nothing else:
 
 ```js
 // jest.config.mjs
 export default {
   testEnvironment: "node",
-  // Turns babel-jest off. Left in place it rewrites the specs to CommonJS and
-  // jest's ESM loader never sees them.
+  // Nothing to compile: the specs are plain ESM. Leave this key out and jest's
+  // default transform hands them to babel-jest, which applies whatever babel
+  // config the project has. An empty transform keeps that away from them.
   transform: {},
 };
 ```
@@ -307,7 +308,7 @@ describe("recorded call", () => {
 });
 ```
 
-That config, that flag and that spec are the ones under `tests/fixtures/jest/`, which this package runs as a real jest process on every build. If the setup above ever stops working, the build says so.
+That config, that flag and that spec are the ones under `tests/fixtures/jest/`, which this package runs as a real jest process on every test run. If the setup above ever stops working, the suite says so.
 
 TypeScript specs need a transform on top, which is a choice about your toolchain rather than about this adapter, so the setup above is the part that is proven here.
 
@@ -605,7 +606,7 @@ The hash is not a security boundary. It is an unsalted, truncated SHA-256 of the
 
 ## Roadmap
 
-Configurable redaction rules, a `jest` adapter, a GitHub Action, smarter replay matching (custom matchers, volatile-field config), server-to-client requests (legacy sampling, elicitation and roots, which replay records but does not originate), the tasks extension, scenario `state`/`seq`, `Last-Event-ID` resumability, and contributed scenarios for the official conformance suite. Issues and PRs welcome.
+Configurable redaction rules, a GitHub Action, smarter replay matching (custom matchers, volatile-field config), server-to-client requests (legacy sampling, elicitation and roots, which replay records but does not originate), the tasks extension, scenario `state`/`seq`, `Last-Event-ID` resumability, and contributed scenarios for the official conformance suite. Issues and PRs welcome.
 
 A `pytest` adapter was on this list and is cancelled. A second, unrelated `mcp-cassette` has been on PyPI since 2026-07-25 and already ships a pytest plugin, so a `pytest-mcp-cassette` published beside it would read as that tool's adapter no matter what its README said. The measurement and the decision are in [`docs/research/02-name-collision.md`](docs/research/02-name-collision.md).
 

@@ -10,8 +10,8 @@ export default {
   rootDir: ".",
   testEnvironment: "node",
   // The package is ESM and the specs are plain ESM, so there is nothing to
-  // compile. An empty transform is what turns babel-jest off; left in place it
-  // would rewrite the specs to CommonJS and the native ESM loader would never
-  // see them.
+  // compile. Leaving this key out does not mean no transform: jest's default
+  // hands the specs to babel-jest, which applies whatever babel config the
+  // project has. An empty transform is what keeps that away from them.
   transform: {},
 };
