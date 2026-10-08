@@ -8,6 +8,23 @@ below.
 
 ## [Unreleased]
 
+### BREAKING
+
+- **`jest` and `@jest/globals` are now optional peer dependencies, at `>=29`.**
+  The jest adapter needs them, and declaring them is what keeps them out of the
+  dependency graph of everyone else. An optional peer is still a peer, though,
+  so npm checks it whenever the package is already present.
+
+  *What you see:* a project that has jest 28 or older installed fails to install
+  this release with `ERESOLVE ... Conflicting peer dependency`, naming
+  `peerOptional jest@">=29"`. A project with jest 29 or newer, or with no jest
+  at all, is unaffected: nothing new is installed and nothing new is warned
+  about.
+
+  *What to do:* upgrade jest to 29 or newer, which is the oldest version the
+  adapter is tested against. `--legacy-peer-deps` silences the check if the
+  upgrade has to wait, at the cost of the check.
+
 ### Added
 
 - **`sarif-file` input on the action.** Set it and the check's findings, `CAS-C`
@@ -28,6 +45,22 @@ below.
 
   Setting it starts the server a second time: one `check` run emits one format,
   and the job log and the comment need the human-readable one.
+
+- **A jest adapter, `mcp-cassette/jest`.** The same `useCassette` as
+  `mcp-cassette/vitest`, with the same options, the same per-test drain and the
+  same two error classes, so a jest suite gets what a vitest suite already had:
+  a replay server around a `describe` block, no server and no network. Both
+  adapters are now one implementation with a framework's hooks passed in, so
+  there is one answer to where a miss surfaces rather than two that can drift.
+  `CassetteMissError` and `CassetteMismatchError` are the same classes across
+  both entry points, so one `instanceof` covers either.
+
+  The package is ESM, so jest needs its native ESM mode: `transform: {}`,
+  `testEnvironment: "node"` and `NODE_OPTIONS=--experimental-vm-modules`. That
+  setup is in the README, and it is the one a fixture project runs on every
+  build rather than a snippet written from memory. Node 24.6.0 cannot run jest
+  in ESM mode at all, for a reason that has nothing to do with this package;
+  the README says what that looks like and which releases are unaffected.
 
 ### Fixed
 
