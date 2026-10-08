@@ -193,9 +193,14 @@ row in the README, CHANGELOG 0.5.0.
 
 ---
 
-## `subscriptions/listen` cannot be replayed
+## `subscriptions/listen` cannot be replayed: DECIDED
 
-**Raised** 2026-10-08, from the 2026-07-28 revision.
+**Raised** 2026-10-08, from the 2026-07-28 revision. **Decided** 2026-10-08:
+the owner chose the faithful direction, *replay the notifications too*, at their
+recorded position relative to the client's requests. Shipped in the Unreleased
+section of [CHANGELOG.md](CHANGELOG.md); the position rule is in
+[`docs/cassette-format-v2.md`](docs/cassette-format-v2.md) and narrated on
+[the replay page](https://mcpcassette.dev/replay/).
 
 2026-07-28 replaced unsolicited change notifications with `subscriptions/listen`:
 one long-lived request, acknowledged by a `notifications/subscriptions/acknowledged`
@@ -216,17 +221,113 @@ this subscription on its own only when `ClientOptions.listChanged` is
 configured and the server advertises `listChanged`; when it fails, the client
 reports through `onerror` and carries on. So that client survives the miss, and the session still fails at exit.
 
-**Directions, none chosen:**
+**Directions considered:**
 
 - **Acknowledge and hold:** answer a recorded listen request with its recorded
   acknowledgment and keep it open, replaying no change notifications. Small,
-  and makes the miss go away honestly.
+  and makes the miss go away honestly. *(Not taken: it fixes the exit code
+  without making the client testable, which was the point.)*
 - **Replay the notifications too**, at their recorded position relative to the
   client's requests. The faithful version, and the first time replay would
-  originate frames on its own schedule.
+  originate frames on its own schedule. **Chosen.**
+
+**What shipped:** a listen request is answered by its recorded acknowledgment
+and held open; every server-initiated notification is anchored to the last
+client request whose answer preceded it and emitted right after replay answers
+that request, on stdio and on both HTTP stream kinds; the subscription id is
+re-keyed to the client's own listen id; a frame whose anchor the client never
+sends is reported rather than emitted out of place. The miss message for a
+request the recording holds with no response now says that, instead of claiming
+the method was never recorded. Server-to-client *requests* (legacy sampling,
+elicitation, roots) are still not originated, and are counted and named.
+
+**Proof:** `@modelcontextprotocol/client` 2.3.1 with `ClientOptions.listChanged`
+configured received the change notification from the replay alone, in both
+eras, with no server process running.
 
 **Related:** `buildReplayIndex` in `src/replay.ts`, `http-replay.ts` stream
 emission, the README roadmap's server-initiated flows.
+
+---
+
+## Four limits left by server-frame replay
+
+**Raised** 2026-10-08, from the review of the change that made replay originate
+server frames. None of these is a regression: each is either a case that change
+did not cover or a pre-existing behaviour it made easy to reach. They are
+recorded here rather than fixed because each needs an owner decision about
+scope, not a patch.
+
+### Replay does not honour `notifications/cancelled` on a subscription
+
+A client that opens a `subscriptions/listen` and then cancels it, which on stdio
+means sending `notifications/cancelled` naming the listen request id, keeps
+receiving that subscription's recorded notifications until the cassette runs
+out. Replay treats every client notification as `silent` (`resolveFrame` in
+`src/replay.ts`) and has no cancellation state.
+
+**Measured:** no test covers it, because no fixture cancels. The recorded
+sessions this was built against never cancelled either, so a cassette that would
+exercise the fix does not exist yet.
+
+**Cost:** roughly five lines in `resolveFrame` to drop the live mapping, plus a
+fixture that cancels. The reason to wait is that a recording whose client
+cancelled would also hold whatever the server did next, and it is not yet clear
+whether replay should stop at the cancellation or follow the recording past it.
+
+### `--on-miss passthrough` on an unrecorded listen stalls the whole session
+
+A `subscriptions/listen` the cassette does not hold is an ordinary miss, and
+under `passthrough` a miss is forwarded through `MiniClient.relay`, which waits
+for a JSON-RPC response. A real server answers a listen only when it ends the
+subscription gracefully, so the forward does not return.
+
+**Measured:** the stdio front-end serialises every frame behind the in-flight
+forward (the `queue` chain in `runReplay`), so the stall is not confined to the
+listen: the session answers nothing after it. An official SDK client configured
+with `ClientOptions.listChanged` opens that listen on its own, without the
+caller asking for it, which is what makes this easy to hit.
+
+**Pre-existing:** the same holds for any request a server never answers, and did
+before server frames were replayed. The fix is a timeout or a method list that
+passthrough refuses to forward; both are a behaviour decision.
+
+### `record` keeps only the last connection when a client probes on a throwaway one
+
+The official SDK in `versionNegotiation: { mode: { pin } }` opens one connection
+for the `server/discover` probe and a second for the session. Each connection
+spawns its own `record` process against the same output path, and the second one
+under `--mode all` truncates the first.
+
+**Measured 2026-10-08:** recording a pinned modern session produced a cassette
+whose first entry was `subscriptions/listen`; the probe exchange was gone, and
+replaying it failed the client's negotiation with `the server did not offer
+pinned protocol version 2026-07-28 via server/discover`. Splicing the probe pair
+back in by hand made the replay work. Under the default `--mode once` the second
+spawn instead refuses to start, which fails the session with a clearer message
+but is no more usable.
+
+**Related:** `ensureWritable` and `CassetteWriter` in `src/record.ts`. An append
+mode, or a per-connection suffix, would fix it; both change what a cassette path
+means.
+
+### A frame recorded with two requests in flight is attributed to the wrong one
+
+The position rule parks a frame recorded while any answerable request is
+outstanding and releases it before whichever answer lands first
+(`scheduleServerFrames` in `src/replay.ts`). With requests A and B both in
+flight, a `notifications/progress` for B recorded in that window becomes B's
+frame only if B is answered first; otherwise replay emits it when it answers A,
+before the client has sent B.
+
+**Measured:** sequential clients, which is what every fixture and every recorded
+session here uses, are exact. The limit shows only with a client that pipelines,
+and the recording does carry enough to resolve it: `params._meta.progressToken`
+on a progress notification names the request it belongs to.
+
+**Cost:** matching the token is a small follow-up, and it only covers progress.
+`notifications/message` carries no such correlation under 2026-07-28, so the
+general case stays ambiguous and the rule above stays the fallback.
 
 ---
 

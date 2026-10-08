@@ -135,6 +135,63 @@ Design intent, firmed up in §1.3 of that document:
   entries with a clear "recorded with a newer mcp-cassette" error. It can still
   parse the file, because unknown entry types are skippable by design.
 
+### Server-initiated frames: the position rule
+
+A recording also holds frames the server sent on its own: an unsolicited
+`notifications/*/list_changed` or a `resources/subscribe` update in the legacy
+era, and in the 2026-07-28 era the acknowledgment and change notifications of a
+`subscriptions/listen` stream. None of them answers a request, so nothing in the
+file says when replay should send one. The format does not add a field for it;
+the order the file already carries is the answer:
+
+> A server-initiated frame is anchored to the last client request whose answer
+> preceded it in the recording, and replay emits it immediately after it answers
+> that request. A frame recorded while a request was still outstanding belongs
+> to that request instead, and is emitted immediately before its answer. A frame
+> anchored to a request the client never sends is reported, not emitted.
+
+The second sentence is what keeps a request's own `notifications/progress`
+where it belongs. On stdio those frames sit between the request and its
+response, so the first sentence alone would send a call's progress out before
+the client had even sent the call. "Outstanding" means a request the recording
+goes on to answer: one the server never answered has no answer for anything to
+precede, so it holds nothing back and every later frame keeps the position it
+would have had without it.
+
+Four consequences are worth stating, because they are what the rule costs:
+
+- The anchor is the recorded answer itself, not its fingerprint. A cassette that
+  recorded the same call three times releases the frames of the third recording
+  when the third call is answered.
+- `subscriptions/listen` is anchored by its acknowledgment
+  (`notifications/subscriptions/acknowledged`), which is what answers it. The
+  recording usually holds no JSON-RPC response for the listen request, because
+  the server sends one only when it ends the subscription gracefully; when it
+  does, that response is itself a server-initiated frame at its own position,
+  and emitting it ends the stream.
+- `io.modelcontextprotocol/subscriptionId` is re-keyed to the id the client's
+  own listen request carried, exactly as a recorded response is re-keyed to the
+  incoming request id. The recorded value belongs to a session that is over.
+
+- Position is read from `t` first and from file order only to break ties. An
+  HTTP recording writes a whole stream as one `chunks` entry when the stream
+  closes, while each chunk carries the `t` it arrived at, so file order alone
+  would place every frame of a long-lived stream after requests it preceded.
+
+Over HTTP a frame that names `io.modelcontextprotocol/subscriptionId` goes on
+that subscription's stream or on none: handing it to another open stream would
+tell that client its own subscription had fired. When no stream is open to carry
+a frame that came due, replay counts it and says so at session end rather than
+emitting it somewhere else.
+
+Two kinds of s2c frame are deliberately outside the rule. The notifications
+inside an ordinary id-bearing `chunks` entry are request-scoped
+(`notifications/progress`, `notifications/message`) and travel with the stream
+that answers their request, which is what 2026-07-28 says they do. And a
+server-to-client *request* (legacy sampling, elicitation, roots) is not
+replayed at all: replay counts them and says so, because originating a request
+means consuming the client's answer to it, which is a different machine.
+
 ### `state` / `seq`: scenario states
 
 v1 answers repeated identical requests from an ordered pool, which encodes

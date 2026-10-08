@@ -39,6 +39,7 @@ import {
   isResponse,
   JsonRpcFrame,
   JsonRpcId,
+  JsonRpcNotification,
   JsonRpcRequest,
   JsonRpcResponse,
   LineBuffer,
@@ -52,6 +53,22 @@ import { MiniClient } from "./client.js";
 import { redactFrame } from "./redact.js";
 
 const METHOD_ONLY = new Set(["initialize", "ping", "tools/list", "resources/list", "prompts/list", "resources/templates/list"]);
+
+/**
+ * The 2026-07-28 long-lived subscription, and the three names it travels under.
+ *
+ * `subscriptions/listen` replaced the HTTP GET endpoint and
+ * `resources/subscribe`: one request, answered first by a
+ * `notifications/subscriptions/acknowledged` notification and only much later
+ * (if at all) by a JSON-RPC response, when the server ends the subscription
+ * gracefully. Every frame on the subscription carries the id of the listen
+ * request that opened it under `io.modelcontextprotocol/subscriptionId`, which
+ * is what replay re-keys so the client sees its own id rather than the
+ * recording's.
+ */
+export const LISTEN_METHOD = "subscriptions/listen";
+export const ACKNOWLEDGED_METHOD = "notifications/subscriptions/acknowledged";
+export const SUBSCRIPTION_ID_KEY = "io.modelcontextprotocol/subscriptionId";
 
 // Fingerprint components are joined with NUL: it can never appear in a method
 // name or in JSON text, so no crafted tool name or argument can collide.
@@ -95,41 +112,311 @@ export function fingerprint(req: { method: string; params?: unknown }): string {
   return `${req.method}${SEP}${stableStringify(cleaned)}`;
 }
 
+/**
+ * A recorded `subscriptions/listen` and the acknowledgment that answered it.
+ *
+ * The recording almost never holds a response for a listen request: the server
+ * answers one only when it ends the subscription itself. So the acknowledgment
+ * is what replay treats as the answer, which is also why an unanswered listen
+ * must never be indexed as a miss.
+ */
+export interface RecordedListen {
+  request: JsonRpcRequest;
+  acknowledgment?: JsonRpcNotification;
+}
+
+/**
+ * The frames the recorded server sent on its own, each tied to the point in the
+ * session where replay may send it.
+ *
+ * Both maps are keyed by the recorded answer itself, by object identity, so a
+ * fingerprint recorded three times releases the frames of its first occurrence
+ * when its first recording is consumed and not before. An anchor is a
+ * `JsonRpcResponse` for a JSON answer, a `ChunksEntry` for a streamed one, and
+ * the `JsonRpcRequest` itself for a listen answered by its acknowledgment.
+ */
+export interface ServerFrameSchedule {
+  /** Nothing precedes these in the recording: due as soon as there is a channel to carry them. */
+  initial: JsonRpcFrame[];
+  /** Released right after the recorded answer they follow reaches the client. */
+  after: Map<object, JsonRpcFrame[]>;
+  /**
+   * Released just *before* the recorded answer they preceded. These are the
+   * frames the server sent while the request was still outstanding, which on
+   * stdio is where `notifications/progress` for that request lives.
+   */
+  before: Map<object, JsonRpcFrame[]>;
+}
+
 export interface ReplayIndex {
   byFingerprint: Map<string, JsonRpcResponse[]>;
   byMethod: Map<string, JsonRpcResponse[]>;
   /** Every answered c2s request as recorded: the corpus near-miss diagnostics search. */
   recordedRequests: JsonRpcRequest[];
+  /** Recorded c2s requests the recording holds no response for: a miss cause of its own. */
+  unansweredRequests: JsonRpcRequest[];
   /** How many responses each fingerprint had before any were consumed. */
   recordedCountByFingerprint: Map<string, number>;
-  skippedServerFrames: number;
+  /** Recorded `subscriptions/listen` requests, pooled by fingerprint and consumed in order. */
+  listens: Map<string, RecordedListen[]>;
+  /** How many subscriptions each listen fingerprint had before any were opened. */
+  recordedListenCountByFingerprint: Map<string, number>;
+  /** Recorded subscription id -> the id the client's own listen request carries. */
+  liveSubscriptions: Map<string, JsonRpcId>;
+  /** Frames held back because they belong to a subscription this client never opened. */
+  unopenedSubscriptionFrames: number;
+  /** Server-initiated frames and where the recording puts them. */
+  serverFrames: ServerFrameSchedule;
+  /** Server-initiated *requests* (legacy sampling, elicitation, roots): replay still does not originate these. */
+  serverInitiatedRequests: number;
   /** Recorded fingerprints are redacted, so incoming requests must be too. */
   redactRequests: boolean;
 }
 
-export function buildReplayIndex(cassette: Cassette): ReplayIndex {
-  const responsesById = new Map<string, JsonRpcResponse>();
-  let skippedServerFrames = 0;
+/**
+ * The `subscriptions/listen` id a frame belongs to, when it carries one: the
+ * `_meta` tag on a notification, and for the server's graceful closure the
+ * response id itself, which the spec defines as the same value.
+ */
+export function subscriptionOf(frame: JsonRpcFrame): JsonRpcId | undefined {
+  if (isResponse(frame)) return frame.id;
+  const meta = (frame.params as { _meta?: Record<string, unknown> } | undefined)?._meta;
+  const id = meta?.[SUBSCRIPTION_ID_KEY];
+  return typeof id === "string" || typeof id === "number" ? id : undefined;
+}
 
-  for (const entry of cassette.entries) {
-    if (entry.type !== "frame") continue;
-    const frame = entry.frame;
-    if (entry.dir === "s2c") {
-      if (isResponse(frame)) responsesById.set(String(frame.id), frame);
-      else skippedServerFrames++; // server-initiated requests/notifications: v1 skips
+/** One frame of the recorded session, in the order the wire put it there. */
+interface TimelineEvent {
+  at: number;
+  entry: number;
+  within: number;
+  frame: JsonRpcFrame;
+  /** Set when the frame came out of a `chunks` entry rather than standing alone. */
+  stream?: ChunksEntry;
+  /** A client request leaving the client: what makes a later server frame request-scoped. */
+  sent?: JsonRpcRequest;
+}
+
+/** Every frame in the recording, both directions, in wire order. */
+function sessionTimeline(cassette: Cassette): TimelineEvent[] {
+  const timeline: TimelineEvent[] = [];
+  for (const [i, entry] of cassette.entries.entries()) {
+    if (entry.type === "frame" && entry.dir === "c2s") {
+      if (isRequest(entry.frame)) timeline.push({ at: entry.t, entry: i, within: -1, frame: entry.frame, sent: entry.frame });
+      continue;
+    }
+    if (entry.dir !== "s2c") continue;
+    if (entry.type === "frame") {
+      timeline.push({ at: entry.t, entry: i, within: -1, frame: entry.frame });
+    } else if (entry.type === "chunks") {
+      for (const [j, chunk] of entry.chunks.entries()) {
+        timeline.push({ at: chunk.t, entry: i, within: j, frame: chunk.frame, stream: entry });
+      }
     }
   }
+  // Timestamps, not file order: an HTTP recording holds a whole stream in one
+  // entry written when the stream closed, while its frames are stamped as they
+  // arrived, so file order puts them all after requests they preceded. File
+  // order breaks the ties a millisecond clock leaves behind, which means a
+  // stream frame stamped the same millisecond as a request sorts after it and
+  // is read as inside that request's window. Nothing better is available: at
+  // one-millisecond resolution the recording genuinely does not say which came
+  // first, and file order is the only other evidence there is.
+  return timeline.sort((a, b) => a.at - b.at || a.entry - b.entry || a.within - b.within);
+}
+
+/** Pair each recorded listen with the acknowledgment that answered it. */
+function collectListens(cassette: Cassette, timeline: TimelineEvent[]): RecordedListen[] {
+  const listens: RecordedListen[] = [];
+  for (const entry of cassette.entries) {
+    if (entry.type !== "frame" || entry.dir !== "c2s") continue;
+    if (isRequest(entry.frame) && entry.frame.method === LISTEN_METHOD) listens.push({ request: entry.frame });
+  }
+  for (const { frame, sent } of timeline) {
+    if (sent || isResponse(frame) || frame.method !== ACKNOWLEDGED_METHOD) continue;
+    const tagged = subscriptionOf(frame);
+    // The acknowledgment names its subscription; a recording that left the tag
+    // out still pairs, with the oldest listen still waiting for one.
+    const listen =
+      (tagged !== undefined ? listens.find((l) => String(l.request.id) === String(tagged)) : undefined) ??
+      listens.find((l) => !l.acknowledgment);
+    if (listen) listen.acknowledgment = frame as JsonRpcNotification;
+  }
+  return listens;
+}
+
+/**
+ * Walk the recording once and hang every server-initiated frame off the answer
+ * it sat next to.
+ *
+ * Two positions, because recordings hold two kinds of frame. One arrived while
+ * no request was outstanding: nothing was pending, so it belongs right after
+ * the answer that preceded it. The other arrived while a request *was*
+ * outstanding, which on stdio is how `notifications/progress` and
+ * `notifications/message` for that request appear, and it belongs right before
+ * that request's answer. Anchoring the second kind to the previous answer would
+ * send a request's own progress before the client has even sent the request.
+ *
+ * Three kinds of s2c frame are deliberately not scheduled here at all. A
+ * response is an answer. The acknowledgment of a listen is that listen's
+ * answer, and so becomes an anchor rather than a frame to release. And the
+ * notifications inside an ordinary streamed answer already travel with the
+ * stream that answers their request.
+ */
+function scheduleServerFrames(
+  cassette: Cassette,
+  timeline: TimelineEvent[],
+  listens: RecordedListen[]
+): { schedule: ServerFrameSchedule; serverInitiatedRequests: number } {
+  const listenById = new Map(listens.map((l) => [String(l.request.id), l]));
+  const acknowledgments = new Set(listens.map((l) => l.acknowledgment).filter(Boolean));
+  const streamEnds = new Map<ChunksEntry, JsonRpcFrame>();
+  // There is one GET endpoint, so one standalone stream is served and the rest
+  // are reported; scheduling frames nothing will ever carry would only make
+  // them look lost at session end.
+  let standalone: ChunksEntry | undefined;
+  const ignored = new Set<ChunksEntry>();
+  for (const entry of cassette.entries) {
+    if (entry.type !== "chunks" || entry.dir !== "s2c") continue;
+    if (entry.id === undefined) {
+      if (standalone) ignored.add(entry);
+      standalone ??= entry;
+      continue;
+    }
+    if (listenById.has(String(entry.id))) continue;
+    const last = entry.chunks[entry.chunks.length - 1];
+    if (last) streamEnds.set(entry, last.frame);
+  }
+
+  // Only a request the recording actually answers can hold a frame back: a
+  // request the server never answered has no answer for anything to precede, so
+  // counting it as outstanding would shift every later frame one answer along.
+  const answerable = new Set<string>();
+  for (const listen of listens) if (listen.acknowledgment) answerable.add(String(listen.request.id));
+  for (const stream of streamEnds.keys()) if (stream.id !== undefined) answerable.add(String(stream.id));
+  for (const entry of cassette.entries) {
+    if (entry.type !== "frame" || entry.dir !== "s2c" || !isResponse(entry.frame)) continue;
+    if (!listenById.has(String(entry.frame.id))) answerable.add(String(entry.frame.id));
+  }
+
+  const schedule: ServerFrameSchedule = { initial: [], after: new Map(), before: new Map() };
+  let anchor: object | null = null;
+  let serverInitiatedRequests = 0;
+  /** Requests the client has sent that the recorded server has not answered yet. */
+  const outstanding = new Set<string>();
+  /** Frames recorded inside an outstanding window, waiting for the answer they precede. */
+  let pending: JsonRpcFrame[] = [];
+
+  const put = (map: Map<object, JsonRpcFrame[]>, key: object, frames: JsonRpcFrame[]) => {
+    const waiting = map.get(key);
+    if (waiting) waiting.push(...frames);
+    else map.set(key, frames);
+  };
+
+  const push = (frame: JsonRpcFrame) => {
+    if (outstanding.size > 0) {
+      pending.push(frame);
+      return;
+    }
+    if (anchor) put(schedule.after, anchor, [frame]);
+    else schedule.initial.push(frame);
+  };
+
+  /** An answer lands: whatever was waiting on it goes out just ahead of it. */
+  const answered = (key: object, id?: JsonRpcId) => {
+    if (id !== undefined) outstanding.delete(String(id));
+    if (pending.length > 0) {
+      put(schedule.before, key, pending);
+      pending = [];
+    }
+    anchor = key;
+  };
+
+  for (const event of timeline) {
+    const { frame, stream, sent } = event;
+    if (sent) {
+      if (answerable.has(String(sent.id))) outstanding.add(String(sent.id));
+      continue;
+    }
+    if (stream && ignored.has(stream)) continue;
+    if (acknowledgments.has(frame as JsonRpcNotification)) {
+      // The acknowledgment answers its listen, so the listen becomes the anchor
+      // everything that follows on the subscription hangs from.
+      const listen = listens.find((l) => l.acknowledgment === frame);
+      if (listen) answered(listen.request, listen.request.id);
+      continue;
+    }
+    if (stream && streamEnds.get(stream) === frame) {
+      answered(stream, stream.id); // a streamed answer completes on its last frame
+      continue;
+    }
+    if (stream && streamEnds.has(stream)) continue; // request-scoped, travels with its own stream
+    if (isResponse(frame)) {
+      // The response to a listen is the server's graceful closure: a frame to
+      // replay at its recorded position, not an answer replay hands out.
+      if (listenById.has(String(frame.id))) push(frame);
+      else answered(frame, frame.id);
+      continue;
+    }
+    if (isRequest(frame)) {
+      serverInitiatedRequests++; // sampling, elicitation, roots: beyond replay
+      continue;
+    }
+    push(frame);
+  }
+  // The recording ended with a request still outstanding. There is no answer
+  // left for these to precede, so they take the position they would have had
+  // without one.
+  for (const frame of pending) {
+    if (anchor) put(schedule.after, anchor, [frame]);
+    else schedule.initial.push(frame);
+  }
+
+  return { schedule, serverInitiatedRequests };
+}
+
+export function buildReplayIndex(cassette: Cassette): ReplayIndex {
+  const responsesById = new Map<string, JsonRpcResponse>();
+
+  for (const entry of cassette.entries) {
+    if (entry.type !== "frame" || entry.dir !== "s2c") continue;
+    if (isResponse(entry.frame)) responsesById.set(String(entry.frame.id), entry.frame);
+  }
+
+  const timeline = sessionTimeline(cassette);
+  const recorded = collectListens(cassette, timeline);
+  const { schedule, serverInitiatedRequests } = scheduleServerFrames(cassette, timeline, recorded);
 
   const byFingerprint = new Map<string, JsonRpcResponse[]>();
   const byMethod = new Map<string, JsonRpcResponse[]>();
   const recordedRequests: JsonRpcRequest[] = [];
+  const unansweredRequests: JsonRpcRequest[] = [];
+  const listens = new Map<string, RecordedListen[]>();
 
   for (const entry of cassette.entries) {
     if (entry.type !== "frame" || entry.dir !== "c2s") continue;
     const frame = entry.frame;
     if (!isRequest(frame)) continue;
+    if (frame.method === LISTEN_METHOD) {
+      // A listen is answered by its acknowledgment stream, never out of the
+      // response pool, even on the rare recording that holds its closure.
+      const listen = recorded.find((l) => l.request === frame);
+      if (listen) {
+        const fp = fingerprint(frame);
+        if (!listens.has(fp)) listens.set(fp, []);
+        listens.get(fp)!.push(listen);
+        // It is still a recorded request, so a listen that misses can be
+        // diagnosed against the ones the file holds rather than reported as a
+        // method nobody recorded.
+        recordedRequests.push(frame);
+        continue;
+      }
+    }
     const response = responsesById.get(String(frame.id));
-    if (!response) continue;
+    if (!response) {
+      unansweredRequests.push(frame);
+      continue;
+    }
     recordedRequests.push(frame);
     const fp = fingerprint(frame);
     if (!byFingerprint.has(fp)) byFingerprint.set(fp, []);
@@ -143,15 +430,122 @@ export function buildReplayIndex(cassette: Cassette): ReplayIndex {
 
   const recordedCountByFingerprint = new Map<string, number>();
   for (const [fp, pool] of byFingerprint) recordedCountByFingerprint.set(fp, pool.length);
+  const recordedListenCountByFingerprint = new Map<string, number>();
+  for (const [fp, pool] of listens) recordedListenCountByFingerprint.set(fp, pool.length);
 
   return {
     byFingerprint,
     byMethod,
     recordedRequests,
+    unansweredRequests,
     recordedCountByFingerprint,
-    skippedServerFrames,
+    listens,
+    recordedListenCountByFingerprint,
+    liveSubscriptions: new Map(),
+    unopenedSubscriptionFrames: 0,
+    serverFrames: schedule,
+    serverInitiatedRequests,
     redactRequests: cassette.header.redaction?.applied === true,
   };
+}
+
+/**
+ * The subscription id a replayed frame carries is the one the client's own
+ * request will see: the recorded value belongs to a session that is over, and a
+ * client correlates notifications by the id it chose.
+ */
+function rekeySubscription(index: ReplayIndex, frame: JsonRpcFrame): JsonRpcFrame {
+  if (isResponse(frame)) {
+    const live = index.liveSubscriptions.get(String(frame.id));
+    return live === undefined ? frame : { ...frame, id: live, result: rekeyMeta(frame.result, live) };
+  }
+  const tagged = subscriptionOf(frame);
+  if (tagged === undefined) return frame;
+  const live = index.liveSubscriptions.get(String(tagged));
+  return live === undefined ? frame : { ...frame, params: rekeyMeta(frame.params, live) };
+}
+
+function rekeyMeta(container: unknown, live: JsonRpcId): unknown {
+  if (!container || typeof container !== "object") return container;
+  const obj = container as Record<string, unknown>;
+  const meta = obj._meta;
+  if (!meta || typeof meta !== "object") return obj;
+  return { ...obj, _meta: { ...(meta as Record<string, unknown>), [SUBSCRIPTION_ID_KEY]: live } };
+}
+
+/** The server frames the recording opens with, consumed. */
+export function releaseInitial(index: ReplayIndex): JsonRpcFrame[] {
+  return deliverable(index, index.serverFrames.initial.splice(0));
+}
+
+/** The server frames the recording puts right after this answer, consumed. */
+export function releaseAfter(index: ReplayIndex, answer: object): JsonRpcFrame[] {
+  return take(index, index.serverFrames.after, answer);
+}
+
+/** The server frames the recording puts just before this answer, consumed. */
+export function releaseBefore(index: ReplayIndex, answer: object): JsonRpcFrame[] {
+  return take(index, index.serverFrames.before, answer);
+}
+
+function take(index: ReplayIndex, map: Map<object, JsonRpcFrame[]>, answer: object): JsonRpcFrame[] {
+  const waiting = map.get(answer);
+  if (!waiting) return [];
+  map.delete(answer);
+  return deliverable(index, waiting);
+}
+
+/**
+ * Drop the frames that belong to a subscription this client never opened, and
+ * re-key the rest.
+ *
+ * The recording may hold several subscriptions; this client opened some subset
+ * of them, or none. A frame tagged with one it did not open has no id it could
+ * be re-keyed to, and 2026-07-28 tells clients they MUST correlate on that tag,
+ * so sending it with the recording's own id hands the client a frame for a
+ * subscription it has never heard of. It is counted and reported instead.
+ */
+function deliverable(index: ReplayIndex, frames: JsonRpcFrame[]): JsonRpcFrame[] {
+  const out: JsonRpcFrame[] = [];
+  for (const frame of frames) {
+    const tagged = subscriptionOf(frame);
+    if (tagged !== undefined && !index.liveSubscriptions.has(String(tagged))) {
+      index.unopenedSubscriptionFrames++;
+      continue;
+    }
+    out.push(rekeySubscription(index, frame));
+  }
+  return out;
+}
+
+/** Server frames still waiting: the client never sent the request each one belongs to. */
+export function pendingServerFrames(index: ReplayIndex): number {
+  let pending = index.serverFrames.initial.length;
+  for (const waiting of index.serverFrames.after.values()) pending += waiting.length;
+  for (const waiting of index.serverFrames.before.values()) pending += waiting.length;
+  return pending;
+}
+
+/**
+ * The recorded subscription this listen request opens, consumed, with its id
+ * registered so every frame on it is re-keyed to the client's own.
+ */
+export function matchListen(index: ReplayIndex, req: JsonRpcRequest): RecordedListen | null {
+  const fp = fingerprint(index.redactRequests ? (redactFrame(req) as JsonRpcRequest) : req);
+  const pool = index.listens.get(fp);
+  if (!pool || pool.length === 0) return null;
+  const listen = pool.shift()!;
+  index.liveSubscriptions.set(String(listen.request.id), req.id);
+  return listen;
+}
+
+/**
+ * The acknowledgment to send for a matched listen, carrying the client's own
+ * subscription id. A recording that holds none says the server acknowledged
+ * nothing, and replay says nothing in its place rather than inventing one.
+ */
+export function acknowledgmentFor(index: ReplayIndex, listen: RecordedListen): JsonRpcFrame | undefined {
+  return listen.acknowledgment ? rekeySubscription(index, listen.acknowledgment) : undefined;
 }
 
 /** The recorded answer to exactly this request, consumed; null when there is none left. */
@@ -224,6 +618,10 @@ export type MissReason =
   | { kind: "exhausted"; fingerprint: string; recordedCount: number }
   /** As above, for an answer that was recorded as a stream (HTTP only). */
   | { kind: "stream-exhausted"; fingerprint: string; recordedCount: number }
+  /** As above, for a `subscriptions/listen` whose recorded subscriptions are all open already. */
+  | { kind: "subscription-exhausted"; fingerprint: string; recordedCount: number }
+  /** Recorded, but the recording holds no response for it: there is nothing to answer with. */
+  | { kind: "recorded-unanswered"; method: string; exact: boolean }
   | { kind: "unknown-method"; method: string; recordedMethods: string[] }
   | { kind: "unknown-tool"; tool: string; recordedTools: string[] }
   /** A `tools/call` for a recorded tool, diverging at these paths. */
@@ -249,11 +647,26 @@ export function diagnoseMissReason(index: ReplayIndex, req: JsonRpcRequest): Mis
 
   const recordedCount = index.recordedCountByFingerprint.get(fp);
   if (recordedCount !== undefined) return { kind: "exhausted", fingerprint: fp, recordedCount };
-  if (index.recordedRequests.length === 0) return { kind: "empty-cassette" };
+  // A listen is answered out of its own pool, so a spent one is its own cause:
+  // the fingerprint was recorded, and every subscription under it is open.
+  const recordedListens = index.recordedListenCountByFingerprint.get(fp);
+  if (recordedListens !== undefined) {
+    return { kind: "subscription-exhausted", fingerprint: fp, recordedCount: recordedListens };
+  }
+  // "Recorded but never answered" is its own cause. Reporting it as an unknown
+  // method would be a lie about the file, and would send the reader looking for
+  // a request that is sitting right there in the recording.
+  const unanswered = index.unansweredRequests.filter((r) => r.method === effective.method);
+  if (unanswered.some((r) => fingerprint(r) === fp)) {
+    return { kind: "recorded-unanswered", method: effective.method, exact: true };
+  }
+  if (index.recordedRequests.length === 0 && unanswered.length === 0) return { kind: "empty-cassette" };
 
   const sameMethod = index.recordedRequests.filter((r) => r.method === effective.method);
   if (sameMethod.length === 0) {
-    const recordedMethods = [...new Set(index.recordedRequests.map((r) => r.method))].sort();
+    if (unanswered.length > 0) return { kind: "recorded-unanswered", method: effective.method, exact: false };
+    const all = [...index.recordedRequests, ...index.unansweredRequests];
+    const recordedMethods = [...new Set(all.map((r) => r.method))].sort();
     return { kind: "unknown-method", method: effective.method, recordedMethods };
   }
 
@@ -302,6 +715,18 @@ export function formatMiss(reason: MissReason): string {
       return (
         `this request's answer was recorded as a stream ${reason.recordedCount} time(s), but every one ` +
         `was already replayed earlier in this session`
+      );
+    case "subscription-exhausted":
+      return (
+        `this exact subscription was recorded ${reason.recordedCount} time(s), and every one is already open ` +
+        `in this session; the client is opening it more often than the recording did`
+      );
+    case "recorded-unanswered":
+      return (
+        (reason.exact
+          ? `this exact request was recorded, but the recording holds no response for it`
+          : `"${reason.method}" was recorded, but no recording of it holds a response`) +
+        `: the server never answered it before the session ended, so replay has nothing to hand back`
       );
     case "unknown-method":
       return `no recorded request has method "${reason.method}". Recorded methods: ${reason.recordedMethods.join(", ")}`;
@@ -358,17 +783,24 @@ export type OnMissMode = "error" | "warn" | "passthrough";
 
 type Resolution =
   | { kind: "silent" } // notifications and stray responses: nothing to send
-  | { kind: "answer"; out: JsonRpcResponse } // recorded match or synthesized ping
-  | { kind: "borrowed"; request: JsonRpcRequest; out: JsonRpcResponse; reason: MissReason } // warn's same-method answer
+  /** A recorded match or a synthesized ping; `recorded` is the answer the schedule hangs server frames from. */
+  | { kind: "answer"; out: JsonRpcResponse; recorded?: JsonRpcResponse }
+  | { kind: "borrowed"; request: JsonRpcRequest; out: JsonRpcResponse; recorded: JsonRpcResponse; reason: MissReason } // warn's same-method answer
+  /** A `subscriptions/listen` the recording holds: answered by its acknowledgment, then held open. */
+  | { kind: "subscription"; request: JsonRpcRequest; listen: RecordedListen; acknowledgment?: JsonRpcFrame }
   | { kind: "miss"; request: JsonRpcRequest };
 
 /** The one matching path both handleFrame and the live session go through. */
 function resolveFrame(index: ReplayIndex, frame: JsonRpcFrame, onMiss: OnMissMode): Resolution {
   if (isNotification(frame) || !isRequest(frame)) return { kind: "silent" };
+  if (frame.method === LISTEN_METHOD) {
+    const listen = matchListen(index, frame);
+    if (listen) return { kind: "subscription", request: frame, listen, acknowledgment: acknowledgmentFor(index, listen) };
+  }
   const recorded = matchResponse(index, frame);
   if (recorded) {
     // Re-key the recorded response to the incoming request id.
-    return { kind: "answer", out: { ...recorded, id: frame.id } };
+    return { kind: "answer", out: { ...recorded, id: frame.id }, recorded };
   }
   if (frame.method === "ping") {
     return { kind: "answer", out: { jsonrpc: "2.0", id: frame.id, result: {} } };
@@ -377,7 +809,9 @@ function resolveFrame(index: ReplayIndex, frame: JsonRpcFrame, onMiss: OnMissMod
     // Diagnosed before borrowing: the reason is about this request, not the loan.
     const reason = diagnoseMissReason(index, frame);
     const borrowed = matchFallback(index, frame);
-    if (borrowed) return { kind: "borrowed", request: frame, out: { ...borrowed, id: frame.id }, reason };
+    if (borrowed) {
+      return { kind: "borrowed", request: frame, out: { ...borrowed, id: frame.id }, recorded: borrowed, reason };
+    }
   }
   return { kind: "miss", request: frame };
 }
@@ -387,12 +821,70 @@ export function formatBorrowed(method: string, reason: MissReason): string {
   return `answered "${method}" with another recording of the same method (--on-miss warn): ${formatMiss(reason)}`;
 }
 
-/** Handle a single incoming frame; returns the frame to send back, if any. */
-export function handleFrame(index: ReplayIndex, frame: JsonRpcFrame, onMiss: OnMissMode = "error"): JsonRpcFrame | null {
+/**
+ * Everything one incoming frame sends back, in order: the answer, then the
+ * frames the recording puts right after it.
+ *
+ * A cassette whose server never spoke on its own produces exactly one frame
+ * here, which is what keeps `handleFrame` whole for every v1 recording.
+ */
+export function handleExchange(index: ReplayIndex, frame: JsonRpcFrame, onMiss: OnMissMode = "error"): JsonRpcFrame[] {
+  const { before, answer, after } = exchange(index, frame, onMiss);
+  return [...before, ...(answer ? [answer] : []), ...after];
+}
+
+/**
+ * One incoming frame resolved into the three positions an exchange has: what
+ * the recording put before the answer, the answer itself, and what it put
+ * after. Keeping them apart is what lets `handleFrame` keep meaning "the frame
+ * to send back" while `handleExchange` carries the rest.
+ */
+function exchange(
+  index: ReplayIndex,
+  frame: JsonRpcFrame,
+  onMiss: OnMissMode
+): { before: JsonRpcFrame[]; answer: JsonRpcFrame | null; after: JsonRpcFrame[] } {
   const resolved = resolveFrame(index, frame, onMiss);
-  if (resolved.kind === "silent") return null;
-  if (resolved.kind === "answer" || resolved.kind === "borrowed") return resolved.out;
-  return missError(resolved.request, diagnoseMiss(index, resolved.request));
+  const none = { before: [], answer: null, after: [] };
+  switch (resolved.kind) {
+    case "silent":
+      return none;
+    case "subscription":
+      // The acknowledgment is the answer: it is what the recorded server sent
+      // back when the client asked to listen.
+      return {
+        before: releaseBefore(index, resolved.listen.request),
+        answer: resolved.acknowledgment ?? null,
+        after: releaseAfter(index, resolved.listen.request),
+      };
+    case "answer":
+      if (!resolved.recorded) return { ...none, answer: resolved.out };
+      return {
+        before: releaseBefore(index, resolved.recorded),
+        answer: resolved.out,
+        after: releaseAfter(index, resolved.recorded),
+      };
+    case "borrowed":
+      return {
+        before: releaseBefore(index, resolved.recorded),
+        answer: resolved.out,
+        after: releaseAfter(index, resolved.recorded),
+      };
+    case "miss":
+      return { ...none, answer: missError(resolved.request, diagnoseMiss(index, resolved.request)) };
+  }
+}
+
+/**
+ * Handle a single incoming frame; returns the frame to send back, if any.
+ *
+ * The answer, precisely, which for a `subscriptions/listen` is the recorded
+ * acknowledgment. A recording whose server pushed change notifications has more
+ * to send around that answer, and this function drops them: `handleExchange` is
+ * the call that carries them, in order.
+ */
+export function handleFrame(index: ReplayIndex, frame: JsonRpcFrame, onMiss: OnMissMode = "error"): JsonRpcFrame | null {
+  return exchange(index, frame, onMiss).answer;
 }
 
 /**
@@ -457,6 +949,43 @@ export class LiveAppender {
   }
 }
 
+/**
+ * What the session did with the recording's server-initiated side, shared by
+ * both front-ends.
+ *
+ * The frames still waiting are the interesting number: each one is anchored to
+ * a request the client never sent, so the recording held a change notification
+ * this session had no position to put it in. That is reported rather than
+ * emitted out of place, because a notification arriving at the wrong moment is
+ * worse than one that does not arrive.
+ */
+export function reportServerFrames(
+  index: ReplayIndex,
+  pushed: number,
+  subscriptions: number,
+  warn: (message: string) => void,
+  /** HTTP only: frames whose position came and went with no stream open to carry them. */
+  undelivered = 0
+): void {
+  if (subscriptions > 0) warn(`${subscriptions} subscription(s) acknowledged and held open`);
+  if (pushed > 0) warn(`${pushed} server-initiated frame(s) replayed at their recorded position`);
+  const waiting = pendingServerFrames(index);
+  if (waiting > 0) {
+    warn(
+      `${waiting} recorded server-initiated frame(s) were not replayed: the client never sent the request each one follows`
+    );
+  }
+  if (undelivered > 0) {
+    warn(`${undelivered} server-initiated frame(s) came due with no stream open to carry them`);
+  }
+  if (index.unopenedSubscriptionFrames > 0) {
+    warn(
+      `${index.unopenedSubscriptionFrames} server-initiated frame(s) were not replayed: ` +
+        `they belong to a subscription this client never opened`
+    );
+  }
+}
+
 export interface ReplayOptions {
   onMiss?: OnMissMode;
   /** Real server command, required for passthrough. */
@@ -477,6 +1006,13 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
   let borrowed = 0;
   let appended = 0;
   let forwardFailures = 0;
+  let pushed = 0;
+  let subscriptions = 0;
+  /** Server-initiated frames go out on the same stdout the answers do, right behind them. */
+  const emitServerFrames = (frames: JsonRpcFrame[]): number => {
+    for (const frame of frames) process.stdout.write(serializeFrame(frame));
+    return frames.length;
+  };
   // Connecting is memoized including failure: a broken server command fails
   // every subsequent miss fast instead of spawning one orphan per miss.
   let livePromise: Promise<MiniClient> | null = null;
@@ -485,11 +1021,14 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
 
   const live = new LiveAppender(cassettePath, cassette, index.redactRequests);
 
-  if (index.skippedServerFrames > 0) {
+  if (index.serverInitiatedRequests > 0) {
     process.stderr.write(
-      `mcp-cassette replay: ${index.skippedServerFrames} server-initiated frame(s) in the cassette are not replayed in v1\n`
+      `mcp-cassette replay: ${index.serverInitiatedRequests} server-initiated request(s) in the cassette are not replayed\n`
     );
   }
+  // The recording opens with these: no client request precedes them, so there
+  // is nothing to wait for.
+  pushed += emitServerFrames(releaseInitial(index));
 
   const forwardMiss = async (frame: JsonRpcRequest): Promise<JsonRpcResponse> => {
     const client = await connectLive();
@@ -507,14 +1046,27 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
     if (!frame) return;
     const resolved = resolveFrame(index, frame, onMiss);
     if (resolved.kind === "silent") return;
+    if (resolved.kind === "subscription") {
+      // No JSON-RPC response: the acknowledgment answers the listen, and the
+      // request stays open for the change notifications that follow it.
+      subscriptions++;
+      pushed += emitServerFrames(releaseBefore(index, resolved.listen.request));
+      if (resolved.acknowledgment) process.stdout.write(serializeFrame(resolved.acknowledgment));
+      pushed += emitServerFrames(releaseAfter(index, resolved.listen.request));
+      return;
+    }
     if (resolved.kind === "answer") {
+      if (resolved.recorded) pushed += emitServerFrames(releaseBefore(index, resolved.recorded));
       process.stdout.write(serializeFrame(resolved.out));
+      if (resolved.recorded) pushed += emitServerFrames(releaseAfter(index, resolved.recorded));
       return;
     }
     if (resolved.kind === "borrowed") {
       borrowed++;
       process.stderr.write(`mcp-cassette replay: ${formatBorrowed(resolved.request.method, resolved.reason)}\n`);
+      pushed += emitServerFrames(releaseBefore(index, resolved.recorded));
       process.stdout.write(serializeFrame(resolved.out));
+      pushed += emitServerFrames(releaseAfter(index, resolved.recorded));
       return;
     }
 
@@ -576,6 +1128,7 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
   if (borrowed > 0) {
     process.stderr.write(`mcp-cassette replay: ${borrowed} answer(s) borrowed from another recording of the same method\n`);
   }
+  reportServerFrames(index, pushed, subscriptions, (message) => process.stderr.write(`mcp-cassette replay: ${message}\n`));
   // error mode is the strict one: a session that missed is a failed session.
   // warn answers what it can, borrowing if it must, and exits clean. passthrough
   // is clean only when every forward actually reached the live server.

@@ -248,7 +248,12 @@ describe("the legacy standalone GET stream", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
     const read = reader(res);
-    expect(await read.next()).toEqual(PUSHED);
+    // The recording pushed this after it answered `initialize`, and that is
+    // where replay puts it: the stream is open but silent until then.
+    const first = read.next(); // one reader, asked once: a second call would wait behind it
+    expect(await Promise.race([first, new Promise((r) => setTimeout(() => r("nothing yet"), 100))])).toBe("nothing yet");
+    await post(server.url, { jsonrpc: "2.0", id: 9, method: "initialize", params: {} }).then((r) => r.text());
+    expect(await first).toEqual(PUSHED);
 
     // Still open: nothing followed the last recorded frame, and no close came
     // either: the standalone stream answers no request, so it completes none.

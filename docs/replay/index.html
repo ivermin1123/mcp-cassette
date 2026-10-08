@@ -293,6 +293,26 @@ first three: ['echo', 'get-annotated-message', 'get-env']</code></pre>
 
 <p>So the HTTP recorder opens the writer in deferred-header mode: entries are buffered in memory, and <code>setEra()</code> writes the header and flushes everything behind it once an exchange has actually succeeded (<a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/cassette.ts">src/cassette.ts</a>, <a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/proxy.ts">src/proxy.ts</a>). Success is the whole test, not whether the method was a lifecycle one. A session where nothing succeeded flushes at close with the era omitted, which the reader treats as legacy by the rule above, and changing the era after the header has reached disk throws rather than pretending. The case easiest to get wrong is tested: a <code>server/discover</code> answered with a JSON-RPC error over a stream leaves the header with no era, and still records the failure.</p>
 
+<h2>A notification has a position, not just a payload</h2>
+
+<p>A server also speaks when nothing asked it to. The legacy era pushes <code>notifications/tools/list_changed</code> unsolicited; the 2026-07-28 revision replaced that and the HTTP GET endpoint with <code>subscriptions/listen</code>, one long-lived request the server acknowledges with <code>notifications/subscriptions/acknowledged</code> and then feeds, tagging every frame with <code>io.modelcontextprotocol/subscriptionId</code>. Either way the frame answers no request, so replay cannot wait to be asked for it. It has to decide when to send it.</p>
+
+<p>Sending it at connect is wrong: a client that hears "the tool list changed" before it has read the tool list learns nothing, and a test that depends on the order is testing replay rather than the client. Sending it never is what v1 did, and it is why a client whose whole job is reacting to change could not be tested against a cassette at all. So the rule is the recording's own order, stated once and implemented in one place:</p>
+
+<blockquote>
+  <p>A server-initiated frame is anchored to the last client request whose answer preceded it in the recording, and replay emits it immediately after it answers that request. A frame recorded while a request was still outstanding belongs to that request instead, and is emitted immediately before its answer. A frame anchored to a request the client never sends is reported, not emitted.</p>
+</blockquote>
+
+<p>The middle sentence is the one a reader skips and an implementation cannot. On stdio a request's own <code>notifications/progress</code> sits in the file between the request and its response, so the first sentence alone would send a call's progress before the client had sent the call. Position is read from the recorded timestamps and only then from file order, because an HTTP recording writes a whole stream as one entry when the stream closes while stamping each frame as it arrived: by file order, every frame of a long-lived stream looks like it came after requests it actually preceded.</p>
+
+<p>The anchor is the recorded answer itself, by identity, not its fingerprint: a cassette that recorded the same call three times releases the frames of the third recording when the third call is answered, and not before. A <code>subscriptions/listen</code> is anchored by its acknowledgment, because that is what answers it; the recording almost never holds a JSON-RPC response for one, since the server sends that only when it ends the subscription gracefully. The subscription id in every replayed frame is re-keyed to the id the client's own listen request carried, so a client correlates on the id it chose rather than on one from a session that is over.</p>
+
+<p>The last clause is the one worth defending. A recorded notification whose anchor never arrives could be sent anyway, at the end, or at connect. Each of those puts a frame somewhere the recording never put it, and a client that behaves differently because of it has been taught something false about the server. Replay says how many it held back instead:</p>
+
+<pre><code>mcp-cassette replay: 1 recorded server-initiated frame(s) were not replayed: the client never sent the request each one follows</code></pre>
+
+<p>Over HTTP the same rule runs through a stream rather than through stdout. The legacy standalone GET stream and a modern subscription stream are both held open and fed at the anchors, and a client that opens the stream after the anchor was already answered gets the frame on connect, because that is where the recording put it relative to what this session has done so far.</p>
+
 <h2>What replay does not do</h2>
 
 <p>Three limits, stated as they are in the machine-readable index:</p>
@@ -300,14 +320,14 @@ first three: ['echo', 'get-annotated-message', 'get-env']</code></pre>
 <ul>
   <li>A replay answers from the recording, so it cannot compare models or servers and cannot tell you whether a live server still behaves that way. Use <code>verify</code> for that.</li>
   <li>Replay is a test double, not a conformance checker. A missing session id or a mismatched protocol header is a warning on stderr, never a protocol error.</li>
-  <li>Replay answers requests from the client. Requests and notifications the <em>server</em> initiated are recorded but not replayed in v1, and replay says how many it skipped. The cassette for this page contains exactly one, so both clients above printed this to stderr:
-    <pre><code>mcp-cassette replay: 1 server-initiated frame(s) in the cassette are not replayed in v1</code></pre>
+  <li>Replay reproduces notifications the <em>server</em> initiated, at their recorded position. It does not originate server-to-client <em>requests</em>: legacy sampling, elicitation and roots are a direction of the protocol replay still does not speak, and it says how many it is holding back. The message has this shape, and the count is whatever the cassette holds:
+    <pre><code>mcp-cassette replay: N server-initiated request(s) in the cassette are not replayed</code></pre>
   </li>
 </ul>
 
 <p>The first two are consequences of the design rather than gaps in it. A recording is a statement about one past session, and treating it as one about the present is the mistake this tool makes easy, which is why <code>verify</code> re-fires recorded requests at a live server and diffs the answers.</p>
 
-<p>The third is a gap, and the words <em>in v1</em> are the admission. A server that samples, elicits, or notifies speaks a direction of the protocol this replay does not reproduce: the frames are in the file, and nothing plays them back. Test a client that depends on that traffic against a live server.</p>
+<p>The third is a narrower gap than it was. Notifications play back, so a client that reacts to a changing tool list can be tested against a file. A server that <em>asks</em> the client something still cannot: under 2026-07-28 those flows became <code>input_required</code> results, which replay does reproduce, but a legacy cassette holding a <code>sampling/createMessage</code> request has no replay path. Test a client that depends on that traffic against a live server.</p>
 
 <h2>Three commands</h2>
 
