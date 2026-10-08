@@ -10,6 +10,7 @@ export {
   fingerprint,
   formatMiss,
   handleFrame,
+  matchFallback,
   matchResponse,
   runReplay,
   type MissEvent,

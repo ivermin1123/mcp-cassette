@@ -88,13 +88,24 @@ the extract-and-stub verification described in
 
 ---
 
-## The same-method fallback answers a different request
+## The same-method fallback answers a different request: DECIDED
 
-**Raised** 2026-10-08, found while fixing MRTR retry matching.
+**Raised** 2026-10-08, found while fixing MRTR retry matching. **Decided**
+2026-10-08: the fallback moves behind `--on-miss warn`, out of the default, for
+0.5.0. Kept here for the measurement and for the direction not taken.
 
-When a request's exact fingerprint was never recorded, `matchResponse` serves
-the next unconsumed recording of the same *method* before it reports a miss.
-For `tools/call` that means another call's answer, whatever its arguments.
+**The decision.** Matching is exact under `error` (the default) and
+`passthrough`. `warn` keeps the tolerance and stops hiding it: every borrowed
+answer prints the paths that diverged, and the session summary counts them. A
+suite that relied on the silent fallback finds out on its first 0.5.0 run and
+has a one-flag way back. The deciding fact was the reality check of the same
+day: no external user was found, so this is the cheapest moment the default
+will ever have to become honest. Declared volatility stays on the roadmap as
+the precise version of the same tolerance, for when someone asks for it.
+
+When a request's exact fingerprint was never recorded, `matchResponse` served
+the next unconsumed recording of the same *method* before it reported a miss.
+For `tools/call` that meant another call's answer, whatever its arguments.
 
 **Measured, against published 0.4.0.** A cassette holding one call,
 `add {a:1, b:2}` answered `"3"`. Replayed with `add {a:5, b:5}` and then
@@ -104,36 +115,38 @@ For `tools/call` that means another call's answer, whatever its arguments.
 - `add {a:1, b:2}`, the call that *was* recorded, then missed as "exhausted";
 - the session exited 1, blaming the right call for the wrong one's answer.
 
-Under `--on-miss warn` the same session exits 0. The fallback also swallows a
-miss before passthrough sees it: a recorded `tools/call` of any tool answers a
-call to a tool the recording never saw, so `--on-miss passthrough` never
-forwards it. And when the borrowed answer is an MRTR `input_required`, it hands
-the client a `requestState` the live server never minted; under passthrough the
-retry that follows is forwarded with it, and a server that checks its state
-rejects the call.
+Under `--on-miss warn` the same session exited 0. The fallback also swallowed
+a miss before passthrough saw it: a recorded `tools/call` of any tool answered
+a call to a tool the recording never saw, so `--on-miss passthrough` never
+forwarded it. And when the borrowed answer was an MRTR `input_required`, it
+handed the client a `requestState` the live server never minted; under
+passthrough the retry that followed was forwarded with it, and a server that
+checks its state rejects the call.
 
-**Why it exists:** it tolerates arguments that change every run (timestamps,
+**Why it existed:** it tolerates arguments that change every run (timestamps,
 generated ids) without the user configuring anything. That is a real need, and
-removing the fallback would turn those suites red.
+removing the fallback outright would have turned those suites red with no way
+back.
 
-**Directions, none chosen:**
+**Directions that were on the table:**
 
 - **Keep it, make it loud:** a stderr line per fallback answer, naming the
   paths that differed. No exit-code change. Cheapest, but a test that passes on
-  a wrong answer still passes.
+  a wrong answer still passes. *(Taken for `warn` only.)*
 - **Count it as a miss** in `--on-miss error`, keeping the answer. Turns
   today's silent wrong answers red, and with them every suite relying on the
-  tolerance.
+  tolerance. *(Superseded: once it is a miss, answering with the error is the
+  honest answer.)*
 - **Replace it with declared volatility:** `--volatile <json-pointer>` (or a
   cassette-header list) that `fingerprint` drops, and no fallback at all. The
-  honest version, and a new public input.
+  honest version, and a new public input. *(Not taken yet; on the roadmap.)*
 
-**Why this is a design checkpoint:** every direction changes which suites pass,
-and the tolerance is undocumented today, so nobody knows whether they rely on
-it. MRTR retries are already outside the fallback, in both directions, because
-a retry's answer is bound to the input it carried.
+MRTR retries were already outside the fallback, in both directions, because a
+retry's answer is bound to the input it carried, and they stay outside it under
+`warn`.
 
-**Related:** `src/replay.ts` (`matchResponse`), the `replay` row in the README.
+**Related:** `src/replay.ts` (`matchResponse`, `matchFallback`), the `replay`
+row in the README, CHANGELOG 0.5.0.
 
 ---
 

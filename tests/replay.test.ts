@@ -81,13 +81,28 @@ describe("replay matching", () => {
     });
   });
 
-  it("falls back to same-method responses on fingerprint miss", () => {
+  it("misses a fingerprint it never recorded, even with a same-method recording unused", () => {
     const cassette = cassetteWith([
       [req(1, "tools/call", { name: "echo", arguments: { m: "recorded" } }), res(1, { content: "ok" })],
     ]);
     const index = buildReplayIndex(cassette);
     const out = handleFrame(index, req(9, "tools/call", { name: "echo", arguments: { m: "different" } }))!;
-    expect(out).toMatchObject({ result: { content: "ok" } });
+    expect(out).toMatchObject({ id: 9, error: { code: -32601 } });
+    // The miss lent nothing: the recording is still there for the call it belongs to.
+    expect(handleFrame(index, req(10, "tools/call", { name: "echo", arguments: { m: "recorded" } }))).toMatchObject({
+      result: { content: "ok" },
+    });
+  });
+
+  it("borrows a same-method recording only under warn", () => {
+    const cassette = cassetteWith([
+      [req(1, "tools/call", { name: "echo", arguments: { m: "recorded" } }), res(1, { content: "ok" })],
+    ]);
+    const index = buildReplayIndex(cassette);
+    const different = req(9, "tools/call", { name: "echo", arguments: { m: "different" } });
+    expect(handleFrame(index, different, "warn")).toMatchObject({ id: 9, result: { content: "ok" } });
+    // Lent once, gone: the next borrow finds nothing and misses.
+    expect(handleFrame(index, { ...different, id: 10 }, "warn")).toMatchObject({ id: 10, error: { code: -32601 } });
   });
 
   it("returns a clear JSON-RPC error when nothing is recorded", () => {
@@ -168,13 +183,19 @@ describe("MRTR retries", () => {
     expect(diagnosis).not.toContain("/requestState");
   });
 
-  it("never hands a retry's recorded answer to a request that is not that retry", () => {
+  it("never lends a retry's recorded answer to a request that is not that retry, even under warn", () => {
     const index = recorded();
     const other = { name: "deploy", arguments: { env: "staging" } };
-    // The same-method fallback still serves the first step, the input_required...
-    expect(handleFrame(index, req(10, "tools/call", other))).toMatchObject({ result: asked });
+    // warn's borrowing still reaches the first step, the input_required...
+    expect(handleFrame(index, req(10, "tools/call", other), "warn")).toMatchObject({ result: asked });
     // ...but never the outcome the recorded input bought.
-    expect(handleFrame(index, req(11, "tools/call", other))).toMatchObject({ error: { code: -32601 } });
+    expect(handleFrame(index, req(11, "tools/call", other), "warn")).toMatchObject({ error: { code: -32601 } });
+  });
+
+  it("never lets a retry borrow, even under warn", () => {
+    const index = recorded();
+    handleFrame(index, req(10, "tools/call", deploy));
+    expect(handleFrame(index, retry(11, "decline"), "warn")).toMatchObject({ error: { code: -32601 } });
   });
 
   it("applies to retries of any method, not only tools/call", () => {
@@ -224,11 +245,12 @@ describe("replay matching after redaction", () => {
 
   it("would mismatch without redaction-aware matching", () => {
     // Same cassette, header claims no redaction: the live token no longer
-    // fingerprints, so matching degrades to the recorded-order fallback.
+    // fingerprints, so the call misses (and warn would lend it A's answer).
     const notMarked = redactedCassette();
     delete notMarked.header.redaction;
     const index = buildReplayIndex(notMarked);
-    expect(handleFrame(index, callWith(99, TOKEN_B))).toMatchObject({ result: { content: "A" } });
+    expect(handleFrame(index, callWith(99, TOKEN_B))).toMatchObject({ error: { code: -32601 } });
+    expect(handleFrame(index, callWith(100, TOKEN_B), "warn")).toMatchObject({ result: { content: "A" } });
   });
 
   it("leaves unredacted cassettes matching on raw values", () => {

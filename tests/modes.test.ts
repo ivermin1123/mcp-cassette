@@ -65,15 +65,7 @@ const initFrame: JsonRpcFrame = {
   params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } },
 };
 const initializedNote: JsonRpcFrame = { jsonrpc: "2.0", method: "notifications/initialized" };
-// A fingerprint miss alone is not enough to reach --on-miss: replay falls back
-// to the next unconsumed same-method response. The burner call eats that
-// fallback, so the call after it is a true miss.
-const burnerCall: JsonRpcFrame = {
-  jsonrpc: "2.0",
-  id: 6,
-  method: "tools/call",
-  params: { name: "echo", arguments: { message: "burner" } },
-};
+// The recording holds echo("hello"), so this call misses on its arguments.
 const missCall: JsonRpcFrame = {
   jsonrpc: "2.0",
   id: 7,
@@ -126,7 +118,7 @@ describe("replay --on-miss", () => {
 
   it("error (default): answers the miss with a JSON-RPC error and exits 1", async () => {
     await ensureRecorded();
-    const { code, out, stderr } = await replaySession([recorded], [initFrame, initializedNote, burnerCall, missCall]);
+    const { code, out, stderr } = await replaySession([recorded], [initFrame, initializedNote, missCall]);
     const miss = out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
     expect(miss.error?.code).toBe(-32601);
     // Near-miss diagnostics name the exact diverging component.
@@ -150,15 +142,29 @@ describe("replay --on-miss", () => {
     expect(code).toBe(0);
   }, 30_000);
 
-  it("warn: same JSON-RPC error, but the session exits 0", async () => {
+  it("error: never answers a miss with another call's recording", async () => {
     await ensureRecorded();
+    // One echo is recorded and still unconsumed, and it must not be lent.
+    const { out } = await replaySession([recorded], [initFrame, initializedNote, missCall]);
+    const miss = out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
+    expect(miss.result).toBeUndefined();
+    expect(miss.error?.code).toBe(-32601);
+  }, 30_000);
+
+  it("warn: borrows a same-method recording out loud, errors once none is left, and exits 0", async () => {
+    await ensureRecorded();
+    const again: JsonRpcFrame = { ...missCall, id: 9 };
     const { code, out, stderr } = await replaySession(
       [recorded, "--on-miss", "warn"],
-      [initFrame, initializedNote, burnerCall, missCall]
+      [initFrame, initializedNote, missCall, again]
     );
-    const miss = out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
-    expect(miss.error?.code).toBe(-32601);
-    expect(stderr).toContain("fingerprint miss");
+    const borrowed = out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
+    expect(JSON.stringify(borrowed.result)).toContain("echo:hello");
+    expect(stderr).toContain('answered "tools/call" with another recording of the same method');
+    expect(stderr).toContain('/message (recorded "hello", got "never-recorded")');
+    const spent = out.find((f) => "id" in f && f.id === 9) as JsonRpcResponse;
+    expect(spent.error?.code).toBe(-32601);
+    expect(stderr).toContain("1 answer(s) borrowed");
     expect(code).toBe(0);
   }, 30_000);
 
@@ -185,7 +191,7 @@ describe("replay --on-miss", () => {
 
     const { code, out } = await replaySession(
       [cassettePath, "--on-miss", "passthrough", "--", "node", TINY],
-      [initFrame, initializedNote, burnerCall, missCall]
+      [initFrame, initializedNote, missCall]
     );
     expect(code).toBe(0);
 
@@ -206,7 +212,7 @@ describe("replay --on-miss", () => {
     expect((s2c!.frame as { id?: unknown }).id).toBe("live-1");
 
     // The grown cassette now replays the once-missing call offline.
-    const replayAgain = await replaySession([cassettePath], [initFrame, initializedNote, burnerCall, missCall]);
+    const replayAgain = await replaySession([cassettePath], [initFrame, initializedNote, missCall]);
     const hit = replayAgain.out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
     expect(hit.error).toBeUndefined();
     expect(JSON.stringify(hit.result)).toContain("echo:never-recorded");
@@ -220,11 +226,10 @@ describe("replay --on-miss", () => {
       method: "tools/call",
       params: { name: "echo", arguments: { message: "second-session" } },
     };
-    // burner + missCall drain the two recorded echo responses, so missCall2
-    // is again a true miss.
+    // missCall now answers from its appended live-1 pair; missCall2 is new.
     const second = await replaySession(
       [cassettePath, "--on-miss", "passthrough", "--", "node", TINY],
-      [initFrame, initializedNote, burnerCall, missCall, missCall2]
+      [initFrame, initializedNote, missCall, missCall2]
     );
     expect(second.code).toBe(0);
     const liveIds = readCassette(cassettePath)
@@ -263,13 +268,10 @@ process.stdin.on("data", (d) => {
 });
 `
     );
-    // Header only: a recorded tools/call would answer by same-method fallback
-    // and the forward under test would never happen.
+    // The recording holds an unconsumed echo call: passthrough must forward
+    // deploy to the live server, never lend it echo's answer.
     const cassettePath = path.join(tmpDir, "asks-first.cassette.jsonl");
-    fs.writeFileSync(
-      cassettePath,
-      JSON.stringify({ type: "header", cassetteVersion: 2, recorder: "test", startedAt: "t", transport: "stdio" }) + "\n"
-    );
+    await recordEchoSession(cassettePath);
     const call = { name: "deploy", arguments: { env: "prod" } };
     const ask: JsonRpcFrame = { jsonrpc: "2.0", id: 7, method: "tools/call", params: call };
     const answer: JsonRpcFrame = {
@@ -302,7 +304,7 @@ process.stdin.on("data", (d) => {
 
     const { code, out, stderr } = await replaySession(
       [cassettePath, "--on-miss", "passthrough", "--", "no-such-binary-xyz"],
-      [initFrame, initializedNote, burnerCall, missCall]
+      [initFrame, initializedNote, missCall]
     );
     const miss = out.find((f) => "id" in f && f.id === 7) as JsonRpcResponse;
     expect(miss.error?.code).toBe(-32603);
@@ -332,14 +334,8 @@ process.stdin.on("data", (d) => {
     await client.close();
     await new Promise((r) => setTimeout(r, 400));
 
-    // Burner exhausts the recorded leak response; the second call is a true
-    // miss carrying a live token, forwarded to the real secrets server.
-    const leakBurner: JsonRpcFrame = {
-      jsonrpc: "2.0",
-      id: 6,
-      method: "tools/call",
-      params: { name: "leak", arguments: { token: "not-the-recorded-one" } },
-    };
+    // A live token redacts to a different placeholder than the recorded one,
+    // so this call misses and is forwarded to the real secrets server.
     const leakMiss: JsonRpcFrame = {
       jsonrpc: "2.0",
       id: 7,
@@ -348,7 +344,7 @@ process.stdin.on("data", (d) => {
     };
     const { code, out } = await replaySession(
       [cassettePath, "--on-miss", "passthrough", "--", ...secretsServer],
-      [initFrame, initializedNote, leakBurner, leakMiss]
+      [initFrame, initializedNote, leakMiss]
     );
     expect(code).toBe(0);
 

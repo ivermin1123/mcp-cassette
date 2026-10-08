@@ -35,8 +35,10 @@ import {
   buildReplayIndex,
   diagnoseMissReason,
   fingerprint,
+  formatBorrowed,
   formatMiss,
   LiveAppender,
+  matchFallback,
   matchResponse,
   missError,
   type MissEvent,
@@ -69,6 +71,8 @@ export interface ReplayServer {
    * of a session (a single test, typically) instead of to the whole run.
    */
   takeMisses(): MissEvent[];
+  /** Answers `--on-miss warn` borrowed from another recording of the same method. */
+  borrowed(): number;
   /** Interactions forwarded to the live server and appended, and how many forwards failed. */
   appended(): number;
   forwardFailures(): number;
@@ -197,6 +201,7 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
   // caller that wants to attribute misses to whatever it was doing at the time
   // (a single test, say) has to be able to take them and start clean.
   const missLog: MissEvent[] = [];
+  let borrowed = 0;
   let appended = 0;
   let forwardFailures = 0;
   // The spy machinery is v1's, unchanged: append synchronously to the file that
@@ -332,6 +337,17 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       void emit(res, pool.shift()!.chunks, { terminate: true, rekey: frame.id });
       return;
     }
+    if (onMiss === "warn") {
+      // Diagnosed before borrowing: the reason is about this request, not the loan.
+      const reason = diagnoseMissReason(index, frame);
+      const lent = matchFallback(index, frame);
+      if (lent) {
+        borrowed++;
+        warn(formatBorrowed(frame.method, reason));
+        send(res, statuses.get(lent) ?? 200, { ...lent, id: frame.id }, mint(frame));
+        return;
+      }
+    }
     misses++;
     // A spent stream pool is a miss cause the stdio front-end cannot have, so
     // it is named here rather than inside the shared diagnosis.
@@ -425,6 +441,7 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
         url: bound,
         misses: () => misses,
         takeMisses: () => missLog.splice(0),
+        borrowed: () => borrowed,
         appended: () => appended,
         forwardFailures: () => forwardFailures,
         close: async () => {
@@ -473,6 +490,7 @@ export async function runHttpReplay(cassettePath: string, opts: HttpReplayOption
         : `${server.misses()} fingerprint miss(es) this session`
     );
   }
+  if (server.borrowed() > 0) warn(`${server.borrowed()} answer(s) borrowed from another recording of the same method`);
   // error mode is the strict one: a session that missed is a failed session.
   // passthrough is clean only when every forward actually reached the server.
   process.exitCode =

@@ -11,22 +11,23 @@
  *     the MRTR retry fields (`inputResponses`, `requestState`) when present.
  *   - everything else matches by method + stable-stringified params
  *     (volatile `_meta` is ignored).
- *   - fingerprint miss falls back to the next unconsumed response for the
- *     same method (recorded order), so re-ordered test runs still work.
- *     MRTR retries are outside the fallback in both directions: a retry is
- *     answered exactly or not at all, and a retry's recorded answer is never
- *     handed to another request.
+ *   - matching is exact: repeated identical calls consume their recordings in
+ *     order, and anything else is a miss.
  *
  * If the cassette was recorded with redaction on, incoming requests are redacted
  * before fingerprinting: a client sending a live token produces the same
  * deterministic placeholder that was recorded, so the match still lands.
  *
- * On a true miss (no fingerprint, no same-method fallback), the behavior is
- * the `--on-miss` mode's call:
+ * On a miss, the behavior is the `--on-miss` mode's call:
  *   - error (default): JSON-RPC error to the client, session exits 1.
- *   - warn:            same JSON-RPC error, but the session still exits 0.
+ *   - warn:            borrow the next unconsumed recording of the same method
+ *                      when one is left, naming what diverged on stderr; the
+ *                      JSON-RPC error otherwise. The session exits 0. This is
+ *                      the tolerance for arguments that change every run.
  *   - passthrough:     forward the request to a real server and append the new
  *                      interaction to the cassette tagged `origin:"live"`.
+ * MRTR retries never borrow, and a retry's recorded answer is never lent: a
+ * retry is answered exactly or not at all.
  * Every miss comes with near-miss diagnostics: the closest recorded
  * fingerprint and exactly which component diverged.
  */
@@ -153,6 +154,7 @@ export function buildReplayIndex(cassette: Cassette): ReplayIndex {
   };
 }
 
+/** The recorded answer to exactly this request, consumed; null when there is none left. */
 export function matchResponse(index: ReplayIndex, req: JsonRpcRequest): JsonRpcResponse | null {
   const fp = fingerprint(index.redactRequests ? (redactFrame(req) as JsonRpcRequest) : req);
   const exact = index.byFingerprint.get(fp);
@@ -161,6 +163,16 @@ export function matchResponse(index: ReplayIndex, req: JsonRpcRequest): JsonRpcR
     consumeFromMethodPool(index, req.method, res);
     return res;
   }
+  return null;
+}
+
+/**
+ * `--on-miss warn`'s tolerance: the next unconsumed recording of the same
+ * method, whatever its arguments, consumed. It answers a request with another
+ * request's answer, which is why only warn reaches for it, and why the caller
+ * says so out loud.
+ */
+export function matchFallback(index: ReplayIndex, req: JsonRpcRequest): JsonRpcResponse | null {
   // A retry that matched nothing exactly answered differently from the
   // recording; any recorded answer would claim the recorded input was given.
   if (isMrtrRetry(req)) return null;
@@ -342,13 +354,16 @@ export function missError(frame: JsonRpcRequest, diagnosis: string): JsonRpcResp
   };
 }
 
+export type OnMissMode = "error" | "warn" | "passthrough";
+
 type Resolution =
   | { kind: "silent" } // notifications and stray responses: nothing to send
   | { kind: "answer"; out: JsonRpcResponse } // recorded match or synthesized ping
+  | { kind: "borrowed"; request: JsonRpcRequest; out: JsonRpcResponse; reason: MissReason } // warn's same-method answer
   | { kind: "miss"; request: JsonRpcRequest };
 
 /** The one matching path both handleFrame and the live session go through. */
-function resolveFrame(index: ReplayIndex, frame: JsonRpcFrame): Resolution {
+function resolveFrame(index: ReplayIndex, frame: JsonRpcFrame, onMiss: OnMissMode): Resolution {
   if (isNotification(frame) || !isRequest(frame)) return { kind: "silent" };
   const recorded = matchResponse(index, frame);
   if (recorded) {
@@ -358,18 +373,27 @@ function resolveFrame(index: ReplayIndex, frame: JsonRpcFrame): Resolution {
   if (frame.method === "ping") {
     return { kind: "answer", out: { jsonrpc: "2.0", id: frame.id, result: {} } };
   }
+  if (onMiss === "warn") {
+    // Diagnosed before borrowing: the reason is about this request, not the loan.
+    const reason = diagnoseMissReason(index, frame);
+    const borrowed = matchFallback(index, frame);
+    if (borrowed) return { kind: "borrowed", request: frame, out: { ...borrowed, id: frame.id }, reason };
+  }
   return { kind: "miss", request: frame };
 }
 
-/** Handle a single incoming frame; returns the frame to send back, if any. */
-export function handleFrame(index: ReplayIndex, frame: JsonRpcFrame): JsonRpcFrame | null {
-  const resolved = resolveFrame(index, frame);
-  if (resolved.kind === "silent") return null;
-  if (resolved.kind === "answer") return resolved.out;
-  return missError(resolved.request, diagnoseMiss(index, resolved.request));
+/** The stderr line for a borrowed answer, shared by both front-ends. */
+export function formatBorrowed(method: string, reason: MissReason): string {
+  return `answered "${method}" with another recording of the same method (--on-miss warn): ${formatMiss(reason)}`;
 }
 
-export type OnMissMode = "error" | "warn" | "passthrough";
+/** Handle a single incoming frame; returns the frame to send back, if any. */
+export function handleFrame(index: ReplayIndex, frame: JsonRpcFrame, onMiss: OnMissMode = "error"): JsonRpcFrame | null {
+  const resolved = resolveFrame(index, frame, onMiss);
+  if (resolved.kind === "silent") return null;
+  if (resolved.kind === "answer" || resolved.kind === "borrowed") return resolved.out;
+  return missError(resolved.request, diagnoseMiss(index, resolved.request));
+}
 
 /**
  * The spy-append machinery, shared by both front-ends: v1 invented it for stdio
@@ -450,6 +474,7 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
   const cassette = readCassette(cassettePath);
   const index = buildReplayIndex(cassette);
   let misses = 0;
+  let borrowed = 0;
   let appended = 0;
   let forwardFailures = 0;
   // Connecting is memoized including failure: a broken server command fails
@@ -480,9 +505,15 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
   const handleLine = async (line: string): Promise<void> => {
     const frame = parseFrame(line);
     if (!frame) return;
-    const resolved = resolveFrame(index, frame);
+    const resolved = resolveFrame(index, frame, onMiss);
     if (resolved.kind === "silent") return;
     if (resolved.kind === "answer") {
+      process.stdout.write(serializeFrame(resolved.out));
+      return;
+    }
+    if (resolved.kind === "borrowed") {
+      borrowed++;
+      process.stderr.write(`mcp-cassette replay: ${formatBorrowed(resolved.request.method, resolved.reason)}\n`);
       process.stdout.write(serializeFrame(resolved.out));
       return;
     }
@@ -542,9 +573,12 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
         : `${misses} fingerprint miss(es) this session`;
     process.stderr.write(`mcp-cassette replay: ${summary}\n`);
   }
+  if (borrowed > 0) {
+    process.stderr.write(`mcp-cassette replay: ${borrowed} answer(s) borrowed from another recording of the same method\n`);
+  }
   // error mode is the strict one: a session that missed is a failed session.
-  // warn answers the same way frame-by-frame but exits clean. passthrough is
-  // clean only when every forward actually reached the live server.
+  // warn answers what it can, borrowing if it must, and exits clean. passthrough
+  // is clean only when every forward actually reached the live server.
   const failed = (onMiss === "error" && misses > 0) || (onMiss === "passthrough" && forwardFailures > 0);
   process.exitCode = failed ? 1 : 0;
 }
