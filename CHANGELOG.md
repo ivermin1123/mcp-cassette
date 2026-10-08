@@ -8,6 +8,25 @@ below.
 
 ## [Unreleased]
 
+### BREAKING
+
+- **`CheckReport` gains two required fields, `failOn` and `lintFailOn`.** A
+  report now carries the gates its `ok` was decided against, so a verdict can be
+  read without knowing which flags produced it.
+
+  *What you see:* TypeScript callers who build a `CheckReport` by hand, rather
+  than taking the one `runCheck` returns, fail to compile with the two
+  properties missing. Nothing changes at runtime, and nothing changes for a
+  caller who only consumes a report.
+
+  *What to do:* add `failOn: "error"` and `lintFailOn: "error"` to the literal,
+  or whichever levels it is standing in for. Both field types are now exported
+  from the entry point as `CheckFailOn` and `LintFailOn`, so they can be named
+  directly instead of through `CheckReport["lintFailOn"]`.
+
+  Optional fields would have been the compatible shape and the wrong one:
+  `printReport` would then render a gate the report does not actually know.
+
 ### Added
 
 - **`lint-fail-on` input on the action, and `check --lint-fail-on`.** The
@@ -40,14 +59,11 @@ below.
 ### Changed
 
 - **`check` names its gates in the report.** The text report's result line now
-  ends `, gate: error`, and `, gate: error, lint: never` when the two differ.
-  `--format json` carries both as `failOn` and `lintFailOn`. Without it,
+  ends `, gate: error)`, and `, gate: error, lint: never)` when the two differ.
+  `--format json` carries both as `failOn` and `lintFailOn`. Without them,
   `result: PASS` over five error-level findings reads as a bug rather than as
-  the level that was asked for.
-
-  Both are required fields of the exported `CheckReport` interface, so the rare
-  library caller who builds one by hand (rather than taking the one `runCheck`
-  returns) has two properties to add.
+  the level that was asked for. The interface change this implies is under
+  BREAKING above.
 
 ## [0.5.0] - 2026-10-08
 

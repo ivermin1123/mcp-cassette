@@ -69,7 +69,14 @@ export {
   type LintFinding,
   type LintRule,
 } from "./lint.js";
-export { runCheck, printReport, type CheckReport, type CheckFinding } from "./check.js";
+export {
+  runCheck,
+  printReport,
+  type CheckReport,
+  type CheckFinding,
+  type CheckFailOn,
+  type LintFailOn,
+} from "./check.js";
 export {
   captureContract,
   countChanges,
