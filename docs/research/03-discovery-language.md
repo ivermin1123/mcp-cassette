@@ -207,6 +207,9 @@ is the entire index:
 version, and this project is deliberately frozen. Add both at the next release
 cut, whenever one happens for a real reason.
 
+**Done in 0.5.0** (2026-10-08), the release cut for the MRTR and exact-matching
+fixes.
+
 ## 6. Limits, stated plainly
 
 **This only helps someone who is already looking.** It raises the probability
