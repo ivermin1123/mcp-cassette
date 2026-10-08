@@ -3,8 +3,9 @@
  *
  * Connects, performs the lifecycle handshake, lists tools/resources/prompts,
  * validates every tool inputSchema as JSON Schema 2020-12 (ajv), and runs the
- * description safety lint. Exit code 1 if any error-level finding exists,
- * built for CI.
+ * description safety lint. Built for CI: the caller exits 1 on a finding at or
+ * above its gate, `failOn` for the structural CAS-C checks and `lintFailOn` for
+ * the CAS-L lint, and 2 when the server could not be inspected at all.
  */
 
 import Ajv2020 from "ajv/dist/2020.js";

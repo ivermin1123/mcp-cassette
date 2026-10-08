@@ -6,6 +6,45 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [Unreleased]
+
+### Added
+
+- **`sarif-file` input on the action.** Set it and the safety lint's findings
+  are written as SARIF 2.1.0 to that path, ready for a
+  `github/codeql-action/upload-sarif` step. Findings are anchored to the file
+  named by `snapshot-file` when it exists, because code scanning discards a
+  result that carries no physical location. The path is exposed as the
+  `sarif-file` output, and that output stays empty when the input was unset or
+  when the server could not be inspected at all, so the upload step is never
+  handed a file that is not a SARIF document.
+
+  The action does not upload. That needs `security-events: write`, which an
+  action should not assume on its caller's behalf; the README shows the step and
+  the permission. Unset, the default, nothing is written and nothing changes.
+
+  Setting it starts the server a second time: one `check` run emits one format,
+  and the job log and the comment need the human-readable one.
+
+### Fixed
+
+- **The action posts its results comment when a gate fails.** It used to post
+  one only when everything passed, which is the case where nobody needs it.
+  Actions runs every `shell: bash` step as `bash --noprofile --norc -eo pipefail`,
+  so `-e` was already on when the step began and the `set -uo pipefail` line
+  could not clear it: `set` only turns options on. A failing `check` or
+  `snapshot --check` therefore killed its own step before it could record the
+  exit code, and the Report and Gate steps were skipped as dependents of a
+  failed step. The gate still went red, by dying rather than by reporting, so
+  the symptom was a missing comment rather than a wrong verdict.
+
+  Both steps now record the exit code and hand it to the Gate step as they were
+  always documented to, the comment is written on the way through, and the job
+  still fails afterwards.
+
+- The action's `::error::` messages use plain punctuation, and `src/check.ts`
+  no longer describes an exit-code rule that two gates ago stopped being true.
+
 ## [0.6.0] - 2026-10-08
 
 Replay now sends what the recorded server said on its own, where it said it:

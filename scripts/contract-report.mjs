@@ -11,7 +11,8 @@
  * Reads its inputs from the environment the action sets up:
  *   MODE, FAIL_ON, LINT_FAIL_ON, SNAPSHOT_FILE, COMMENT, EVENT_NAME, PR_NUMBER
  *   CHECK_STATUS, SNAPSHOT_STATUS   (empty when that step was skipped)
- *   RUNNER_TEMP                     (holds the check log and the --json diff)
+ *   RUNNER_TEMP                     (holds the check log and the --json diff,
+ *                                    and receives the rendered report)
  *   GH_TOKEN, GITHUB_REPOSITORY     (for the comment; gh reads GH_TOKEN itself)
  *
  * No dependencies: this runs on a bare runner before anything is installed.
@@ -192,6 +193,14 @@ const snapshotStatus = statusOf(env.SNAPSHOT_STATUS);
 const body = render(checkStatus, snapshotStatus);
 
 console.log(body);
+
+// The step summary file is unique to the step that writes it, so nothing later
+// in the job can read this back out of it. The same text goes to RUNNER_TEMP,
+// which does span the job: that is what lets a workflow assert the report was
+// rendered at all, and what gives a consumer a file to upload as an artifact.
+if (env.RUNNER_TEMP) {
+  fs.writeFileSync(path.join(env.RUNNER_TEMP, "mcp-cassette-report.md"), body + "\n");
+}
 
 if (env.GITHUB_STEP_SUMMARY) {
   fs.appendFileSync(env.GITHUB_STEP_SUMMARY, body + "\n");
