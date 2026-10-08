@@ -252,7 +252,7 @@ emission, the README roadmap's server-initiated flows.
 
 ## Two limits left by tasks replay
 
-**Raised** 2026-10-09, from the change that made the
+**Raised** 2026-10-08, from the change that made the
 `io.modelcontextprotocol/tasks` extension replay. Neither blocks a tasks
 session from recording and replaying; both are places where replay serves the
 recording faithfully and the recording is not the whole truth.
@@ -264,7 +264,7 @@ that cancels earlier on replay than it did while recording still receives
 whatever states the recording holds next, including `working`, before reaching
 the recorded end.
 
-**Measured 2026-10-09** against a cassette recorded as working, cancel,
+**Measured 2026-10-08** against a cassette recorded as working, cancel,
 working, completed. A client that polls once, sends `tasks/cancel`, then keeps
 polling reads:
 
@@ -293,7 +293,7 @@ Once a recorded sequence ends terminal, replay serves that answer for every
 further poll, with no expiry. The extension lets a server discard a task after
 `ttlMs` and answer later polls with an error instead.
 
-**Measured 2026-10-09:** a cassette whose task completed with `ttlMs: 60000`
+**Measured 2026-10-08:** a cassette whose task completed with `ttlMs: 60000`
 answers a poll indefinitely, where the recorded server would have stopped after
 a minute. `verify` already treats `ttlMs` as volatile, because a live server's
 TTL is its own business, so the recorded number is not a deadline replay could

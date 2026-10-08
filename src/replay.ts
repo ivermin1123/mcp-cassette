@@ -101,6 +101,33 @@ function taskStatusOf(res: JsonRpcResponse): string | undefined {
   return typeof status === "string" ? status : undefined;
 }
 
+/**
+ * Where a recording left one task, read off its `tasks/get` pool: the request
+ * that asked, the last answer the pool holds, and how many polls it holds.
+ *
+ * Undefined when the request names no task or the last answer carries no status
+ * replay can read. Neither says anything about whether the task finished, so
+ * neither earns the terminal rule, and the pool stays an ordinary one.
+ *
+ * The HTTP front-end reads this too, off the last stream recorded for the same
+ * fingerprint: a server that answered the poll by streaming (which is what an
+ * SDK server does unless it was configured otherwise) left the same task in the
+ * same place, and the rule is about the task rather than about the shape its
+ * answer arrived in.
+ */
+export function readTaskPolls(
+  request: JsonRpcRequest,
+  last: JsonRpcResponse,
+  recordedPolls: number
+): RecordedTaskPolls | undefined {
+  if (request.method !== TASK_GET_METHOD) return undefined;
+  const taskId = taskIdOf(request);
+  if (taskId === undefined) return undefined;
+  const status = taskStatusOf(last);
+  if (status === undefined) return undefined;
+  return { taskId, last, status, terminal: TERMINAL_TASK_STATES.has(status), recordedPolls };
+}
+
 // Fingerprint components are joined with NUL: it can never appear in a method
 // name or in JSON text, so no crafted tool name or argument can collide.
 const SEP = "\u0000";
@@ -479,24 +506,16 @@ export function buildReplayIndex(cassette: Cassette): ReplayIndex {
   // consumed with it, so a poll past the end can still read the final state.
   const taskPolls = new Map<string, RecordedTaskPolls>();
   for (const request of recordedRequests) {
+    // Guarded before fingerprinting rather than inside `readTaskPolls`: every
+    // recorded request would otherwise pay for a stable stringify of its params
+    // that only a poll can use.
     if (request.method !== TASK_GET_METHOD) continue;
-    const taskId = taskIdOf(request);
-    if (taskId === undefined) continue;
     const fp = fingerprint(request);
-    const pool = byFingerprint.get(fp);
-    const last = pool?.[pool.length - 1];
+    const pool = byFingerprint.get(fp) ?? [];
+    const last = pool[pool.length - 1];
     if (!last) continue;
-    const status = taskStatusOf(last);
-    // An answer with no status replay can read says nothing about whether the
-    // task finished, so it gets no special treatment and stays an ordinary pool.
-    if (status === undefined) continue;
-    taskPolls.set(fp, {
-      taskId,
-      last,
-      status,
-      terminal: TERMINAL_TASK_STATES.has(status),
-      recordedPolls: pool.length,
-    });
+    const polls = readTaskPolls(request, last, pool.length);
+    if (polls) taskPolls.set(fp, polls);
   }
   const recordedListenCountByFingerprint = new Map<string, number>();
   for (const [fp, pool] of listens) recordedListenCountByFingerprint.set(fp, pool.length);
@@ -645,6 +664,10 @@ export function matchFallback(index: ReplayIndex, req: JsonRpcRequest): JsonRpcR
   // A retry that matched nothing exactly answered differently from the
   // recording; any recorded answer would claim the recorded input was given.
   if (isMrtrRetry(req)) return null;
+  // The same refusal for the same reason: every `tasks/get` answer carries the
+  // id and state of one task. Lending it to a poll about another task would
+  // tell that client its own task reached a state it never reached.
+  if (req.method === TASK_GET_METHOD) return null;
   const fallback = index.byMethod.get(req.method);
   if (fallback && fallback.length > 0) {
     const res = fallback.shift()!;

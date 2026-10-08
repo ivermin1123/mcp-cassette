@@ -44,6 +44,7 @@ import {
   matchListen,
   matchResponse,
   missError,
+  readTaskPolls,
   releaseAfter,
   releaseBefore,
   releaseInitial,
@@ -52,6 +53,7 @@ import {
   type MissEvent,
   type MissReason,
   type OnMissMode,
+  type RecordedTaskPolls,
 } from "./replay.js";
 import { MiniClient, type Target } from "./client.js";
 import { redactFrame } from "./redact.js";
@@ -105,6 +107,22 @@ function recordedStatuses(cassette: Cassette): Map<JsonRpcResponse, number> {
   return statuses;
 }
 
+/** The response a streamed answer ended on: the last frame of it that is one. */
+function finalResponse(entry: ChunksEntry): JsonRpcResponse | undefined {
+  for (let i = entry.chunks.length - 1; i >= 0; i--) {
+    const frame = entry.chunks[i]!.frame;
+    if (isResponse(frame)) return frame;
+  }
+  return undefined;
+}
+
+/** A task whose polls the recorded server answered by streaming them. */
+interface StreamedTask {
+  polls: RecordedTaskPolls;
+  /** The entry the terminal rule re-serves, in the shape it was recorded in. */
+  last: ChunksEntry;
+}
+
 /**
  * Recorded streams, split the way they are served: answers to a request are
  * pooled by fingerprint and consumed exactly like the JSON ones, while the
@@ -114,6 +132,13 @@ function recordedStatuses(cassette: Cassette): Map<JsonRpcResponse, number> {
 function streamIndex(cassette: Cassette): {
   pools: Map<string, ChunksEntry[]>;
   recorded: Map<string, number>;
+  /**
+   * Where the recording left each task whose polls were answered by streaming.
+   * The engine builds the same thing from the JSON answers it can see; a
+   * `chunks` entry is invisible to it, and a server that was not configured to
+   * answer a POST with JSON records every poll this way.
+   */
+  tasks: Map<string, StreamedTask>;
   standalone?: ChunksEntry;
   /** Standalone streams beyond the first. Only one endpoint exists to serve them from. */
   extraStandalone: number;
@@ -125,6 +150,8 @@ function streamIndex(cassette: Cassette): {
     }
   }
   const pools = new Map<string, ChunksEntry[]>();
+  /** The request each pool answers, kept for the task rule to read. */
+  const asked = new Map<string, JsonRpcRequest>();
   let standalone: ChunksEntry | undefined;
   let extraStandalone = 0;
   for (const entry of cassette.entries) {
@@ -142,10 +169,22 @@ function streamIndex(cassette: Cassette): {
     const fp = fingerprint(answered);
     if (!pools.has(fp)) pools.set(fp, []);
     pools.get(fp)!.push(entry);
+    asked.set(fp, answered);
   }
   const recorded = new Map<string, number>();
   for (const [fp, pool] of pools) recorded.set(fp, pool.length);
-  return { pools, recorded, standalone, extraStandalone };
+  // Read off the whole pool rather than tracked as it is consumed, exactly as
+  // the engine does for a task answered in JSON: a poll past the end has to be
+  // able to read the final state after every recording of it is spent.
+  const tasks = new Map<string, StreamedTask>();
+  for (const [fp, pool] of pools) {
+    const last = pool[pool.length - 1]!;
+    const response = finalResponse(last);
+    if (!response) continue;
+    const polls = readTaskPolls(asked.get(fp)!, response, pool.length);
+    if (polls) tasks.set(fp, { polls, last });
+  }
+  return { pools, recorded, tasks, standalone, extraStandalone };
 }
 
 /** §3.3: one `data:` line per frame, blank-line delimited. */
@@ -451,6 +490,17 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       void emit(res, answer.chunks, { terminate: true, rekey: frame.id }).then(() => release(answer, "after"));
       return;
     }
+    // Every recording of this poll is spent, which for a task is where the
+    // terminal rule starts rather than where the answers run out. A finished
+    // task is still finished, so its last answer goes out again, in the shape
+    // the recording holds it in and without being consumed: a client that
+    // negotiated a stream keeps getting one, and there is nothing left to take.
+    const task = streams.tasks.get(fp);
+    if (task?.polls.terminal) {
+      release(task.last, "before");
+      void emit(res, task.last.chunks, { terminate: true, rekey: frame.id }).then(() => release(task.last, "after"));
+      return;
+    }
     if (onMiss === "warn") {
       // Diagnosed before borrowing: the reason is about this request, not the loan.
       const reason = diagnoseMissReason(index, frame);
@@ -466,10 +516,20 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
     }
     misses++;
     // A spent stream pool is a miss cause the stdio front-end cannot have, so
-    // it is named here rather than inside the shared diagnosis.
-    const reason: MissReason = streams.recorded.has(fp)
-      ? { kind: "stream-exhausted", fingerprint: fp, recordedCount: streams.recorded.get(fp)! }
-      : diagnoseMissReason(index, frame);
+    // it is named here rather than inside the shared diagnosis. A task the
+    // recording never saw finish is not that cause, though: "the stream was
+    // already replayed" would send the reader looking at the transport, when
+    // what the session needs is a recording that ran until the task finished.
+    const reason: MissReason = task
+      ? {
+          kind: "task-not-terminal",
+          taskId: task.polls.taskId,
+          status: task.polls.status,
+          recordedPolls: task.polls.recordedPolls,
+        }
+      : streams.recorded.has(fp)
+        ? { kind: "stream-exhausted", fingerprint: fp, recordedCount: streams.recorded.get(fp)! }
+        : diagnoseMissReason(index, frame);
     missLog.push({ method: frame.method, request: frame, reason });
     const diagnosis = formatMiss(reason);
     warn(`fingerprint miss for "${frame.method}": ${diagnosis}`);

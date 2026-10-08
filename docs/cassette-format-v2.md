@@ -199,27 +199,41 @@ to a request is a sequence rather than a value. A server that will take a while
 answers with a task handle (`resultType: "task"`), and the client polls
 `tasks/get` until the status is terminal.
 
-Nothing in the format changes for it. Every poll for one task carries the same
-params, so they share a fingerprint and come out of one pool in recorded order,
-which is why the interval a client polls at never matters: it sees the recorded
-state sequence one state per poll, and reaches the recorded end on the poll the
-recording ended on. Polling fewer times than the recording did is a client that
-stopped early, not an error.
+Nothing in the format changes for it, and nothing in it depends on how the
+answers were recorded: a poll answered with JSON is a `frame` entry and one the
+server streamed is a `chunks` entry, and the rule below reads the task's state
+out of either. Every poll for one task carries the same params, so they share a
+fingerprint and come out of one pool in recorded order, which is why the
+interval a client polls at never matters: it sees the recorded state sequence
+one state per poll, and reaches the recorded end on the poll the recording ended
+on. Polling fewer times than the recording did is a client that stopped early,
+not an error.
 
 What needs a rule is the poll *after* the last recorded one, and the extension's
 terminal states answer it:
 
 > Once the recorded sequence for a task id ends in a terminal status
 > (`completed`, `failed` or `cancelled`), that last answer is served again for
-> every further poll, without being consumed. If the recording ended on a
-> non-terminal status, a further poll is a miss whose reason names the task id
-> and the status the recording stopped on.
+> every further poll, without being consumed, in the shape the recording holds
+> it in: a streamed answer is re-served as that stream, a JSON one as JSON. If
+> the recording ended on a non-terminal status, a further poll is a miss whose
+> reason names the task id and the status the recording stopped on.
 
 A finished task is still finished, so re-serving its answer is the faithful
 thing and not a tolerance: it is also what answers a client that persisted the
-task id and came back after a restart. A recording that stopped mid-task holds
-no later state, and inventing one would tell the client a build finished that
-never did, so the miss says to re-record for longer instead.
+task id and came back after its own restart, for as long as the replay holding
+the recorded sequence is still running. A replay restarted alongside the client
+has every recorded poll left, so the same id reads that sequence from its start.
+A recording that stopped mid-task holds no later state, and inventing one would
+tell the client a build finished that never did, so the miss says to re-record
+for longer instead.
+
+Under `--on-miss warn` a poll is one of the requests that never borrows. Warn's
+tolerance is the next unused recording of the same method, and for `tasks/get`
+that recording is an answer about a different task: handing it over would tell
+the client its own task reached a state it never reached. So a poll past a
+non-terminal recording misses under warn exactly as it does under error, and
+says why.
 
 Two neighbouring methods need no rule of their own. `tasks/update` carries the
 client's `inputResponses`, which puts it under the same matching as an MRTR

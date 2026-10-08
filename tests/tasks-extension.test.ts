@@ -21,9 +21,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { buildReplayIndex, diagnoseMiss, handleExchange, handleFrame, SUBSCRIPTION_ID_KEY } from "../src/replay.js";
+import {
+  buildReplayIndex,
+  diagnoseMiss,
+  handleExchange,
+  handleFrame,
+  SUBSCRIPTION_ID_KEY,
+  TASK_NOTIFICATION_METHOD,
+} from "../src/replay.js";
 import { startHttpReplay } from "../src/http-replay.js";
-import { collectVerifyPairs, normalizeForDiff } from "../src/verify.js";
+import { classifyPair, collectVerifyPairs, normalizeForDiff } from "../src/verify.js";
 import { readCassette, type Cassette, type CassetteEntry } from "../src/cassette.js";
 import { parseFrame, type JsonRpcFrame, type JsonRpcRequest, type JsonRpcResponse } from "../src/jsonrpc.js";
 
@@ -68,6 +75,41 @@ function polled(final: string, extra: Record<string, unknown> = {}, before = ["w
 
 const statusOf = (frame: JsonRpcFrame | null) => (frame as { result?: { status?: string } } | null)?.result?.status;
 
+const HTTP_HEAD = {
+  type: "header",
+  cassetteVersion: 2,
+  recorder: "mcp-cassette@test",
+  startedAt: "2026-10-08T00:00:00Z",
+  transport: "http",
+  era: "modern",
+};
+
+/** An HTTP cassette on disk, ready for `startHttpReplay`. */
+function httpCassette(name: string, entries: CassetteEntry[]): string {
+  const file = path.join(tmpDir, name);
+  fs.writeFileSync(file, [HTTP_HEAD, ...entries].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  return file;
+}
+
+/** A streamed answer: what a `chunks` entry holds for one request the server answered as SSE. */
+const stream = (t: number, id: number, frames: unknown[]): CassetteEntry =>
+  ({ type: "chunks", t, dir: "s2c", id, chunks: frames.map((frame, i) => ({ t: i, frame })) }) as CassetteEntry;
+
+/** `polled`, with every answer streamed: the shape an SDK server over HTTP records by default. */
+function streamedPolls(final: string, extra: Record<string, unknown> = {}, before = ["working", "working"]): CassetteEntry[] {
+  const entries: CassetteEntry[] = [];
+  let t = 0;
+  before.forEach((status, i) => {
+    entries.push(c2s(t++, poll(10 + i)), stream(t++, 10 + i, [state(10 + i, status, { statusMessage: `poll ${i + 1}` })]));
+  });
+  const last = 10 + before.length;
+  entries.push(c2s(t++, poll(last)), stream(t++, last, [state(last, final, extra)]));
+  return entries;
+}
+
+const postTo = (url: string, body: unknown) =>
+  fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
 /** Run a stdio process, feed it these frames, and collect every frame it wrote. */
 function drive(command: string[], frames: unknown[], settleMs = 500): Promise<{ out: JsonRpcFrame[]; err: string; code: number }> {
   return new Promise((resolve) => {
@@ -98,11 +140,11 @@ describe("polling a recorded task", () => {
     expect([90, 91, 92].map((id) => statusOf(handleFrame(index, poll(id))))).toEqual(["working", "working", "completed"]);
   });
 
-  it("stops early without complaint when the client polls fewer times than the recording", () => {
+  it("answers every poll a client that stops early does send", () => {
     const index = buildReplayIndex(polled("completed"));
     expect(statusOf(handleFrame(index, poll(90)))).toBe("working");
-    // The client walked away with two recordings unused. That is a client that
-    // lost interest, not a session that went wrong.
+    // The client walked away with one recording unused. That is a client that
+    // lost interest, not a session that went wrong, so nothing here is a miss.
     expect(handleFrame(index, poll(91))).toMatchObject({ result: { status: "working" } });
   });
 
@@ -125,13 +167,16 @@ describe("polling a recorded task", () => {
     }
   });
 
-  it("answers a task id the client persisted across a restart, with no earlier poll in this session", () => {
+  it("answers a task id the client kept across its own restart, as long as replay kept running", () => {
     const index = buildReplayIndex(polled("completed"));
-    // A fresh client holding only the id still consumes the recorded sequence
-    // from the start; what matters is that it reaches the terminal answer and
-    // keeps getting it.
     for (const id of [90, 91, 92, 93]) handleFrame(index, poll(id));
+    // The client went away and came back holding only the id. Replay still
+    // holds the spent pool, so the finished task still reads finished.
     expect(statusOf(handleFrame(index, poll(94)))).toBe("completed");
+    // Replay restarting too is a different thing, and the honest one to pin: a
+    // fresh session has every recorded poll left, so the same id reads the
+    // recorded sequence from its start rather than from its end.
+    expect(statusOf(handleFrame(buildReplayIndex(polled("completed")), poll(95)))).toBe("working");
   });
 });
 
@@ -158,6 +203,22 @@ describe("a recording that stopped before the task finished", () => {
     expect([90, 91, 92].map((id) => statusOf(handleFrame(index, poll(id))))).toEqual(["working", "working", "working"]);
   });
 
+  it("never lends another task's state to a poll, under warn either", () => {
+    const OTHER = "task-0002";
+    const index = buildReplayIndex(
+      cassette([
+        c2s(0, poll(1)),
+        s2c(1, state(1, "working")),
+        c2s(2, poll(2, OTHER)),
+        s2c(3, state(2, "completed", { taskId: OTHER })),
+      ])
+    );
+    expect(statusOf(handleFrame(index, poll(90), "warn"))).toBe("working");
+    // The only recording left is an answer about a different task. Handing it
+    // over would tell this client its own task finished, which it did not.
+    expect(handleFrame(index, poll(91), "warn")).toMatchObject({ error: { code: -32601 } });
+  });
+
   it("leaves a task whose answers carry no readable status to the ordinary pool", () => {
     // A server that answered a poll with an error said nothing about whether
     // the task finished, so replay claims nothing about it either.
@@ -167,6 +228,50 @@ describe("a recording that stopped before the task finished", () => {
     expect(handleFrame(index, poll(90))).toMatchObject({ error: { code: -32002 } });
     expect(diagnoseMiss(index, poll(91))).toContain("every recorded response");
   });
+});
+
+describe("a task whose polls the server answered as a stream", () => {
+  // Over HTTP an answer arrives as SSE unless the server was configured to send
+  // JSON, which is not the default, so this is the ordinary shape of a recorded
+  // poll rather than a corner of the format. The rule has to reach it.
+  const frameOf = async (res: Response) => JSON.parse((await res.text()).replace(/^data: /, "").trim());
+
+  it("serves the terminal answer again, still streamed, for every poll past the recording", async () => {
+    const file = httpCassette("tasks-streamed.cassette.jsonl", streamedPolls("completed", { result: { content: [] } }));
+    const server = await startHttpReplay(file, { listen: "127.0.0.1:0" });
+
+    const seen: string[] = [];
+    for (const id of [50, 51, 52, 53, 54]) {
+      const res = await postTo(server.url, poll(id));
+      // The recording answered this poll by streaming, so replay does too: a
+      // client that negotiated SSE is not handed a different shape at the end.
+      expect(res.headers.get("content-type")).toBe("text/event-stream");
+      const frame = await frameOf(res);
+      expect(frame.id).toBe(id);
+      seen.push(frame.result.status);
+    }
+    expect(seen).toEqual(["working", "working", "completed", "completed", "completed"]);
+
+    await server.close();
+    expect(server.misses()).toBe(0);
+  }, 20_000);
+
+  it("misses the poll past a streamed recording that stopped while the task was working", async () => {
+    const file = httpCassette("tasks-streamed-stalled.cassette.jsonl", streamedPolls("working"));
+    const server = await startHttpReplay(file, { listen: "127.0.0.1:0" });
+
+    for (const id of [50, 51, 52]) await postTo(server.url, poll(id)).then((r) => r.text());
+    const extra = await postTo(server.url, poll(53));
+    expect(await extra.json()).toMatchObject({ id: 53, error: { code: -32601 } });
+
+    // Not "the stream pool is spent", which would send the reader looking for a
+    // transport problem: the recording simply never saw this task finish.
+    const [miss] = server.takeMisses();
+    expect(miss!.reason).toMatchObject({ kind: "task-not-terminal", taskId: TASK_ID, status: "working", recordedPolls: 3 });
+
+    await server.close();
+    expect(server.misses()).toBe(1);
+  }, 20_000);
 });
 
 describe("tasks/update and tasks/cancel", () => {
@@ -225,7 +330,7 @@ describe("notifications/tasks", () => {
   };
   const PUSHED = {
     jsonrpc: "2.0" as const,
-    method: "notifications/tasks",
+    method: TASK_NOTIFICATION_METHOD,
     params: { _meta: { [SUBSCRIPTION_ID_KEY]: 2 }, taskId: TASK_ID, status: "completed", ...STAMPS },
   };
   const SUBSCRIBED = cassette([
@@ -242,7 +347,7 @@ describe("notifications/tasks", () => {
     expect(acknowledged).toMatchObject({ method: "notifications/subscriptions/acknowledged" });
 
     const after = handleExchange(index, poll(78));
-    expect(methodsOf(after)).toEqual(["#78", "notifications/tasks"]);
+    expect(methodsOf(after)).toEqual(["#78", TASK_NOTIFICATION_METHOD]);
     // Re-keyed like every other frame on a subscription: the client correlates
     // on the id its own listen request carried.
     expect(after[1]).toMatchObject({ params: { _meta: { [SUBSCRIPTION_ID_KEY]: 77 }, taskId: TASK_ID, status: "completed" } });
@@ -323,6 +428,19 @@ describe("verify against a live server", () => {
     const live = { resultType: "task", taskId: "task-9999", status: "working", ...STAMPS, pollIntervalMs: 250 };
     expect(normalizeForDiff(live)).toEqual(normalizeForDiff(recorded));
   });
+
+  it("still reports a taskId that changed inside an ordinary tool result", () => {
+    // Only a task handle mints a fresh id on every run. A tool that returns a
+    // field by that name is returning data, and data that moved is drift.
+    const answer = (taskId: string): JsonRpcResponse => ({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text: "ok" }], taskId, pollIntervalMs: 50 },
+    });
+    const { status, changes } = classifyPair(answer("a"), answer("b"));
+    expect(status).toBe("CHANGED");
+    expect(changes.map((change) => change.path)).toEqual(["/taskId"]);
+  });
 });
 
 describe("the fixture server, end to end", () => {
@@ -345,7 +463,7 @@ describe("the fixture server, end to end", () => {
 
     const recorded = await drive(["node", CLI, "record", "-o", cassettePath, "--", "node", TASKING], frames);
     const live = recorded.out.map((f) => ("method" in f ? f.method : statusOf(f) ?? `#${String((f as { id: unknown }).id)}`));
-    expect(live).toContain("notifications/tasks");
+    expect(live).toContain(TASK_NOTIFICATION_METHOD);
     expect(live).toContain("completed");
 
     const file = readCassette(cassettePath);
