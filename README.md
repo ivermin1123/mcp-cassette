@@ -477,7 +477,7 @@ The hash is not a security boundary. It is an unsalted, truncated SHA-256 of the
 ## How this relates to other tools
 
 - **[`@modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance)**: the official spec-conformance suite. Use it to verify you implement the protocol correctly; use mcp-cassette to test *your* server's behavior and contract. The two are complementary, and we intend to contribute scenarios upstream.
-- **MCP Inspector / MCPJam**: interactive debugging. mcp-cassette is headless and CI-first.
+- **MCP Inspector / MCPJam**: interactive debugging. The Inspector also has a [CLI client](https://modelcontextprotocol.io/docs/2026-07-28/tools/inspector/cli) for scripts and CI: one request per run, JSON output, stable exit codes. It does not record a session or serve one back, diff a contract, or lint descriptions; if a single scripted request is all your pipeline needs, it is already installed.
 - **Security scanners (mcp-scan/agent-scan, Cisco mcp-scanner)**: deep security analysis. Our lint is a fast CI tripwire, not a replacement.
 
 ## Roadmap
