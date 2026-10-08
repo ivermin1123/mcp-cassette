@@ -104,6 +104,87 @@ describe("replay matching", () => {
   });
 });
 
+/**
+ * MRTR (2026-07-28): sampling, elicitation and roots come back as an
+ * `input_required` result, and the client retries the same call carrying its
+ * answers in `inputResponses` and the server's `requestState`. The retry
+ * repeats `name` and `arguments` verbatim, so those alone cannot tell an
+ * accepted confirmation from a declined one.
+ */
+describe("MRTR retries", () => {
+  const deploy = { name: "deploy", arguments: { env: "prod" } };
+  const asked = {
+    resultType: "input_required",
+    inputRequests: { confirm: { method: "elicitation/create", params: { message: "Deploy to prod?" } } },
+    requestState: "s1",
+  };
+  // An accept carries content and a decline does not, so a decline differs from
+  // the recorded accept at as many paths as from the call it retried.
+  const retry = (id: number, action: string) =>
+    req(id, "tools/call", {
+      ...deploy,
+      inputResponses: { confirm: action === "accept" ? { action, content: { ok: true } } : { action } },
+      requestState: "s1",
+    });
+  const done = { resultType: "complete", content: [{ type: "text", text: "deployed" }] };
+
+  const recorded = () =>
+    buildReplayIndex(
+      cassetteWith([
+        [req(1, "tools/call", deploy), res(1, asked)],
+        [retry(2, "accept"), res(2, done)],
+      ])
+    );
+
+  it("keeps every non-retry tools/call fingerprint exactly as it was", () => {
+    expect(fingerprint({ method: "tools/call", params: { name: "echo", arguments: { x: 1 } } })).toBe(
+      'tools/call\u0000echo\u0000{"x":1}'
+    );
+  });
+
+  it("tells a retry apart from the call it retries, and by the input it carries", () => {
+    const first = fingerprint(req(1, "tools/call", deploy));
+    expect(fingerprint(retry(2, "accept"))).not.toBe(first);
+    expect(fingerprint(retry(2, "accept"))).not.toBe(fingerprint(retry(3, "decline")));
+  });
+
+  it("replays the recorded flow when the client answers as the recording did", () => {
+    const index = recorded();
+    expect(handleFrame(index, req(10, "tools/call", deploy))).toMatchObject({ id: 10, result: asked });
+    expect(handleFrame(index, retry(11, "accept"))).toMatchObject({ id: 11, result: done });
+  });
+
+  it("misses a retry that answered differently instead of serving the recorded outcome", () => {
+    const index = recorded();
+    handleFrame(index, req(10, "tools/call", deploy));
+    const out = handleFrame(index, retry(11, "decline"))!;
+
+    expect(out).toMatchObject({ id: 11, error: { code: -32601 } });
+    expect(out).not.toHaveProperty("result");
+    const diagnosis = diagnoseMiss(index, retry(12, "decline"));
+    expect(diagnosis).toContain('/inputResponses/confirm/action (recorded "accept", got "decline")');
+    // Measured against the recorded retry, whose state it shares; measured
+    // against the call it retried, /requestState would differ too.
+    expect(diagnosis).not.toContain("/requestState");
+  });
+
+  it("never hands a retry's recorded answer to a request that is not that retry", () => {
+    const index = recorded();
+    const other = { name: "deploy", arguments: { env: "staging" } };
+    // The same-method fallback still serves the first step, the input_required...
+    expect(handleFrame(index, req(10, "tools/call", other))).toMatchObject({ result: asked });
+    // ...but never the outcome the recorded input bought.
+    expect(handleFrame(index, req(11, "tools/call", other))).toMatchObject({ error: { code: -32601 } });
+  });
+
+  it("applies to retries of any method, not only tools/call", () => {
+    const prompt = (id: number, action: string) =>
+      req(id, "prompts/get", { name: "greet", inputResponses: { who: { action } }, requestState: "p1" });
+    const index = buildReplayIndex(cassetteWith([[prompt(1, "accept"), res(1, { messages: [] })]]));
+    expect(handleFrame(index, prompt(9, "decline"))).toMatchObject({ error: { code: -32601 } });
+  });
+});
+
 describe("replay matching after redaction", () => {
   // The recorded cassette only ever saw placeholders; the live client still
   // sends the real credentials. Both must land on the same fingerprint.

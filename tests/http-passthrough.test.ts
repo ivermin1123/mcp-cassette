@@ -165,6 +165,40 @@ describe("forwarding a miss to the live server", () => {
     expect(second.misses()).toBe(0);
   });
 
+  it("hands an input_required answer to the client, then learns the retry it answers with", async () => {
+    const asked = { resultType: "input_required", inputRequests: { confirm: { method: "elicitation/create" } }, requestState: "s1" };
+    const done = { resultType: "complete", content: [{ type: "text", text: "deployed" }] };
+    const url = await liveServer((body, res) => {
+      const params = (body.params ?? {}) as Record<string, unknown>;
+      const result =
+        body.method === "server/discover"
+          ? { resultType: "complete", supportedVersions: ["2026-07-28"], capabilities: { tools: {} } }
+          : params.inputResponses
+            ? done
+            : asked;
+      json(res, { jsonrpc: "2.0", id: body.id, result });
+    });
+    const file = cassette("mrtr", { era: "modern" }, []);
+    const call = { name: "deploy", arguments: { env: "prod" } };
+    const retry = { ...call, inputResponses: { confirm: { action: "accept" } }, requestState: "s1" };
+
+    const live = await startHttpReplay(file, { listen: "127.0.0.1:0", onMiss: "passthrough", serverCommand: [url] });
+    const first = await quiet(() => post(live.url, ask(1, "tools/call", call)));
+    expect(await first.json()).toEqual({ jsonrpc: "2.0", id: 1, result: asked });
+    const second = await quiet(() => post(live.url, ask(2, "tools/call", retry)));
+    expect(await second.json()).toEqual({ jsonrpc: "2.0", id: 2, result: done });
+    await live.close();
+    expect(live.forwardFailures()).toBe(0);
+    expect(live.appended()).toBe(2);
+
+    // Offline, the whole exchange replays from what was just appended.
+    const offline = await startHttpReplay(file, { listen: "127.0.0.1:0", onMiss: "error" });
+    expect(await (await quiet(() => post(offline.url, ask(7, "tools/call", call)))).json()).toMatchObject({ result: asked });
+    expect(await (await quiet(() => post(offline.url, ask(8, "tools/call", retry)))).json()).toMatchObject({ result: done });
+    await offline.close();
+    expect(offline.misses()).toBe(0);
+  });
+
   it("reports a forward that never reached the server, and appends nothing for it", async () => {
     const file = cassette("unreachable", { era: "legacy" }, RECORDED);
     const before = fs.readFileSync(file, "utf8");

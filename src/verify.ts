@@ -123,6 +123,25 @@ export function removePointer(value: unknown, pointer: string): void {
   }
 }
 
+/** The opaque state an MRTR `input_required` result asks the retry to echo, if any. */
+function requestStateOf(res: JsonRpcResponse): string | undefined {
+  const result = res.result as { resultType?: unknown; requestState?: unknown } | undefined;
+  return result?.resultType === "input_required" && typeof result.requestState === "string"
+    ? result.requestState
+    : undefined;
+}
+
+/**
+ * `requestState` is server-minted and opaque by contract (clients MUST NOT
+ * inspect it), so its value is never drift. Whether one was sent is: it decides
+ * what a correct retry looks like.
+ */
+function maskRequestState(result: unknown): unknown {
+  const r = result as Record<string, unknown> | undefined;
+  if (r?.resultType !== "input_required" || r.requestState === undefined) return result;
+  return { ...r, requestState: VOLATILE_SENTINEL };
+}
+
 function prepare(payload: unknown, ignore: string[]): unknown {
   const normalized = normalizeForDiff(payload);
   for (const pointer of ignore) removePointer(normalized, pointer);
@@ -151,7 +170,7 @@ export function classifyPair(
   const ignore = opts.ignore ?? [];
   const changes = recordedIsError
     ? diffValues(prepare(recorded.error, ignore), prepare(live.error, ignore))
-    : diffValues(prepare(recorded.result, ignore), prepare(live.result, ignore));
+    : diffValues(prepare(maskRequestState(recorded.result), ignore), prepare(maskRequestState(live.result), ignore));
   return changes.length === 0 ? { status: "MATCH", changes } : { status: "CHANGED", changes };
 }
 
@@ -178,6 +197,20 @@ export function collectVerifyPairs(cassette: Cassette): VerifyPair[] {
     if (response) pairs.push({ request: entry.frame, response });
   }
   return pairs;
+}
+
+/**
+ * A recorded retry's params, echoing the state the live server minted. When it
+ * minted none, the retry carries none: a client MUST NOT send a state it was
+ * not given.
+ */
+function withLiveState(params: unknown, liveStateFor: Map<string, string | undefined>): unknown {
+  const p = params as Record<string, unknown> | undefined;
+  const recorded = p?.requestState;
+  if (typeof recorded !== "string" || !liveStateFor.has(recorded)) return params;
+  const { requestState: _stale, ...rest } = p!;
+  const live = liveStateFor.get(recorded);
+  return live === undefined ? rest : { ...rest, requestState: live };
 }
 
 export function pairLabel(request: JsonRpcRequest): string {
@@ -210,12 +243,17 @@ export async function verifyAgainstServer(
   const results: VerifyResult[] = [];
   const target: Target = Array.isArray(server) ? { kind: "stdio", command: server } : server;
   const { client } = await MiniClient.connect(target, opts.timeoutMs, opts.era ?? "auto");
+  // MRTR: a recorded retry echoes the state the recorded server minted. This
+  // server mints its own, and the retry must carry that one to mean the same.
+  const liveStateFor = new Map<string, string | undefined>();
   try {
     for (const pair of pairs) {
       const label = pairLabel(pair.request);
       let live: JsonRpcResponse;
       try {
-        live = await client.request(pair.request.method, pair.request.params);
+        // relay, not request: an input_required answer is compared like any
+        // other, and the recorded retry after it supplies the input.
+        live = await client.relay(pair.request.method, withLiveState(pair.request.params, liveStateFor));
       } catch (err) {
         results.push({
           label,
@@ -226,6 +264,9 @@ export async function verifyAgainstServer(
         });
         continue;
       }
+      const recordedState = requestStateOf(pair.response);
+      const liveState = requestStateOf(live);
+      if (recordedState !== undefined) liveStateFor.set(recordedState, liveState);
       const { status, changes, detail } = classifyPair(pair.response, live, opts);
       const allowed =
         status === "CHANGED" &&

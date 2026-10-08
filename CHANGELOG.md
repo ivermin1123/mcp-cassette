@@ -6,6 +6,52 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [Unreleased]
+
+Protocol revision 2026-07-28 moved sampling, elicitation and roots into
+Multi Round-Trip Requests: the server answers `input_required`, and the client
+retries the same call carrying its answers in `inputResponses` and the
+server's `requestState`. The tool was dual-era before this, but three of its
+paths had never met a retry, and each one got it wrong.
+
+### BREAKING
+
+- **`replay` no longer answers a differently-answered MRTR retry with the
+  recorded outcome.** A `tools/call` fingerprint was `name` + `arguments` only,
+  and a retry repeats both verbatim, so a recording made with `accept` served
+  its outcome to a retry that sent `decline`, with exit 0. A retry is now
+  matched on `inputResponses` and `requestState` as well, never takes the
+  same-method fallback, and a retry's recorded answer is never handed to any
+  other request. Every fingerprint without those fields is byte-identical to
+  0.4.0, so nothing else matches differently.
+
+  *What you see:* a replay that passed under 0.4.0 can now miss, with a
+  diagnosis naming the path that diverged, for example
+  `/inputResponses/confirm/action (recorded "accept", got "decline")`.
+
+  *What to do:* the miss is the replay telling you the client answered
+  differently from the recording. Re-record that flow, or record one cassette
+  per answer you test.
+
+### Fixed
+
+- **`replay --on-miss passthrough` relays `input_required` to the client.** It
+  used to treat the answer as a failed forward and send `-32603`, so an MRTR
+  flow could not pass through at all. Both front-ends, stdio and HTTP, now
+  relay it, and the retry that follows is forwarded and appended like any
+  other miss.
+- **`verify` completes an MRTR exchange instead of reporting it MISSING.** The
+  recorded retry is re-fired with its recorded `inputResponses` and the live
+  server's own `requestState`, or none when the live server minted none. A
+  `requestState` value is opaque by contract and is never reported as drift;
+  whether one was sent still is.
+
+### Added
+
+- `MiniClient.relay()`: send one request and get back whatever answered it,
+  `input_required` included. `request()` keeps throwing `InputRequiredError`
+  for callers with no input to give.
+
 ## [0.4.0] - 2026-08-16
 
 Two things this tool claimed to do, and did not. `snapshot --check` stayed

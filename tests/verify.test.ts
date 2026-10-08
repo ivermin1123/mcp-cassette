@@ -150,6 +150,17 @@ describe("classifyPair", () => {
     expect(classifyPair(recorded, live).status).toBe("CHANGED");
     expect(classifyPair(recorded, live, { ignore: ["/count"] }).status).toBe("MATCH");
   });
+
+  it("never compares an input_required requestState's value, only whether one was sent", () => {
+    const asked = (state?: string) =>
+      res(1, { resultType: "input_required", inputRequests: {}, ...(state !== undefined ? { requestState: state } : {}) });
+    expect(classifyPair(asked("minted-then"), asked("minted-now")).status).toBe("MATCH");
+    for (const [recorded, live] of [[asked("s"), asked()], [asked(), asked("s")]]) {
+      const { status, changes } = classifyPair(recorded!, live!);
+      expect(status).toBe("CHANGED");
+      expect(changes.map((c) => c.path)).toEqual(["/requestState"]);
+    }
+  });
 });
 
 describe("isAllowedChange", () => {
