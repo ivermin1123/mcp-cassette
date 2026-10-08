@@ -1,6 +1,6 @@
 {
   "name": "mcp-cassette",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Record a real MCP session once, replay it forever. VCR-style record/replay, contract snapshots, and safety checks for Model Context Protocol servers.",
   "keywords": [
     "mcp",
@@ -11,7 +11,9 @@
     "replay",
     "cassette",
     "contract-testing",
-    "ci"
+    "ci",
+    "agent",
+    "vcr"
   ],
   "license": "Apache-2.0",
   "author": "Hoang Le <ivermin1123@gmail.com>",

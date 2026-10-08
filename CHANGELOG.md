@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
-## [Unreleased]
+## [0.5.0] - 2026-10-08
 
 Protocol revision 2026-07-28 moved sampling, elicitation and roots into
 Multi Round-Trip Requests: the server answers `input_required`, and the client
@@ -85,6 +85,12 @@ recording. Matching is now exact unless you ask for the tolerance by name.
 - `matchFallback()`, the same-method borrowing that `matchResponse()` no longer
   does, exported for callers who want it; and `ReplayServer.borrowed()`, the
   count of answers `--on-miss warn` borrowed over HTTP.
+
+### Changed
+
+- npm keywords gain `agent` and `vcr`, the two words the registry search was
+  missing. Deferred in `docs/research/03-discovery-language.md` until a release
+  was cut for a real reason; this is that release.
 
 ## [0.4.1] - 2026-10-08
 
@@ -400,6 +406,7 @@ Packaging fixes for the first release.
 First public release: stdio record/replay, contract snapshots, safety checks,
 secrets redaction, and the `verify` command.
 
+[0.5.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.5.0
 [0.4.1]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.4.0
 [0.3.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.3.0
