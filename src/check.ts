@@ -51,8 +51,9 @@ export interface CheckReport {
   resourceCount?: number;
   promptCount?: number;
   findings: CheckFinding[];
-  /** The gate `ok` was decided against, so a verdict can be read without the flag. */
+  /** The gates `ok` was decided against, so a verdict can be read without the flags. */
   failOn: CheckFailOn;
+  lintFailOn: LintFailOn;
   ok: boolean;
 }
 
@@ -67,21 +68,48 @@ const TOOL_NAME_RE = /^[a-zA-Z0-9_.-]{1,128}$/;
  * to pass a mute flag, which is the one outcome worse than not reporting them.
  * `warn` is there for anyone who wants the stricter gate deliberately, and it
  * reads the same way as `snapshot --fail-on`.
- *
- * `never` reports every finding and gates on none of them. It exists because
- * the alternative a consumer reaches for when a new rule lands mid-sprint is
- * dropping the lint altogether, which removes the report as well as the gate.
- * It cannot hide a server that could not be inspected: a failed handshake or an
- * unreadable listing throws before a report exists, and the caller still exits
- * non-zero on it.
  */
-export type CheckFailOn = "error" | "warn" | "never";
+export type CheckFailOn = "error" | "warn";
+
+/**
+ * The same, for the `CAS-L*` safety lint alone, which is the only part of a
+ * check that is an opinion about text an attacker wrote.
+ *
+ * It has a `never` the structural gate does not, because the two failures are
+ * not the same kind of thing. A new lint rule firing on an unchanged server is
+ * an adoption problem, and the move it used to force (dropping the lint from
+ * the gate) threw away the report along with the gate. `CAS-C*` is the other
+ * kind: a duplicate tool name or an `inputSchema` that is not valid JSON Schema
+ * is the server being broken, not the linter having an opinion, so `never` does
+ * not reach it and such a run still fails.
+ *
+ * It defaults to whatever `--fail-on` is set to, so the stricter gate still
+ * covers the lint: `--fail-on warn` gates lint warnings exactly as it did
+ * before this level existed.
+ */
+export type LintFailOn = CheckFailOn | "never";
+
+/**
+ * Which gate a finding answers to. The `CAS-L` prefix is load-bearing rather
+ * than cosmetic, and `tests/lint-foundation.test.ts` holds every rule id to it
+ * so a new rule cannot quietly land outside the lint gate it belongs to.
+ */
+function isLintFinding(finding: CheckFinding): boolean {
+  return finding.code.startsWith("CAS-L");
+}
+
+function fails(finding: CheckFinding, failOn: CheckFailOn, lintFailOn: LintFailOn): boolean {
+  const gate = isLintFinding(finding) ? lintFailOn : failOn;
+  if (gate === "never") return false;
+  return gate === "warn" ? finding.level !== "info" : finding.level === "error";
+}
 
 export async function runCheck(
   target: Target,
   targetLabel: string,
   era: EraOption = "auto",
-  failOn: CheckFailOn = "error"
+  failOn: CheckFailOn = "error",
+  lintFailOn: LintFailOn = failOn
 ): Promise<CheckReport> {
   const findings: CheckFinding[] = [];
   const { client, init } = await MiniClient.connect(target, undefined, era);
@@ -190,8 +218,7 @@ export async function runCheck(
       }
     }
 
-    const fails = failOn === "never" ? [] : failOn === "warn" ? ["error", "warn"] : ["error"];
-    const ok = !findings.some((f) => fails.includes(f.level));
+    const ok = !findings.some((f) => fails(f, failOn, lintFailOn));
     return {
       target: targetLabel,
       server: init.serverInfo,
@@ -201,6 +228,7 @@ export async function runCheck(
       promptCount,
       findings,
       failOn,
+      lintFailOn,
       ok,
     };
   } finally {
@@ -235,7 +263,9 @@ export function printReport(report: CheckReport): void {
   line();
   const errors = report.findings.filter((f) => f.level === "error").length;
   const warns = report.findings.filter((f) => f.level === "warn").length;
-  line(
-    `result: ${report.ok ? "PASS" : "FAIL"} (${errors} error(s), ${warns} warning(s), gate: ${report.failOn})`
-  );
+  const gate =
+    report.lintFailOn === report.failOn
+      ? `gate: ${report.failOn}`
+      : `gate: ${report.failOn}, lint: ${report.lintFailOn}`;
+  line(`result: ${report.ok ? "PASS" : "FAIL"} (${errors} error(s), ${warns} warning(s), ${gate})`);
 }

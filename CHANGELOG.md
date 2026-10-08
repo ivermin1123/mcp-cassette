@@ -10,33 +10,44 @@ below.
 
 ### Added
 
-- **`lint-fail-on` input on the action, and `check --fail-on never`.** The
-  safety lint can now report without gating. `lint-fail-on: error` is the
-  default and is exactly today's behaviour; `warn` also gates the warn tier;
-  `never` runs the check, writes every finding to the job log, the pull-request
-  comment and `check --format sarif`, and does not fail the job over them. It is
-  not a way to green an unreachable server: a failed handshake or an unreadable
-  listing still exits 2 and still fails the job at every level, because a run
-  that produced no report has nothing to waive. The comment names the gate it
-  passed under. An unknown value is rejected by the action before the CLI runs,
-  the way `mode`, `fail-on` and `version` already are.
+- **`lint-fail-on` input on the action, and `check --lint-fail-on`.** The
+  safety lint can now report without gating. `error` is the default and is
+  exactly today's behaviour; `warn` is the stricter setting, gating the warn
+  tier as well; `never` runs the check, writes every finding to the job log and
+  the pull-request comment, and does not fail the job over them. The comment
+  names the gate it passed under.
+
+  `never` reaches the `CAS-L` description lint and nothing else. A structural
+  `CAS-C` error (a duplicate tool name, an `inputSchema` that is not valid JSON
+  Schema) still fails the job, because that is the server being broken rather
+  than the linter having an opinion about text an attacker wrote. So does a
+  server that cannot be inspected at all, which still exits 2 at every level: a
+  run that produced no report has nothing to waive. An unknown value is rejected
+  by the action before the CLI runs, the way `mode`, `fail-on` and `version`
+  already are.
+
+  On the CLI the level is its own flag, `check --lint-fail-on <level>`, and it
+  defaults to whatever `--fail-on` is set to. `check --fail-on warn` therefore
+  still gates lint warnings exactly as it did before, and `--fail-on` itself is
+  unchanged: it has no `never`.
 
   This is the half a consumer reaches for after a rule has already surprised
   them. The other half is release discipline, now written into
   [CONTRIBUTING.md](CONTRIBUTING.md): a rule that is new to a release ships at
-  `warn`, and may only be promoted to `error` in a later minor, so an upgrade
-  that adds rules cannot turn an unchanged server red on the day it lands.
+  `warn`, and may graduate to `error` only in a later minor and no sooner than
+  four weeks after the release that introduced it.
 
 ### Changed
 
-- **`check` names its gate in the report.** The text report's result line now
-  ends `, gate: error` (or `warn`, or `never`), and `--format json` carries the
-  same value as `failOn`. Without it, `result: PASS` over six error-level
-  findings reads as a bug rather than as the level that was asked for.
+- **`check` names its gates in the report.** The text report's result line now
+  ends `, gate: error`, and `, gate: error, lint: never` when the two differ.
+  `--format json` carries both as `failOn` and `lintFailOn`. Without it,
+  `result: PASS` over five error-level findings reads as a bug rather than as
+  the level that was asked for.
 
-  `failOn` is a required field of the exported `CheckReport` interface, so the
-  rare library caller who builds one by hand (rather than taking the one
-  `runCheck` returns) has one property to add.
+  Both are required fields of the exported `CheckReport` interface, so the rare
+  library caller who builds one by hand (rather than taking the one `runCheck`
+  returns) has two properties to add.
 
 ## [0.5.0] - 2026-10-08
 

@@ -12,21 +12,27 @@ picking the obvious implementation would be the mistake.
 
 **Raised** 2026-08-16, out of the 0.3.0 release notes. **Decided** 2026-10-08:
 a `lint-fail-on: error|warn|never` input, spelled `never` rather than `none`,
-implemented as a third level of `check --fail-on` rather than as exit-code
-handling in the action, plus a release rule that new lint rules ship at `warn`
-for one minor before they may become `error`. Kept here for the measurement and
-for the mechanism not taken.
+carried by a new `check --lint-fail-on` level rather than by the existing
+`--fail-on`, plus a release rule that new lint rules ship at `warn` and may not
+graduate to `error` for one minor release and four weeks. Kept here for the
+measurement and for the mechanisms not taken.
 
-**The decision, and the two questions it had to answer.**
+**The decision, and the three questions it had to answer.**
 
 *Does it overlap `mode: snapshot`?* No, and the overlap was the reason to build
 it. `mode: snapshot` removes the report along with the gate; `never` keeps the
-check running, the findings in the log, the pull-request comment, and
-`check --format sarif`. The only thing it waives is the job result. The comment
-names the gate it passed under, so a green verdict over a log full of findings
-is accountable rather than confusing. `never` is also not a mute switch for a
-broken server: `check` exits 2 when the handshake or a listing fails, at every
-level, because a run that produced no report has nothing to waive.
+check running, the findings in the log, and the pull-request comment, which
+names the gate it passed under so a green verdict over a log full of findings is
+accountable rather than confusing.
+
+*What exactly may it waive?* The `CAS-L` description lint, and nothing else.
+That is the only part of a check that is an opinion about text an attacker
+wrote. A `CAS-C` finding is the other kind: a duplicate tool name or an
+`inputSchema` that is not valid JSON Schema is the server being broken, so it
+still fails at `never`. So does a server that could not be inspected at all,
+which exits 2 at every level, because a run that produced no report has nothing
+to waive. Without that boundary an input named for the lint would be a mute
+switch for the health check, which is the one thing it must not become.
 
 *Is this release discipline's job instead?* It is both, and the discipline is
 the upstream half. The input alone would have left every rule-adding release an
@@ -34,16 +40,17 @@ ultimatum that consumers answer under deadline pressure. The rule written into
 [CONTRIBUTING.md](CONTRIBUTING.md) is what stops the cliff from forming; the
 input is what the consumer who already hit one reaches for.
 
-**The mechanism, and why the other one was not taken.** The level is passed to
-the CLI (`check --fail-on "$LINT_FAIL_ON"`) rather than applied to the exit code
-inside `action.yml`. The action had to pass a level through regardless, because
-`warn` has no other spelling: the lint step ran `$CLI check` bare, fixed at
-error. Once the flag is being passed, `never` costs one empty array in
-`src/check.ts`. Swallowing exit 1 in the action's gate step instead would have
-cost about as much shell, and bought two problems: it cannot tell a lint finding
-from any future non-lint exit 1, and it would give the action a level the CLI
-cannot express, so `mcp-cassette check` run locally could no longer reproduce
-what CI did.
+**The mechanisms not taken.**
+
+- *Swallowing exit 1 in the action's gate step, leaving the CLI alone.* It
+  cannot tell a waived lint finding from a structural error or from any future
+  non-lint exit 1, which is exactly the boundary above. It would also give the
+  action a level the CLI cannot express, so `mcp-cassette check` run locally
+  could no longer reproduce what CI did.
+- *A third level on the existing `check --fail-on`.* Rejected once the boundary
+  was clear: `--fail-on` spans every finding, so a `never` on it would waive
+  `CAS-C` too. `--lint-fail-on` is its own flag, defaulting to `--fail-on` so
+  that `--fail-on warn` keeps gating lint warnings exactly as it did before.
 
 **The original entry, kept because the measurement is what argued for this:**
 

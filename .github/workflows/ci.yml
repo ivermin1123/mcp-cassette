@@ -149,15 +149,17 @@ jobs:
             exit 1
           fi
 
-      # The two ends of `lint-fail-on`, against the same poisoned fixture, so
-      # the pair is a difference of one input and nothing else. TINY_EVIL serves
-      # a tool with error-level lint findings; `never` must report them and stay
-      # green, and the default must go red on them. Proving only the green half
-      # would pass just as well if the fixture had stopped being poisoned.
+      # The three cases that define `lint-fail-on`, each one input apart from
+      # its neighbour. TINY_POISONED serves a tool with error-level CAS-L
+      # findings on a server that is otherwise sound; TINY_EVIL adds a tool
+      # whose inputSchema is not valid JSON Schema. Proving only the green case
+      # would pass just as well if the fixture had stopped being poisoned, and
+      # proving only the two lint cases would not catch a `never` that had grown
+      # into a mute switch for the health check.
       - name: Keep a poisoned server reporting without gating on it
         uses: ./
         with:
-          server-command: env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs
+          server-command: env TINY_POISONED=1 node tests/fixtures/tiny-server.mjs
           mode: check
           version: local
           lint-fail-on: never
@@ -168,19 +170,38 @@ jobs:
         continue-on-error: true
         uses: ./
         with:
-          server-command: env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs
+          server-command: env TINY_POISONED=1 node tests/fixtures/tiny-server.mjs
           mode: check
           version: local
           comment: 'false'
 
-      - name: Assert the lint gate fired
+      # `never` covers the description lint, not the server being broken.
+      - name: Refuse to waive a structural error at never (expected to fail)
+        id: structural-gate
+        continue-on-error: true
+        uses: ./
+        with:
+          server-command: env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs
+          mode: check
+          version: local
+          lint-fail-on: never
+          comment: 'false'
+
+      - name: Assert both gates fired
         env:
-          OUTCOME: ${{ steps.lint-gate.outcome }}
+          LINT_OUTCOME: ${{ steps.lint-gate.outcome }}
+          STRUCTURAL_OUTCOME: ${{ steps.structural-gate.outcome }}
         run: |
-          if [ "$OUTCOME" != "failure" ]; then
-            echo "::error::the safety lint passed a poisoned server (outcome: $OUTCOME)"
-            exit 1
+          FAILED=0
+          if [ "$LINT_OUTCOME" != "failure" ]; then
+            echo "::error::the safety lint passed a poisoned server (outcome: $LINT_OUTCOME)"
+            FAILED=1
           fi
+          if [ "$STRUCTURAL_OUTCOME" != "failure" ]; then
+            echo "::error::lint-fail-on never waived an invalid inputSchema (outcome: $STRUCTURAL_OUTCOME)"
+            FAILED=1
+          fi
+          exit "$FAILED"
 
   # Half of `check --format sarif`: the half that can afford to run on every
   # commit. The suite already validates the document against the OASIS schema.

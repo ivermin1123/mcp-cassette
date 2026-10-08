@@ -32,11 +32,13 @@ inputs:
     default: breaking
   lint-fail-on:
     description: >-
-      Lowest safety-lint finding level that fails the job: "error", "warn" to
-      also gate on the warn tier, or "never" to keep the lint reporting without
-      gating on it. "never" still runs the check, still writes its output to the
-      log and the pull-request comment, and still fails the job when the server
-      cannot be inspected at all.
+      Lowest CAS-L safety-lint finding level that fails the job: "error", "warn"
+      to also gate on the warn tier (the stricter setting), or "never" to keep
+      the lint reporting without gating on it. "never" covers the description
+      lint only: the check still runs, its findings still reach the log and the
+      pull-request comment, and the job still fails on a structural CAS-C error
+      (a duplicate tool name, an invalid inputSchema) or on a server that cannot
+      be inspected at all.
     required: false
     default: error
   comment:
@@ -142,10 +144,11 @@ runs:
         LINT_FAIL_ON: ${{ inputs.lint-fail-on }}
       run: |
         set -uo pipefail
-        # The gate level goes to the CLI rather than being applied to the exit
-        # code here: `never` has to keep exit 2 meaning "the server could not be
-        # inspected", and only `check` itself knows which of the two it hit.
-        $CLI check --fail-on "$LINT_FAIL_ON" --stdio "$SERVER_COMMAND" 2>&1 \
+        # The gate goes to the CLI rather than being applied to the exit code
+        # here. Only `check` can tell a waived CAS-L finding from the two things
+        # `never` must never hide: a structural CAS-C error, and a server that
+        # could not be inspected at all. From out here they are all exit 1 or 2.
+        $CLI check --lint-fail-on "$LINT_FAIL_ON" --stdio "$SERVER_COMMAND" 2>&1 \
           | tee "$RUNNER_TEMP/mcp-cassette-check.log"
         echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 

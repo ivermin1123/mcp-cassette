@@ -46,6 +46,7 @@ const report = (findings: CheckReport["findings"], ok = false): CheckReport => (
   toolCount: 2,
   findings,
   failOn: "error",
+  lintFailOn: "error",
   ok,
 });
 

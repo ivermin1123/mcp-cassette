@@ -64,10 +64,22 @@ The `CAS-C*` ids are under the same law but have no freeze gate; they live in
 
 ## A new rule ships at `warn` before it may gate
 
-**A rule that is new to a release lands at `warn`, and may only be promoted to
-`error` in a later minor.** One minor at `warn` is the minimum; there is no
-maximum, and a rule that keeps producing findings people disagree with has not
-earned the promotion yet.
+**A rule that is new to a release lands at `warn`, and so does an existing rule
+pointed at a surface it did not scan before.** It may graduate to `error` only
+when both of these are true:
+
+- it has been through **a later minor release**, and
+- **four weeks** have passed since the release that introduced it.
+
+Both, not either. Minors in this project can ship days apart, so "one minor" on
+its own is not a grace period: 0.3.0 to 0.4.0 would have satisfied it without
+giving anyone a working week to read the findings. The calendar floor is what
+makes the promise worth anything, and the minor is what makes it visible in a
+changelog rather than arriving in a patch.
+
+The graduation is a breaking change: it can turn a consumer's passing gate red
+on an unchanged server, so it gets its own bullet under `### BREAKING` in
+[CHANGELOG.md](CHANGELOG.md), naming the release the rule first shipped in.
 
 The reason is arithmetic, not caution. An `error`-level rule added in a minor
 turns an unchanged server red on the day a consumer bumps the tag, so a release
@@ -77,20 +89,19 @@ swallowing the whole rule set or dropping the lint from the gate entirely.
 
 Two things carry this now, and they are meant to be used together:
 
-- **Here, on the way in.** A pull request that adds a rule at `error` is asked
-  to land it at `warn` instead and say in [CHANGELOG.md](CHANGELOG.md) which
-  release it became visible in. The promotion is then its own entry in a later
-  minor, which is also where it belongs under `### BREAKING`: promoting a rule
-  can turn a consumer's passing gate red, which is the definition this
-  repository uses.
+- **Here, on the way in.** A pull request that adds a rule at `error`, or widens
+  an existing rule onto a new surface at `error`, is asked to land it at `warn`
+  instead and say in the changelog which release made it visible.
 - **There, on the way out.** The action's `lint-fail-on` input and
-  `check --fail-on` let a consumer keep the lint reporting while they work
+  `check --lint-fail-on` let a consumer keep the lint reporting while they work
   through findings, so a rule that does graduate is adoptable rather than an
   ultimatum.
 
 The discipline is upstream of the input, not replaced by it. `lint-fail-on`
 exists for the consumer who was surprised; shipping at `warn` is how we stop
-surprising them.
+surprising them. Note which one of them the input cannot help with: `never`
+waives `CAS-L` findings only, so a rule that belongs in the structural `CAS-C`
+set is not covered by any of this and should not be written as a lint rule.
 
 This does not loosen the fixture-double law above. An `intent`-class rule is
 pinned at `warn` permanently by `tests/lint-rules.test.ts` and never graduates;

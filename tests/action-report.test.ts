@@ -23,9 +23,11 @@ afterAll(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-const CHECK_LOG = ["[FAIL] CAS-L001 get_weather: instruction-override phrasing", "", "result: PASS"].join(
-  "\n"
-);
+const CHECK_LOG = [
+  "[FAIL] CAS-L001 get_weather: instruction-override phrasing",
+  "",
+  "result: PASS (1 error(s), 0 warning(s), gate: error, lint: never)",
+].join("\n");
 
 /** Renders one report, in its own RUNNER_TEMP, and returns the body. */
 function renderReport(env: Record<string, string>): string {
