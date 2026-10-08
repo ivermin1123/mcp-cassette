@@ -50,7 +50,7 @@ rewrite("action.yml", (text) => {
     console.error("sync-version-pins: action.yml has no `version` input with a default");
     process.exit(1);
   }
-  // A function, not "$1" + version: "$1" followed by "0.5.0" reads as "$10".
+  // A function, so the result never depends on how "$1" followed by a digit parses.
   return text.replace(block, (_, head) => head + version);
 });
 

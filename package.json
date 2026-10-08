@@ -55,7 +55,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "sync-version": "node scripts/sync-version-pins.mjs",
-    "version": "node scripts/sync-version-pins.mjs && git add action.yml docs",
+    "version": "node scripts/sync-version-pins.mjs && git add -u action.yml docs",
     "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
