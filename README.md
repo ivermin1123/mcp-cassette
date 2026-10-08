@@ -262,6 +262,60 @@ A process spawned by the client is a process the adapter does not own, so misses
 
 `vitest` is an optional peer dependency, so it stays out of the dependency graph of anyone not using the adapter, and the CLI's three runtime dependencies are unchanged.
 
+## Testing with jest
+
+`mcp-cassette/jest` is the same adapter for jest: the same `useCassette`, the same options, the same two error classes. Everything the section above says about misses, the per-test drain and the HTTP/stdio split is true here too, so this section covers only what differs, which is the setup.
+
+The package is ESM, so jest needs its native ESM mode. A project still in CommonJS mode never reaches the adapter: jest fails every suite with `Must use import to load ES Module: <your spec>`. Switching is two settings and one flag, and nothing else:
+
+```js
+// jest.config.mjs
+export default {
+  testEnvironment: "node",
+  // Nothing to compile: the specs are plain ESM. Leave this key out and jest's
+  // default transform hands them to babel-jest, which applies whatever babel
+  // config the project has. An empty transform keeps that away from them.
+  transform: {},
+};
+```
+
+```json
+{
+  "scripts": {
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest"
+  }
+}
+```
+
+Your specs are then plain ESM, importing jest's own globals so the adapter and the spec agree on which hooks they are registering:
+
+```js
+import { describe, expect, it } from "@jest/globals";
+import { useCassette } from "mcp-cassette/jest";
+
+const call = (id, name, args) =>
+  ({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+const post = (url, body) =>
+  fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+describe("recorded call", () => {
+  const tape = useCassette("tests/cassettes/weather.http.jsonl");
+
+  it("is answered from the cassette", async () => {
+    const res = await post(tape.url, call(1, "echo", { m: "recorded" }));
+    expect(await res.json()).toMatchObject({ result: { content: [{ text: "recorded" }] } });
+  });
+});
+```
+
+That config, that flag and that spec are the ones under `tests/fixtures/jest/`, which this package runs as a real jest process on every test run. If the setup above ever stops working, the suite says so.
+
+TypeScript specs need a transform on top, which is a choice about your toolchain rather than about this adapter, so the setup above is the part that is proven here.
+
+**One Node release cannot run jest in ESM mode at all.** jest's ESM support is built on `vm.SourceTextModule`, and Node 24.6.0 regressed it: any ESM graph where two modules import the same third one fails to load with `module is already linked`. Every jest ESM suite hits it, not only ones using this adapter. Node 24.5.0 and 24.7.0 are both fine, as are Node 20 and 22, so the fix is to move off 24.6.0.
+
+`jest` and `@jest/globals` are optional peer dependencies, like `vitest`, so they stay out of the dependency graph of anyone not using the adapter, and the CLI's three runtime dependencies are unchanged.
+
 ## Commands
 
 | Command | What it does |
@@ -552,7 +606,7 @@ The hash is not a security boundary. It is an unsalted, truncated SHA-256 of the
 
 ## Roadmap
 
-Configurable redaction rules, a `jest` adapter, a GitHub Action, smarter replay matching (custom matchers, volatile-field config), server-to-client requests (legacy sampling, elicitation and roots, which replay records but does not originate), the tasks extension, scenario `state`/`seq`, `Last-Event-ID` resumability, and contributed scenarios for the official conformance suite. Issues and PRs welcome.
+Configurable redaction rules, a GitHub Action, smarter replay matching (custom matchers, volatile-field config), server-to-client requests (legacy sampling, elicitation and roots, which replay records but does not originate), the tasks extension, scenario `state`/`seq`, `Last-Event-ID` resumability, and contributed scenarios for the official conformance suite. Issues and PRs welcome.
 
 A `pytest` adapter was on this list and is cancelled. A second, unrelated `mcp-cassette` has been on PyPI since 2026-07-25 and already ships a pytest plugin, so a `pytest-mcp-cassette` published beside it would read as that tool's adapter no matter what its README said. The measurement and the decision are in [`docs/research/02-name-collision.md`](docs/research/02-name-collision.md).
 

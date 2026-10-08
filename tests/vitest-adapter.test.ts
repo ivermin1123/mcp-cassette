@@ -36,6 +36,7 @@ function runFixtureProject(): VitestJson {
     stdout = execFileSync("npx", ["vitest", "run", "--root", root, "--reporter=json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: 120_000,
     });
   } catch (err) {
     // Two of the fixture's tests fail on purpose, so vitest exits 1 and
@@ -129,13 +130,15 @@ describe("stdio cassettes hand back a command instead of a server", () => {
 });
 
 describe("the package surface", () => {
-  it("exports exactly the three public paths, and nothing into the build output", () => {
+  it("exports exactly the four public paths, and nothing into the build output", () => {
     const manifest = JSON.parse(
       execFileSync("node", ["-p", "JSON.stringify(require('./package.json'))"], { encoding: "utf8" })
     ) as { exports: Record<string, unknown>; peerDependenciesMeta?: Record<string, { optional?: boolean }> };
-    expect(Object.keys(manifest.exports).sort()).toEqual([".", "./package.json", "./vitest"]);
+    expect(Object.keys(manifest.exports).sort()).toEqual([".", "./jest", "./package.json", "./vitest"]);
     // An escape hatch here would turn the build layout into a public API.
     expect(Object.keys(manifest.exports).some((k) => k.includes("*"))).toBe(false);
     expect(manifest.peerDependenciesMeta?.vitest?.optional).toBe(true);
+    expect(manifest.peerDependenciesMeta?.jest?.optional).toBe(true);
+    expect(manifest.peerDependenciesMeta?.["@jest/globals"]?.optional).toBe(true);
   });
 });

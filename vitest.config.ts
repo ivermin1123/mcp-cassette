@@ -10,13 +10,16 @@ export default defineConfig({
     // The vitest-adapter fixture is a whole vitest project of its own, two of
     // whose tests fail on purpose. It is run, and its verdict asserted, by
     // tests/vitest-adapter.test.ts. Collecting it here would import those
-    // failures straight into this run.
+    // failures straight into this run. The jest fixture is the same story one
+    // runner over: its specs are plain .js, which vitest would happily collect,
+    // and they import @jest/globals, which only resolves inside a jest run.
     exclude: [
       ...configDefaults.exclude,
       'worktrees/**',
       '_to_delete/**',
       'plans/**',
       'tests/fixtures/vitest-adapter/**',
+      'tests/fixtures/jest/**',
     ],
   },
 });
