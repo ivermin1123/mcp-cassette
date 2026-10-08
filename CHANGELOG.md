@@ -6,7 +6,21 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
-## [Unreleased]
+## [0.7.0] - 2026-10-09
+
+Replay now serves the tasks extension: a task's polls come back in recorded
+order, a finished task keeps answering with its final state, and a recording
+that stopped mid-task says which task and where, over stdio and over HTTP
+whichever shape the server answered in. The safety lint reads every
+model-facing text a server publishes, prompts, resources and resource
+templates included, at `warn` for this release. The action can write its
+findings as SARIF for code scanning, and posts its results comment when a gate
+fails, which it did not before. A jest adapter joins the vitest one.
+
+Several changes are BREAKING for some callers, listed below, so this is a
+minor. Workflows using the action at its defaults are not affected: the new
+lint findings are `warn`, and the default `lint-fail-on: error` does not gate
+on them, while `lint-fail-on: warn` does.
 
 ### BREAKING
 
@@ -774,6 +788,7 @@ Packaging fixes for the first release.
 First public release: stdio record/replay, contract snapshots, safety checks,
 secrets redaction, and the `verify` command.
 
+[0.7.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.7.0
 [0.6.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.6.0
 [0.5.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.5.0
 [0.4.1]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.4.1

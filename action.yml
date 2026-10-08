@@ -67,7 +67,7 @@ inputs:
       the CLI built in this action's own checkout, which is how this repository
       dogfoods the action against itself; it is not useful to consumers.
     required: false
-    default: 0.6.0
+    default: 0.7.0
   github-token:
     description: >-
       Token used to write the pull-request comment. Needs `pull-requests: write`.
