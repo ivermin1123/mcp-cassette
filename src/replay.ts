@@ -70,6 +70,64 @@ export const LISTEN_METHOD = "subscriptions/listen";
 export const ACKNOWLEDGED_METHOD = "notifications/subscriptions/acknowledged";
 export const SUBSCRIPTION_ID_KEY = "io.modelcontextprotocol/subscriptionId";
 
+/**
+ * The `io.modelcontextprotocol/tasks` extension, and the one rule replay needs
+ * from it.
+ *
+ * A server that will take a while answers with a task handle instead of the
+ * result, and the client polls `tasks/get` until the status is terminal. Every
+ * poll for one task carries the same params, so they share a fingerprint and
+ * come out of one pool in recorded order: the client sees the recorded state
+ * sequence whatever interval it polls at. What the pool cannot answer is a poll
+ * after its last recording, and that is where the terminal states matter. A
+ * task that finished stays finished, so its last answer is served again; a
+ * recording that ended while the task was still running has no later state to
+ * give, and says so.
+ */
+export const TASK_GET_METHOD = "tasks/get";
+export const TASK_NOTIFICATION_METHOD = "notifications/tasks";
+/** `completed`, `failed` and `cancelled`: once reached, the task's state does not change. */
+export const TERMINAL_TASK_STATES = new Set(["completed", "failed", "cancelled"]);
+
+/** The task a `tasks/get` asks about, when its params name one. */
+function taskIdOf(req: { params?: unknown }): string | undefined {
+  const id = (req.params as { taskId?: unknown } | undefined)?.taskId;
+  return typeof id === "string" ? id : undefined;
+}
+
+/** The status a task answer carries, when it carries one replay can read. */
+function taskStatusOf(res: JsonRpcResponse): string | undefined {
+  const status = (res.result as { status?: unknown } | undefined)?.status;
+  return typeof status === "string" ? status : undefined;
+}
+
+/**
+ * Where a recording left one task, read off its `tasks/get` pool: the request
+ * that asked, the last answer the pool holds, and how many polls it holds.
+ *
+ * Undefined when the request names no task or the last answer carries no status
+ * replay can read. Neither says anything about whether the task finished, so
+ * neither earns the terminal rule, and the pool stays an ordinary one.
+ *
+ * The HTTP front-end reads this too, off the last stream recorded for the same
+ * fingerprint: a server that answered the poll by streaming (which is what an
+ * SDK server does unless it was configured otherwise) left the same task in the
+ * same place, and the rule is about the task rather than about the shape its
+ * answer arrived in.
+ */
+export function readTaskPolls(
+  request: JsonRpcRequest,
+  last: JsonRpcResponse,
+  recordedPolls: number
+): RecordedTaskPolls | undefined {
+  if (request.method !== TASK_GET_METHOD) return undefined;
+  const taskId = taskIdOf(request);
+  if (taskId === undefined) return undefined;
+  const status = taskStatusOf(last);
+  if (status === undefined) return undefined;
+  return { taskId, last, status, terminal: TERMINAL_TASK_STATES.has(status), recordedPolls };
+}
+
 // Fingerprint components are joined with NUL: it can never appear in a method
 // name or in JSON text, so no crafted tool name or argument can collide.
 const SEP = "\u0000";
@@ -125,6 +183,17 @@ export interface RecordedListen {
   acknowledgment?: JsonRpcNotification;
 }
 
+/** Where the recording left one task, and how many polls it took to get there. */
+export interface RecordedTaskPolls {
+  taskId: string;
+  /** The last answer the recording holds for this task. */
+  last: JsonRpcResponse;
+  /** Its status, and whether the extension calls that status terminal. */
+  status: string;
+  terminal: boolean;
+  recordedPolls: number;
+}
+
 /**
  * The frames the recorded server sent on its own, each tied to the point in the
  * session where replay may send it.
@@ -159,6 +228,8 @@ export interface ReplayIndex {
   recordedCountByFingerprint: Map<string, number>;
   /** Recorded `subscriptions/listen` requests, pooled by fingerprint and consumed in order. */
   listens: Map<string, RecordedListen[]>;
+  /** The last recorded answer to each `tasks/get` fingerprint: what a poll past the pool reads. */
+  taskPolls: Map<string, RecordedTaskPolls>;
   /** How many subscriptions each listen fingerprint had before any were opened. */
   recordedListenCountByFingerprint: Map<string, number>;
   /** Recorded subscription id -> the id the client's own listen request carries. */
@@ -430,6 +501,22 @@ export function buildReplayIndex(cassette: Cassette): ReplayIndex {
 
   const recordedCountByFingerprint = new Map<string, number>();
   for (const [fp, pool] of byFingerprint) recordedCountByFingerprint.set(fp, pool.length);
+
+  // Where the recording left each task. Built from the whole pool rather than
+  // consumed with it, so a poll past the end can still read the final state.
+  const taskPolls = new Map<string, RecordedTaskPolls>();
+  for (const request of recordedRequests) {
+    // Guarded before fingerprinting rather than inside `readTaskPolls`: every
+    // recorded request would otherwise pay for a stable stringify of its params
+    // that only a poll can use.
+    if (request.method !== TASK_GET_METHOD) continue;
+    const fp = fingerprint(request);
+    const pool = byFingerprint.get(fp) ?? [];
+    const last = pool[pool.length - 1];
+    if (!last) continue;
+    const polls = readTaskPolls(request, last, pool.length);
+    if (polls) taskPolls.set(fp, polls);
+  }
   const recordedListenCountByFingerprint = new Map<string, number>();
   for (const [fp, pool] of listens) recordedListenCountByFingerprint.set(fp, pool.length);
 
@@ -440,6 +527,7 @@ export function buildReplayIndex(cassette: Cassette): ReplayIndex {
     unansweredRequests,
     recordedCountByFingerprint,
     listens,
+    taskPolls,
     recordedListenCountByFingerprint,
     liveSubscriptions: new Map(),
     unopenedSubscriptionFrames: 0,
@@ -557,6 +645,12 @@ export function matchResponse(index: ReplayIndex, req: JsonRpcRequest): JsonRpcR
     consumeFromMethodPool(index, req.method, res);
     return res;
   }
+  // A finished task is still finished. The client may poll once more, or come
+  // back with a task id it persisted across a restart, and the recording's
+  // answer is as true then as it was on the last recorded poll. It is served
+  // without being consumed, because there is nothing left to consume.
+  const task = index.taskPolls.get(fp);
+  if (task?.terminal) return task.last;
   return null;
 }
 
@@ -570,6 +664,10 @@ export function matchFallback(index: ReplayIndex, req: JsonRpcRequest): JsonRpcR
   // A retry that matched nothing exactly answered differently from the
   // recording; any recorded answer would claim the recorded input was given.
   if (isMrtrRetry(req)) return null;
+  // The same refusal for the same reason: every `tasks/get` answer carries the
+  // id and state of one task. Lending it to a poll about another task would
+  // tell that client its own task reached a state it never reached.
+  if (req.method === TASK_GET_METHOD) return null;
   const fallback = index.byMethod.get(req.method);
   if (fallback && fallback.length > 0) {
     const res = fallback.shift()!;
@@ -620,6 +718,8 @@ export type MissReason =
   | { kind: "stream-exhausted"; fingerprint: string; recordedCount: number }
   /** As above, for a `subscriptions/listen` whose recorded subscriptions are all open already. */
   | { kind: "subscription-exhausted"; fingerprint: string; recordedCount: number }
+  /** A `tasks/get` past the last recorded poll, on a task the recording never saw finish. */
+  | { kind: "task-not-terminal"; taskId: string; status: string; recordedPolls: number }
   /** Recorded, but the recording holds no response for it: there is nothing to answer with. */
   | { kind: "recorded-unanswered"; method: string; exact: boolean }
   | { kind: "unknown-method"; method: string; recordedMethods: string[] }
@@ -645,6 +745,13 @@ export function diagnoseMissReason(index: ReplayIndex, req: JsonRpcRequest): Mis
   const effective = index.redactRequests ? (redactFrame(req) as JsonRpcRequest) : req;
   const fp = fingerprint(effective);
 
+  // Checked before the plain exhausted pool it is a special case of: "you polled
+  // more than the recording did" is true of both, and only this one can say why
+  // there is nothing more to serve.
+  const task = index.taskPolls.get(fp);
+  if (task && !task.terminal) {
+    return { kind: "task-not-terminal", taskId: task.taskId, status: task.status, recordedPolls: task.recordedPolls };
+  }
   const recordedCount = index.recordedCountByFingerprint.get(fp);
   if (recordedCount !== undefined) return { kind: "exhausted", fingerprint: fp, recordedCount };
   // A listen is answered out of its own pool, so a spent one is its own cause:
@@ -715,6 +822,12 @@ export function formatMiss(reason: MissReason): string {
       return (
         `this request's answer was recorded as a stream ${reason.recordedCount} time(s), but every one ` +
         `was already replayed earlier in this session`
+      );
+    case "task-not-terminal":
+      return (
+        `the recording holds ${reason.recordedPolls} poll(s) for task "${reason.taskId}" and ends with ` +
+        `status "${reason.status}", which is not terminal: the task was still running when recording stopped, ` +
+        `so there is no later state to serve. Re-record until the task reaches completed, failed or cancelled`
       );
     case "subscription-exhausted":
       return (

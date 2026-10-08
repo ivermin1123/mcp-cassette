@@ -77,19 +77,39 @@ function isVolatileString(s: string): boolean {
 /** Keys whose values are volatile by contract, at any depth. */
 const VOLATILE_KEYS = new Set(["_meta", "ttlMs"]);
 
+/**
+ * Keys that are volatile inside a task handle, and only there.
+ *
+ * A live server mints a fresh `taskId` for every run, so comparing one to the
+ * recorded handle reports drift that is only the server doing its job, and
+ * `pollIntervalMs` and `lastUpdatedAt` are that server's own pacing and clock
+ * (`createdAt` is already caught by the timestamp rule). None of that is true
+ * of a field that happens to share the name: an issue tracker whose `tools/call`
+ * returns a `taskId` is returning data, and data that moved is drift worth
+ * reporting. So the exemption follows the shape the extension defines rather
+ * than the key, and applies only to the object that declares itself a handle.
+ */
+const VOLATILE_TASK_KEYS = new Set(["taskId", "pollIntervalMs", "lastUpdatedAt"]);
+
 const VOLATILE_SENTINEL = "[volatile]";
 
 /**
  * Rewrite a payload so that volatile parts compare equal:
- * `_meta` / `ttlMs` are dropped wherever they appear, and values that look
- * like timestamps or UUIDs are replaced with one sentinel on both sides.
+ * `_meta` / `ttlMs` are dropped wherever they appear, a task handle's own
+ * volatile fields are dropped inside it, and values that look like timestamps
+ * or UUIDs are replaced with one sentinel on both sides.
  */
 export function normalizeForDiff(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizeForDiff);
   if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    // `resultType: "task"` is how the extension marks a handle, which is the
+    // one place the fields below are the server's business rather than data.
+    const handle = record.resultType === "task";
     const out: Record<string, unknown> = {};
-    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+    for (const [key, v] of Object.entries(record)) {
       if (VOLATILE_KEYS.has(key)) continue;
+      if (handle && VOLATILE_TASK_KEYS.has(key)) continue;
       out[key] = normalizeForDiff(v);
     }
     return out;
@@ -178,6 +198,19 @@ export function classifyPair(
 const LIFECYCLE_METHODS = new Set(["initialize"]);
 
 /**
+ * Methods whose params name a handle that died with the recorded session.
+ *
+ * A `tasks/get` carries the task id the recorded server minted. Re-firing it at
+ * a live server asks about a task that server has never heard of, so the answer
+ * is an error about an unknown handle rather than anything about drift. Verify
+ * leaves these pairs out, the way it leaves out the lifecycle ones, rather than
+ * diffing a question the live server could not have been asked. Re-polling
+ * properly means driving the task again from the `tools/call` that created it
+ * and following the new handle, which is a larger change than a diff pass.
+ */
+const TASK_SCOPED_METHODS = new Set(["tasks/get", "tasks/update", "tasks/cancel"]);
+
+/**
  * Ordered c2s requests that both have a recorded response and are worth
  * re-firing: notifications have no response by definition, lifecycle requests
  * are excluded, and unanswered requests can't be diffed against anything.
@@ -192,7 +225,7 @@ export function collectVerifyPairs(cassette: Cassette): VerifyPair[] {
   const pairs: VerifyPair[] = [];
   for (const entry of cassette.entries) {
     if (entry.type !== "frame" || entry.dir !== "c2s" || !isRequest(entry.frame)) continue;
-    if (LIFECYCLE_METHODS.has(entry.frame.method)) continue;
+    if (LIFECYCLE_METHODS.has(entry.frame.method) || TASK_SCOPED_METHODS.has(entry.frame.method)) continue;
     const response = responsesById.get(String(entry.frame.id));
     if (response) pairs.push({ request: entry.frame, response });
   }

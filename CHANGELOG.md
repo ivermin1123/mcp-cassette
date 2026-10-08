@@ -10,6 +10,38 @@ below.
 
 ### BREAKING
 
+- **`ReplayIndex` gains a required `taskPolls` field, and `MissReason` gains a
+  `task-not-terminal` variant.** The index now carries where the recording left
+  each task, which is what lets a poll past the recorded sequence be answered or
+  refused on the extension's own terms rather than as a spent pool.
+
+  *What you see:* a TypeScript caller who builds a `ReplayIndex` by hand, rather
+  than taking the one `buildReplayIndex` returns, fails to compile with
+  `taskPolls` missing. A caller who switches exhaustively over `MissReason`
+  fails to compile on the new variant. Nothing changes at runtime for a caller
+  who only consumes either.
+
+  *What to do:* take the index from `buildReplayIndex`, which is the only
+  supported way to build one, and add a `task-not-terminal` arm to the switch.
+  `formatMiss` renders every variant, so a caller that only needs the sentence
+  can call it instead of matching the shape.
+
+- **`--on-miss warn` no longer borrows an answer for a `tasks/get`.** Warn's
+  tolerance is the next unused recording of the same method, and for a poll that
+  recording is an answer carrying another task's id and state. Handing it over
+  told the client its own task had reached a state it never reached, which is
+  the same lie `tasks/update` already refused.
+
+  *What you see:* under `--on-miss warn`, a poll that found no recording of its
+  own used to receive another task's state and now receives the JSON-RPC miss
+  error, with the reason on stderr. Only a session recording more than one task
+  could borrow in the first place, since a single task's polls all share one
+  fingerprint. The exit code is unchanged: warn still exits 0.
+
+  *What to do:* re-record the session so it holds the polls the client makes. If
+  the recording stopped while the task was still running, the miss names the
+  task id and the status it stopped on, which is what to run longer.
+
 - **`jest` and `@jest/globals` are now optional peer dependencies, at `>=29`.**
   The jest adapter needs them, and declaring them is what keeps them out of the
   dependency graph of everyone else. An optional peer is still a peer, though,
@@ -26,6 +58,42 @@ below.
   the upgrade has to wait, at the cost of the check.
 
 ### Added
+
+- **The `io.modelcontextprotocol/tasks` extension replays.** A `tools/call`
+  answered with a task handle (`resultType: "task"`) hands that handle back, and
+  the `tasks/get` polls for one task id share a fingerprint, so they come out of
+  one pool in the order the recording holds them. The interval a client polls at
+  therefore never matters, and polling fewer times than the recording did is a
+  client that stopped early rather than a failed session.
+
+  Past the last recorded poll, the extension's terminal states decide.
+  `completed`, `failed` and `cancelled` do not change, so the final recorded
+  answer is served again for every further poll, without being consumed: that is
+  what the extension says is true of a finished task, and it is what answers a
+  client which persisted its task id and came back after its own restart, for as
+  long as the replay holding the recorded sequence outlived it. A recording
+  that stopped while the task was still `working` has no later state to give, so
+  a further poll is a miss naming the task id and the status it stopped on,
+  rather than an endless `working` a completion check would spin on.
+
+  Both halves hold whichever shape the recorded server answered a poll in. Over
+  HTTP an answer arrives as a stream unless the server was configured to send
+  JSON, which is not the default, so most recorded polls are `chunks` entries
+  rather than plain frames; replay reads the task's state out of either, and
+  re-serves a terminal answer in the shape the recording holds it in, a stream
+  as that stream.
+
+  `tasks/update` needed no rule of its own: it carries `inputResponses`, the
+  same field an MRTR retry carries, so it is already matched on the input it
+  carried and never borrows another recording's acknowledgment, under
+  `--on-miss warn` too. Neither did `notifications/tasks`, which is a
+  server-initiated notification on a `subscriptions/listen` stream and is
+  replayed by the position rule 0.6.0 introduced, re-keyed to the subscription
+  id the client's own listen request carried.
+
+  *What you see:* a session that used to exit 1 on the poll after a completed
+  task now exits 0 and gets the recorded answer. A test that asserted on that
+  miss needs updating.
 
 - **`sarif-file` input on the action.** Set it and the check's findings, `CAS-C`
   and `CAS-L` alike, are written as SARIF 2.1.0 to that path, ready for a
@@ -62,6 +130,21 @@ below.
   jest in ESM mode at all, for a reason that has nothing to do with this
   package; the README says what that looks like and which releases are
   unaffected.
+
+### Changed
+
+- **`verify` skips the calls whose task handle died with the recording.** A
+  recorded `tasks/get`, `tasks/update` or `tasks/cancel` names the task id the
+  recorded server minted. Re-firing it at a live server asks about a task that
+  server has never heard of, so the answer was an error about an unknown handle
+  reported as drift. Those pairs are left out now, the way `initialize` already
+  was, and the `tools/call` that created the task is still re-fired. Inside a
+  task handle (`resultType: "task"`), `taskId`, `pollIntervalMs` and
+  `lastUpdatedAt` are treated as volatile the way `_meta` and `ttlMs` are
+  everywhere, so a freshly minted handle is not reported as a change either.
+  The exemption follows the handle rather than the key name: a `tools/call`
+  whose ordinary result carries a `taskId` of its own is returning data, and a
+  value that moved there is still reported as drift.
 
 ### Fixed
 
