@@ -240,6 +240,61 @@ describe("replay --on-miss", () => {
     expect(JSON.stringify(secondHit.result)).toContain("echo:second-session");
   }, 30_000);
 
+  it("passthrough hands an input_required answer to the client instead of failing the forward", async () => {
+    // A stdio server that asks before it acts: MRTR, the 2026-07-28 shape.
+    const server = path.join(tmpDir, "asks-first.mjs");
+    fs.writeFileSync(
+      server,
+      `let buf = "";
+process.stdin.on("data", (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf("\\n")) >= 0) {
+    const m = JSON.parse(buf.slice(0, i));
+    buf = buf.slice(i + 1);
+    if (m.id === undefined) continue;
+    const result = m.method === "initialize"
+      ? { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "asks-first", version: "1" } }
+      : m.params?.inputResponses
+        ? { resultType: "complete", content: [{ type: "text", text: "deployed" }] }
+        : { resultType: "input_required", inputRequests: { confirm: { method: "elicitation/create" } }, requestState: "s1" };
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }) + "\\n");
+  }
+});
+`
+    );
+    // Header only: a recorded tools/call would answer by same-method fallback
+    // and the forward under test would never happen.
+    const cassettePath = path.join(tmpDir, "asks-first.cassette.jsonl");
+    fs.writeFileSync(
+      cassettePath,
+      JSON.stringify({ type: "header", cassetteVersion: 2, recorder: "test", startedAt: "t", transport: "stdio" }) + "\n"
+    );
+    const call = { name: "deploy", arguments: { env: "prod" } };
+    const ask: JsonRpcFrame = { jsonrpc: "2.0", id: 7, method: "tools/call", params: call };
+    const answer: JsonRpcFrame = {
+      jsonrpc: "2.0",
+      id: 8,
+      method: "tools/call",
+      params: { ...call, inputResponses: { confirm: { action: "accept" } }, requestState: "s1" },
+    };
+
+    const { code, out } = await replaySession(
+      [cassettePath, "--on-miss", "passthrough", "--", "node", server],
+      [initFrame, initializedNote, ask, answer]
+    );
+    const byId = (frames: JsonRpcFrame[], id: number) => frames.find((f) => "id" in f && f.id === id) as JsonRpcResponse;
+    expect(byId(out, 7)).toMatchObject({ result: { resultType: "input_required", requestState: "s1" } });
+    expect(byId(out, 8)).toMatchObject({ result: { resultType: "complete" } });
+    expect(code).toBe(0);
+
+    // Offline, the whole exchange replays from what was just appended.
+    const offline = await replaySession([cassettePath], [initFrame, initializedNote, ask, answer]);
+    expect(byId(offline.out, 7)).toMatchObject({ result: { resultType: "input_required" } });
+    expect(byId(offline.out, 8)).toMatchObject({ result: { resultType: "complete" } });
+    expect(offline.code).toBe(0);
+  }, 30_000);
+
   it("passthrough exits 1 when the live server cannot be reached, and appends nothing", async () => {
     const cassettePath = path.join(tmpDir, "spy-broken.cassette.jsonl");
     await recordEchoSession(cassettePath);

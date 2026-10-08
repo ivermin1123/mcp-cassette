@@ -87,8 +87,9 @@ export class ModernServerError extends Error {
 
 /**
  * MRTR: the server wants input (sampling, elicitation, roots) before it can
- * answer. `check`, `snapshot`, and `verify` are non-interactive by design, so
- * this surfaces as a structured error rather than a half-answer.
+ * answer. `check` and `snapshot` are non-interactive by design and have no
+ * input to give, so this surfaces as a structured error rather than a
+ * half-answer. Callers that do have an answer use `relay`.
  */
 export class InputRequiredError extends Error {
   constructor(
@@ -258,7 +259,12 @@ export class MiniClient {
     };
   }
 
-  async request(method: string, params?: unknown): Promise<JsonRpcResponse> {
+  /**
+   * Send one request and return whatever answered it, `input_required`
+   * included. For the callers that can act on that answer: replay passthrough
+   * hands it to the client that asked, and verify answers it from the cassette.
+   */
+  async relay(method: string, params?: unknown): Promise<JsonRpcResponse> {
     const modern = this.currentEra === "modern";
     const body = modern ? this.withMeta(params) : params;
     const frame: JsonRpcRequest = {
@@ -267,7 +273,11 @@ export class MiniClient {
       method,
       ...(body !== undefined ? { params: body } : {}),
     };
-    const res = await this.transport.request(frame, this.timeoutMs);
+    return this.transport.request(frame, this.timeoutMs);
+  }
+
+  async request(method: string, params?: unknown): Promise<JsonRpcResponse> {
+    const res = await this.relay(method, params);
     // A result without `resultType` is "complete" (the earlier-protocol rule);
     // only an explicit input_required interrupts.
     const result = res.result as { resultType?: string; inputRequests?: unknown } | undefined;

@@ -7,11 +7,15 @@
  *
  * Matching strategy (v1):
  *   - `initialize` and other parameterless lifecycle calls match by method.
- *   - `tools/call` matches by tool name + stable-stringified arguments.
+ *   - `tools/call` matches by tool name + stable-stringified arguments, plus
+ *     the MRTR retry fields (`inputResponses`, `requestState`) when present.
  *   - everything else matches by method + stable-stringified params
  *     (volatile `_meta` is ignored).
  *   - fingerprint miss falls back to the next unconsumed response for the
  *     same method (recorded order), so re-ordered test runs still work.
+ *     MRTR retries are outside the fallback in both directions: a retry is
+ *     answered exactly or not at all, and a retry's recorded answer is never
+ *     handed to another request.
  *
  * If the cassette was recorded with redaction on, incoming requests are redacted
  * before fingerprinting: a client sending a live token produces the same
@@ -52,11 +56,37 @@ const METHOD_ONLY = new Set(["initialize", "ping", "tools/list", "resources/list
 // name or in JSON text, so no crafted tool name or argument can collide.
 const SEP = "\u0000";
 
+/**
+ * An MRTR retry (2026-07-28) carries the client's answers in `inputResponses`
+ * and echoes the server's opaque `requestState`, both beside `name` and
+ * `arguments` in `params`. They are what the retry is about: two retries that
+ * answered differently are different requests, however equal their arguments.
+ */
+const MRTR_FIELDS = ["inputResponses", "requestState"] as const;
+
+/** The retry part of a request's params; undefined when the request is not a retry. */
+function mrtrPart(params: unknown): Record<string, unknown> | undefined {
+  if (!params || typeof params !== "object") return undefined;
+  const part: Record<string, unknown> = {};
+  for (const key of MRTR_FIELDS) {
+    const value = (params as Record<string, unknown>)[key];
+    if (value !== undefined) part[key] = value;
+  }
+  return Object.keys(part).length > 0 ? part : undefined;
+}
+
+function isMrtrRetry(req: { params?: unknown }): boolean {
+  return mrtrPart(req.params) !== undefined;
+}
+
 export function fingerprint(req: { method: string; params?: unknown }): string {
   if (METHOD_ONLY.has(req.method)) return req.method;
   const params = req.params as Record<string, unknown> | undefined;
   if (req.method === "tools/call" && params && typeof params === "object") {
-    return `tools/call${SEP}${String(params.name)}${SEP}${stableStringify(params.arguments ?? {})}`;
+    const call = `tools/call${SEP}${String(params.name)}${SEP}${stableStringify(params.arguments ?? {})}`;
+    // Appended only when present, so every non-retry fingerprint is unchanged.
+    const retry = mrtrPart(params);
+    return retry ? `${call}${SEP}${stableStringify(retry)}` : call;
   }
   const cleaned = { ...(params ?? {}) } as Record<string, unknown>;
   delete cleaned._meta;
@@ -103,6 +133,9 @@ export function buildReplayIndex(cassette: Cassette): ReplayIndex {
     const fp = fingerprint(frame);
     if (!byFingerprint.has(fp)) byFingerprint.set(fp, []);
     byFingerprint.get(fp)!.push(response);
+    // A retry's answer is bound to the input that retry carried. Handed to any
+    // other request, it would skip the very step the input answered.
+    if (isMrtrRetry(frame)) continue;
     if (!byMethod.has(frame.method)) byMethod.set(frame.method, []);
     byMethod.get(frame.method)!.push(response);
   }
@@ -128,6 +161,9 @@ export function matchResponse(index: ReplayIndex, req: JsonRpcRequest): JsonRpcR
     consumeFromMethodPool(index, req.method, res);
     return res;
   }
+  // A retry that matched nothing exactly answered differently from the
+  // recording; any recorded answer would claim the recorded input was given.
+  if (isMrtrRetry(req)) return null;
   const fallback = index.byMethod.get(req.method);
   if (fallback && fallback.length > 0) {
     const res = fallback.shift()!;
@@ -218,12 +254,19 @@ export function diagnoseMissReason(index: ReplayIndex, req: JsonRpcRequest): Mis
       const recordedTools = [...new Set(sameMethod.map((r) => String((r.params as Record<string, unknown> | undefined)?.name)))].sort();
       return { kind: "unknown-tool", tool: wanted, recordedTools };
     }
+    const argsOf = (r: JsonRpcRequest) => (r.params as Record<string, unknown>).arguments ?? {};
+    const changes = nearestChanges(byName.map(argsOf), argsOf(effective));
+    if (changes.length > 0) return { kind: "arguments-differ", changes };
+    // The arguments equal a recording's, so what diverged is the MRTR retry
+    // part: the input the client answered with, or the state it echoed back.
+    const sameArgs = byName.filter((r) => diffValues(argsOf(r), argsOf(effective)).length === 0);
+    // A retry is nearest to a recorded retry, never to the call it retried:
+    // "inputResponses recorded (absent)" would point at the wrong recording.
+    const retries = sameArgs.filter(isMrtrRetry);
+    const candidates = isMrtrRetry(effective) && retries.length > 0 ? retries : sameArgs;
     return {
-      kind: "arguments-differ",
-      changes: nearestChanges(
-        byName.map((r) => (r.params as Record<string, unknown>).arguments ?? {}),
-        (effective.params as Record<string, unknown>).arguments ?? {}
-      ),
+      kind: "params-differ",
+      changes: nearestChanges(candidates.map((r) => mrtrPart(r.params) ?? {}), mrtrPart(effective.params) ?? {}),
     };
   }
 
@@ -425,7 +468,8 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
 
   const forwardMiss = async (frame: JsonRpcRequest): Promise<JsonRpcResponse> => {
     const client = await connectLive();
-    const res = await client.request(frame.method, frame.params);
+    // relay, not request: an input_required answer is the client's to act on.
+    const res = await client.relay(frame.method, frame.params);
     const liveId = live.nextId();
     live.frame("c2s", { ...frame, id: liveId });
     live.frame("s2c", { ...res, id: liveId });

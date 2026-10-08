@@ -219,6 +219,17 @@ describe("modern request dialect", () => {
     await client.close();
   });
 
+  it("relays input_required as an answer to callers that can act on it", async () => {
+    const asked = { resultType: "input_required", inputRequests: { q: { method: "elicitation/create" } } };
+    const { url } = await stub((req, res) =>
+      req.method === "server/discover" ? ok(res, req.id, DISCOVER_RESULT) : ok(res, req.id, asked)
+    );
+    const { client } = await MiniClient.connect({ kind: "http", url }, 2000, "modern");
+
+    await expect(client.relay("tools/call", { name: "ask" })).resolves.toMatchObject({ result: asked });
+    await client.close();
+  });
+
   it("sends no session id in the modern era even if a server minted one", async () => {
     const { url, seen } = await stub((req, res) => {
       res.setHeader("mcp-session-id", "sess-1");
@@ -257,6 +268,77 @@ describe("session teardown", () => {
     expect(elapsedMs).toBeLessThan(4000); // the 2s leash, with room for a slow CI box
     expect(url).toContain("http://"); // (the first stub is only here for its port)
   }, 15_000);
+});
+
+describe("verify across an MRTR exchange", () => {
+  const deploy = { name: "deploy", arguments: { env: "prod" } };
+  const question = (message: string) => ({ confirm: { method: "elicitation/create", params: { message } } });
+  const answer = { confirm: { action: "accept" } };
+
+  /** Recorded against a server that minted "state-recorded"; this one never will. */
+  const cassette = (message: string): Cassette => ({
+    header: { type: "header", cassetteVersion: 2, recorder: "t", startedAt: "t", transport: "http", era: "modern" },
+    entries: [
+      { type: "frame", t: 1, dir: "c2s", frame: { jsonrpc: "2.0", id: 1, method: "tools/call", params: deploy } },
+      {
+        type: "frame", t: 2, dir: "s2c",
+        frame: { jsonrpc: "2.0", id: 1, result: { resultType: "input_required", inputRequests: question(message), requestState: "state-recorded" } },
+      },
+      {
+        type: "frame", t: 3, dir: "c2s",
+        frame: { jsonrpc: "2.0", id: 2, method: "tools/call", params: { ...deploy, inputResponses: answer, requestState: "state-recorded" } },
+      },
+      { type: "frame", t: 4, dir: "s2c", frame: { jsonrpc: "2.0", id: 2, result: { resultType: "complete", content: [{ type: "text", text: "deployed" }] } } },
+    ],
+  });
+
+  /** Mints a new state per question and completes only a retry that echoes the latest one. */
+  const mrtrServer = () => {
+    let minted = 0;
+    return stub((req, res) => {
+      if (req.method === "server/discover") return ok(res, req.id, DISCOVER_RESULT);
+      const params = req.params as Record<string, unknown>;
+      if (params.requestState === undefined) {
+        minted++;
+        return ok(res, req.id, { resultType: "input_required", inputRequests: question("Deploy to prod?"), requestState: `state-live-${minted}` });
+      }
+      if (params.requestState !== `state-live-${minted}`) return rpcError(res, req.id, -32602, "stale requestState", undefined, 200);
+      ok(res, req.id, { resultType: "complete", content: [{ type: "text", text: "deployed" }] });
+    });
+  };
+
+  it("re-fires the recorded retry with the live server's state, and MATCHes both steps", async () => {
+    const { url, seen } = await mrtrServer();
+    const results = await verifyAgainstServer(cassette("Deploy to prod?"), { kind: "http", url }, { timeoutMs: 2000, era: "modern" });
+
+    expect(results.map((r) => r.status)).toEqual(["MATCH", "MATCH"]);
+    const retried = seen.map((s) => s.body.params as Record<string, unknown>).find((p) => p?.inputResponses);
+    expect(retried).toMatchObject({ inputResponses: answer, requestState: "state-live-1" });
+  });
+
+  it("drops the recorded state from the retry when the live server minted none", async () => {
+    const { url, seen } = await stub((req, res) => {
+      if (req.method === "server/discover") return ok(res, req.id, DISCOVER_RESULT);
+      const params = req.params as Record<string, unknown>;
+      if (params.inputResponses) return ok(res, req.id, { resultType: "complete", content: [{ type: "text", text: "deployed" }] });
+      ok(res, req.id, { resultType: "input_required", inputRequests: question("Deploy to prod?") });
+    });
+    const results = await verifyAgainstServer(cassette("Deploy to prod?"), { kind: "http", url }, { timeoutMs: 2000, era: "modern" });
+
+    expect(results[0]).toMatchObject({ status: "CHANGED", changes: [{ path: "/requestState" }] });
+    expect(results[1]!.status).toBe("MATCH");
+    const retried = seen.map((s) => s.body.params as Record<string, unknown>).find((p) => p?.inputResponses);
+    expect(retried).not.toHaveProperty("requestState");
+  });
+
+  it("reports a changed question as drift, and never the opaque state", async () => {
+    const { url } = await mrtrServer();
+    const results = await verifyAgainstServer(cassette("Ship it?"), { kind: "http", url }, { timeoutMs: 2000, era: "modern" });
+
+    expect(results[0]!.status).toBe("CHANGED");
+    expect(results[0]!.changes.map((c) => c.path)).toEqual(["/inputRequests/confirm/params/message"]);
+    expect(results[1]!.status).toBe("MATCH");
+  });
 });
 
 describe("CLI surface", () => {

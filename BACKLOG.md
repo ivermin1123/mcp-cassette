@@ -88,6 +88,92 @@ the extract-and-stub verification described in
 
 ---
 
+## The same-method fallback answers a different request
+
+**Raised** 2026-10-08, found while fixing MRTR retry matching.
+
+When a request's exact fingerprint was never recorded, `matchResponse` serves
+the next unconsumed recording of the same *method* before it reports a miss.
+For `tools/call` that means another call's answer, whatever its arguments.
+
+**Measured, against published 0.4.0.** A cassette holding one call,
+`add {a:1, b:2}` answered `"3"`. Replayed with `add {a:5, b:5}` and then
+`add {a:1, b:2}`:
+
+- `add {a:5, b:5}` got `"3"`, with nothing on stderr;
+- `add {a:1, b:2}`, the call that *was* recorded, then missed as "exhausted";
+- the session exited 1, blaming the right call for the wrong one's answer.
+
+Under `--on-miss warn` the same session exits 0. The fallback also swallows a
+miss before passthrough sees it: a recorded `tools/call` of any tool answers a
+call to a tool the recording never saw, so `--on-miss passthrough` never
+forwards it. And when the borrowed answer is an MRTR `input_required`, it hands
+the client a `requestState` the live server never minted; under passthrough the
+retry that follows is forwarded with it, and a server that checks its state
+rejects the call.
+
+**Why it exists:** it tolerates arguments that change every run (timestamps,
+generated ids) without the user configuring anything. That is a real need, and
+removing the fallback would turn those suites red.
+
+**Directions, none chosen:**
+
+- **Keep it, make it loud:** a stderr line per fallback answer, naming the
+  paths that differed. No exit-code change. Cheapest, but a test that passes on
+  a wrong answer still passes.
+- **Count it as a miss** in `--on-miss error`, keeping the answer. Turns
+  today's silent wrong answers red, and with them every suite relying on the
+  tolerance.
+- **Replace it with declared volatility:** `--volatile <json-pointer>` (or a
+  cassette-header list) that `fingerprint` drops, and no fallback at all. The
+  honest version, and a new public input.
+
+**Why this is a design checkpoint:** every direction changes which suites pass,
+and the tolerance is undocumented today, so nobody knows whether they rely on
+it. MRTR retries are already outside the fallback, in both directions, because
+a retry's answer is bound to the input it carried.
+
+**Related:** `src/replay.ts` (`matchResponse`), the `replay` row in the README.
+
+---
+
+## `subscriptions/listen` cannot be replayed
+
+**Raised** 2026-10-08, from the 2026-07-28 revision.
+
+2026-07-28 replaced unsolicited change notifications with `subscriptions/listen`:
+one long-lived request, acknowledged by a `notifications/subscriptions/acknowledged`
+notification, then followed by change notifications tagged with the
+subscription id. The request is answered only when the *server* ends the
+subscription gracefully, so a recording almost always holds the request with
+no response.
+
+**Measured:** replay skips unanswered requests when it builds its index, so the
+listen request is a miss (`no recorded request has method
+"subscriptions/listen"`, which is also wrong: it was recorded, just never
+answered), and the session exits 1 under `--on-miss error`. Server frames that
+are not responses are already skipped on stdio (`N server-initiated frame(s) ...
+are not replayed`), so the acknowledgment never arrives either.
+
+The official TypeScript client, `@modelcontextprotocol/client` 2.3.1, opens
+this subscription on its own only when `ClientOptions.listChanged` is
+configured and the server advertises `listChanged`; when it fails, the client
+reports through `onerror` and carries on. So that client survives the miss, and the session still fails at exit.
+
+**Directions, none chosen:**
+
+- **Acknowledge and hold:** answer a recorded listen request with its recorded
+  acknowledgment and keep it open, replaying no change notifications. Small,
+  and makes the miss go away honestly.
+- **Replay the notifications too**, at their recorded position relative to the
+  client's requests. The faithful version, and the first time replay would
+  originate frames on its own schedule.
+
+**Related:** `buildReplayIndex` in `src/replay.ts`, `http-replay.ts` stream
+emission, the README roadmap's server-initiated flows.
+
+---
+
 ## Schema-diff completeness: CANCELLED
 
 **Raised** 2026-08-16. **Cancelled** 2026-08-16, the same day, after

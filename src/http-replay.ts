@@ -357,7 +357,8 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
   const forwardMiss = async (res: http.ServerResponse, frame: JsonRpcRequest): Promise<void> => {
     try {
       const client = await connectLive();
-      const answer = await client.request(frame.method, frame.params);
+      // relay, not request: an input_required answer is the client's to act on.
+      const answer = await client.relay(frame.method, frame.params);
       const streamed = client.lastStream;
       const liveId = spy!.nextId();
       spy!.frame("c2s", { ...frame, id: liveId });
