@@ -50,6 +50,9 @@ function runFixtureProject(): JestJson {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --experimental-vm-modules`.trim() },
+      // jest does not force-exit on a leaked handle, it waits. Without a bound
+      // that wait becomes the CI job's own limit, with nothing naming the cause.
+      timeout: 120_000,
     });
   } catch (err) {
     // Two of the fixture's tests fail on purpose, so jest exits 1 and
@@ -72,13 +75,16 @@ function runFixtureProject(): JestJson {
  * code runs. Measured against this repo: 24.5.0 fine, 24.6.0 broken, 24.7.0
  * fine, Node 20 and 22 never affected.
  *
- * The condition is deliberately narrow. Not one test may have run, and every
- * suite must have died of that one error, so a genuine adapter failure can
- * never take this exit. It also needs no version list and starts asserting
- * again by itself on a Node that works.
+ * The condition is deliberately narrow: the host must be the one release the
+ * bug is known for, not one test may have run, and every suite must have died
+ * of that one error, so a genuine adapter failure can never take this exit.
+ * The version is part of the condition on purpose: CI runs 20.x and 22.x,
+ * where the bug never existed, so the same message there is a real regression
+ * and has to fail rather than skip seven tests into a green log.
  */
 function isHostLinkFailure(report: JestJson): boolean {
   return (
+    process.versions.node.startsWith("24.6.") &&
     report.numTotalTests === 0 &&
     report.testResults.length > 0 &&
     report.testResults.every((suite) => suite.message.includes("module is already linked"))

@@ -36,6 +36,7 @@ function runFixtureProject(): VitestJson {
     stdout = execFileSync("npx", ["vitest", "run", "--root", root, "--reporter=json"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: 120_000,
     });
   } catch (err) {
     // Two of the fixture's tests fail on purpose, so vitest exits 1 and
