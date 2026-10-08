@@ -462,3 +462,50 @@ is anchored to tags, which survive branch cleanup:
 Fetch with `git fetch origin --tags`, then `git show corpus/pydantic-2026-08-16`.
 Whoever reopens contract diffing should start from that data rather than
 inventing fixtures again.
+
+---
+
+## Which rules belong on a name, and on a prompt description
+
+**Raised** 2026-10-09, out of the release that pointed the `CAS-L` rules at
+prompts, resources and resource templates. **Status: measured, undecided.** The
+release itself is safe: every finding on those surfaces is reported at `warn`
+whatever its rule's level, so the default gate is unchanged. The decision this
+item owes is the graduation minor, where those findings would take their rule's
+own level and three of the rules below are `error`.
+
+**Measured** 2026-10-09, over 63 hand-typed subjects: the resource, prompt and
+template listings of the everything, fetch, sqlite, sentry, postgres and
+puppeteer reference servers, a filesystem-style listing, persona-style prompt
+descriptions, and descriptions in Chinese, Japanese, Arabic, Vietnamese,
+Russian and Greek. The reference servers and the non-English text are clean.
+The 29 findings concentrate in four shapes:
+
+| Shape | Rule | Fires on |
+|---|---|---|
+| resource `name` that is a file name | CAS-L005 | `.env`, `.env.example`, `.ssh/config`, `credentials.json` |
+| resource `name` that is a single word | CAS-L012, CAS-L007 | `shell`, `exec.ts`, and a 130-character identifier name |
+| persona-style prompt description | CAS-L013 | "Act as a system administrator and diagnose the issue", "Pretend you are a pirate and answer in character", "You are a debug assistant. Find the bug." |
+| documentation about markup | CAS-L002 | "HTML page template with `<!-- comment -->` placeholders", "Explains the `<system>` and `<user>` message tags" |
+
+A resource `name` is not prose, and the rules that fire on it read it as if it
+were a sentence. A persona in a prompt description is the product, not the
+attack.
+
+**Two directions to decide between before any of this graduates.**
+
+*Restrict name scanning to the rules that detect hidden content.* CAS-L001,
+L002, L003, L004, L006, L009, L010, L013 and L015 look for something concealed
+in text and belong on a name as much as on a description. CAS-L005, L007, L008
+and L012 read a name as a sentence and would be left to `title` and
+`description`. The cost is a split rule set, which the catalogue does not have
+today and which makes "the same rules run over everything" stop being true.
+
+*Decide whether CAS-L013 runs on a prompt description at all.* It catches role
+and authority impersonation aimed at the model, which is exactly what a prompt
+template legitimately contains. Either it comes off that surface, or it stays
+and never graduates past `warn` there.
+
+Doing neither and graduating as the rules stand turns a filesystem-style server
+that lists dotfiles, or a prompt server whose descriptions carry a persona, red
+at the default gate. That is the outcome the measurement is here to prevent.

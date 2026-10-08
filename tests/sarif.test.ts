@@ -69,6 +69,13 @@ const contractFinding = {
   subject: "broken",
   message: "inputSchema is not valid JSON Schema: …",
 };
+const promptFinding = {
+  level: "warn" as const,
+  code: "CAS-L001",
+  subject: "get_weather",
+  kind: "prompt" as const,
+  message: "instruction-override phrasing (classic prompt-injection) (in prompt description)",
+};
 
 /** Just enough of the document's shape for the location assertions to read clearly. */
 type SarifDoc = {
@@ -93,6 +100,7 @@ describe("the document satisfies the official SARIF 2.1.0 schema", () => {
     ["a lint finding", report([lintFinding])],
     ["a warn finding", report([warnFinding], true)],
     ["mixed lint and contract findings", report([lintFinding, warnFinding, contractFinding])],
+    ["a finding about a prompt", report([promptFinding])],
   ])("validates with %s", (_name, input) => {
     expect(validate(toSarif(input))).toBe(true);
   });
@@ -152,6 +160,22 @@ describe("what the document says", () => {
     expect(JSON.stringify(run.results)).not.toContain("physicalLocation");
   });
 
+  it("says what kind of thing a logical location names", () => {
+    // SARIF leaves this free text. A tool subject keeps the "member" it has
+    // always carried; a URI reads as a resource rather than a member of
+    // anything, so the newer kinds name themselves.
+    const kinds = (findings: CheckReport["findings"]) =>
+      (toSarif(report(findings)) as {
+        runs: Array<{ results: Array<{ locations: Array<{ logicalLocations: Array<{ kind: string }> }> }> }>;
+      }).runs[0]!.results.map((r) => r.locations[0]!.logicalLocations[0]!.kind);
+
+    expect(kinds([lintFinding, contractFinding])).toEqual(["member", "member"]);
+    expect(kinds([promptFinding, { ...promptFinding, kind: "resource" as const }])).toEqual([
+      "prompt",
+      "resource",
+    ]);
+  });
+
   it("keeps the excerpt in the message", () => {
     expect(run.results[0]!.message.text).toContain("Ignore previous instructions");
   });
@@ -179,6 +203,28 @@ describe("partialFingerprints survive a reworded description", () => {
 
   it("is stable across runs", () => {
     expect(fingerprint(lintFinding)).toBe(fingerprint(lintFinding));
+  });
+
+  it("separates a prompt from a tool of the same name", () => {
+    // Both are called `get_weather` and both broke CAS-L001. They are two
+    // problems with two fixes, and one hash would merge them into one alert
+    // whose triage state belonged to whichever arrived first.
+    expect(promptFinding.subject).toBe(lintFinding.subject);
+    expect(fingerprint(promptFinding)).not.toBe(fingerprint(lintFinding));
+    expect(fingerprint({ ...promptFinding, kind: "resource" })).not.toBe(fingerprint(promptFinding));
+  });
+
+  it("leaves every tool fingerprint exactly where 0.6.0 put it", () => {
+    // The hex is the value the released version emits for this finding, and it
+    // is pinned rather than recomputed: a fingerprint is triage state in
+    // somebody's Security tab, so a change here silently closes their alerts
+    // and opens the same ones again as new. The kind joined the hash for the
+    // surfaces added after 0.6.0 and must stay out of it for this one.
+    expect(fingerprint(lintFinding)).toBe("86f30c3c29712ff6");
+    expect(fingerprint(contractFinding)).toBe("3d5752f798b40405");
+    expect(fingerprint(warnFinding)).toBe("0eacfeb9eaa69f2b");
+    // Spelling the kind out explicitly must not move it either.
+    expect(fingerprint({ ...lintFinding, kind: "tool" })).toBe("86f30c3c29712ff6");
   });
 });
 
@@ -244,6 +290,16 @@ describe("anchored findings", () => {
       region: { startLine: lineHolding("get_weather") },
     });
     expect(second!.locations[0]!.physicalLocation!.region.startLine).toBe(lineHolding("broken"));
+  });
+
+  it("does not lend a tool's line to a prompt that shares its name", () => {
+    // `get_weather` is a tool in this snapshot. A prompt of the same name is
+    // declared nowhere in it, and pointing at the tool's line would send a
+    // reviewer to the wrong declaration with every appearance of precision.
+    const doc = toSarif(report([promptFinding]), snapshotAnchor("s.json", snapshotText)) as SarifDoc;
+    const physical = doc.runs[0]!.results[0]!.locations[0]!.physicalLocation!;
+    expect(physical.artifactLocation.uri).toBe("s.json");
+    expect(physical.region.startLine).toBe(1);
   });
 
   it("falls back to line 1 for a subject the file does not contain", () => {

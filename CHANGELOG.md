@@ -57,6 +57,36 @@ below.
   adapter has been verified against. `--legacy-peer-deps` silences the check if
   the upgrade has to wait, at the cost of the check.
 
+- **The safety lint now reads prompts, resources and resource templates, and
+  its new findings fail the stricter gates.** Every `CAS-L` finding on one of
+  these surfaces is reported at `warn`, whatever level its rule carries, so the
+  default gate (`check --fail-on error`, and the action with no `lint-fail-on`)
+  is unchanged: a server that passed yesterday passes today.
+
+  *What you see:* new `warn` lines naming a prompt, a resource URI or a URI
+  template instead of a tool, on servers that advertise those capabilities.
+
+  *What to do:* nothing, unless you run one of the two stricter gates, which do
+  fail on them. `check --fail-on warn` gates every finding, and the action's
+  `lint-fail-on: warn` gates the `CAS-L` set alone. Both go red on a prompt or
+  resource that trips a rule. Fix the text, or move that job to the default
+  gate while you work through the findings. `lint-fail-on: never` reports them
+  all and gates on none, as before.
+
+  These findings graduate to their rule's own level no earlier than the next
+  minor, which is the discipline CONTRIBUTING states for a rule pointed at a
+  surface it did not scan before. Which of them graduate is an open decision
+  with measurements behind it, in [BACKLOG.md](BACKLOG.md); a resource name is
+  not a sentence, and the rules that read it as one fire on ordinary listings.
+  That graduation gets its own bullet when it lands.
+
+- **`LintFinding.toolName` is now `LintFinding.subject`, and the type carries a
+  `kind`.** A finding may be about a prompt or a resource, and a field called
+  `toolName` holding a prompt's name is a lie the compiler used to help tell.
+  `kind` says which of `tool`, `prompt`, `resource` and `resource-template` the
+  subject names. Only callers of the programmatic `lintTool` are affected; the
+  CLI and its JSON have always called this field `subject`.
+
 ### Added
 
 - **The `io.modelcontextprotocol/tasks` extension replays.** A `tools/call`
@@ -94,6 +124,28 @@ below.
   *What you see:* a session that used to exit 1 on the poll after a completed
   task now exits 0 and gets the recorded answer. A test that asserted on that
   miss needs updating.
+
+- **The safety lint covers every model-facing text a server publishes, not just
+  tool descriptions.** `check` runs the same `CAS-L` rules over prompt
+  descriptions and prompt argument descriptions, over resource names, titles
+  and descriptions, and over resource templates, which it now lists. A resource
+  name is read because it is display text: the specification has it stand in
+  for `title` when none is given, and `resources/read` is keyed by `uri`, so
+  the name is never what a client calls with. A prompt name is not read,
+  because it is what `prompts/get` is called with.
+
+  Findings name their subject the way its protocol does: a prompt by name, a
+  resource by URI, a template by its URI template. In SARIF the subject kind
+  joins the fingerprint, so a prompt and a tool that share a name stay two
+  alerts; a tool finding's fingerprint is unchanged, down to the hex. A server
+  that advertises `resources` and then fails `resources/templates/list` in any
+  way, method-not-found included, is not reported: having no templates is not a
+  fault.
+
+  `lintPrompt` and `lintResource` are exported beside `lintTool`, with the
+  `SubjectKind`, `Prompt`, `PromptArgument` and `Resource` types, so a caller
+  of the programmatic API can lint the new surfaces and name the type
+  `CheckFinding.kind` carries.
 
 - **`sarif-file` input on the action.** Set it and the check's findings, `CAS-C`
   and `CAS-L` alike, are written as SARIF 2.1.0 to that path, ready for a
