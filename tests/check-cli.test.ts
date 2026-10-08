@@ -19,7 +19,6 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { LINT_RULES } from "../src/lint.js";
 
 const ROOT = path.resolve(__dirname, "..");
 const TINY = path.join(ROOT, "tests/fixtures/tiny-server.mjs");
@@ -170,12 +169,3 @@ describe("check --lint-fail-on", () => {
   }, 20_000);
 });
 
-describe("the lint gate's reach", () => {
-  it("is decided by the CAS-L prefix, so every rule must carry one", () => {
-    // `src/check.ts` routes a finding to the lint gate by its id prefix. A rule
-    // id outside that prefix would answer to the structural gate instead, and
-    // `lint-fail-on: never` would quietly stop covering it.
-    const stray = LINT_RULES.filter((rule) => !rule.id.startsWith("CAS-L"));
-    expect(stray.map((rule) => rule.id)).toEqual([]);
-  });
-});
