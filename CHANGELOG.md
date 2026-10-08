@@ -10,14 +10,17 @@ below.
 
 ### Added
 
-- **`sarif-file` input on the action.** Set it and the safety lint's findings
-  are written as SARIF 2.1.0 to that path, ready for a
+- **`sarif-file` input on the action.** Set it and the check's findings, `CAS-C`
+  and `CAS-L` alike, are written as SARIF 2.1.0 to that path, ready for a
   `github/codeql-action/upload-sarif` step. Findings are anchored to the file
   named by `snapshot-file` when it exists, because code scanning discards a
-  result that carries no physical location. The path is exposed as the
-  `sarif-file` output, and that output stays empty when the input was unset or
-  when the server could not be inspected at all, so the upload step is never
-  handed a file that is not a SARIF document.
+  result that carries no physical location. A path under a directory that does
+  not exist is created. The path is exposed as the `sarif-file` output, and that
+  output stays empty, with the half-written file removed and a warning in the
+  log, whenever no document was produced: the input was unset, the server could
+  not be inspected, or the run ended before it wrote anything. So the upload
+  step, guarded on that output as the README example shows, is never handed a
+  file that is not a SARIF document.
 
   The action does not upload. That needs `security-events: write`, which an
   action should not assume on its caller's behalf; the README shows the step and

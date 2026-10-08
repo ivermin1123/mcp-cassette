@@ -43,8 +43,10 @@ inputs:
     default: error
   sarif-file:
     description: >-
-      Write the safety lint's findings as SARIF 2.1.0 to this path, for a later
-      github/codeql-action/upload-sarif step. Empty (the default) writes nothing.
+      Write the check's findings, CAS-C and CAS-L alike, as SARIF 2.1.0 to this
+      path, for a later github/codeql-action/upload-sarif step. A parent
+      directory that does not exist is created. Empty (the default) writes
+      nothing.
       Findings are anchored to the contract snapshot named by snapshot-file when
       that file exists, because code scanning discards a result that carries no
       physical location. Setting this starts the server a second time: the job
@@ -76,7 +78,9 @@ outputs:
   sarif-file:
     description: >-
       Path the SARIF document was written to, or empty when sarif-file was unset
-      or the check could not produce one.
+      or the check produced no document. Guard the upload step on this output:
+      an empty value is not the same as an unset input to the step that reads
+      it.
     value: ${{ steps.check.outputs.sarif-file }}
 
 runs:
@@ -197,17 +201,27 @@ runs:
               $CLI check --lint-fail-on "$LINT_FAIL_ON" --stdio "$SERVER_COMMAND" --format sarif
             fi
           }
+          # The redirect, not the CLI, creates the file, so a path under a
+          # directory that does not exist fails before the run starts and
+          # leaves nothing behind.
+          mkdir -p "$(dirname "$SARIF_FILE")"
           sarif_run > "$SARIF_FILE" 2> "$RUNNER_TEMP/mcp-cassette-sarif.err"
           SARIF_STATUS=$?
           # The no-anchor warning lives here, and a consumer who never sees it
           # uploads a document code scanning accepts and then discards.
           cat "$RUNNER_TEMP/mcp-cassette-sarif.err" >&2 || true
-          # Exit 2 means the run produced no report, so the file is not a SARIF
-          # document. Saying so is better than handing the upload step a stub.
-          # It is a warning, not a failure: the text run above already decided
-          # the gate, and this must not turn a passing job red on its own.
-          if [ "$SARIF_STATUS" -ge 2 ]; then
-            echo "::warning::mcp-cassette wrote no SARIF: check could not inspect the server (exit $SARIF_STATUS)"
+          # A document exists only when the run reached its own exit at 0 or 1
+          # and wrote something. A usage error from an older pinned release, an
+          # uncaught exception, and a failed redirect all exit 1 too, and leave
+          # an empty file or none at all; exit 2 means the server could not be
+          # inspected or the anchor was rejected. Exposing the path in any of
+          # those cases hands the upload step a file that is not SARIF.
+          # Removing it and warning is better than a stub, and it stays a
+          # warning: the text run above already decided the gate, and this must
+          # not turn a passing job red on its own.
+          if [ "$SARIF_STATUS" -ge 2 ] || [ ! -s "$SARIF_FILE" ]; then
+            rm -f "$SARIF_FILE"
+            echo "::warning::mcp-cassette wrote no SARIF (check exit $SARIF_STATUS), see the log above"
           else
             echo "sarif-file=$SARIF_FILE" >> "$GITHUB_OUTPUT"
           fi

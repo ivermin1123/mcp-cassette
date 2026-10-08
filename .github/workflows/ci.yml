@@ -210,6 +210,14 @@ jobs:
       # Asserting the job went red proves nothing about that: it went red
       # before the fix too, for the wrong reason. What distinguishes the two is
       # whether the report was rendered at all, so that is what is asserted.
+
+      # Every run overwrites this file and none removes it, and the gates above
+      # already failed and rendered their own FAIL reports. Left in place, one
+      # of those satisfies the assertion below whether or not the step it
+      # covers rendered anything.
+      - name: Clear the previous report
+        run: rm -f "$RUNNER_TEMP/mcp-cassette-report.md"
+
       - name: Fail a gate and expect the report to be written anyway
         id: report-on-failure
         continue-on-error: true
@@ -235,8 +243,9 @@ jobs:
             echo "::error::the action failed its gate without rendering a report ($REPORT is missing)"
             exit 1
           fi
-          # Rendered, and rendered the failure: a stale report left by an
-          # earlier passing step would satisfy mere existence.
+          # Rendered, and rendered the failure: a report left by an earlier
+          # step would satisfy mere existence, which is why the step above
+          # removes it first.
           if ! grep -q 'mcp-cassette: ❌ FAIL' "$REPORT"; then
             echo "::error::the report exists but does not record the failure"
             cat "$REPORT"
@@ -257,7 +266,10 @@ jobs:
           snapshot-file: tests/fixtures/tiny-server-evil.snapshot.json
           mode: check
           version: local
-          sarif-file: action-check.sarif
+          # A subdirectory that no step creates. `results/` is the natural
+          # choice for a consumer, and upload-sarif defaults to one, so the
+          # action has to make the parent itself or it writes nothing.
+          sarif-file: out/action-check.sarif
           comment: 'false'
 
       - name: Assert the action's SARIF is anchored where code scanning keeps it
@@ -265,7 +277,7 @@ jobs:
           SARIF_OUTPUT: ${{ steps.action-sarif.outputs.sarif-file }}
         run: |
           set -euo pipefail
-          if [ "$SARIF_OUTPUT" != "action-check.sarif" ]; then
+          if [ "$SARIF_OUTPUT" != "out/action-check.sarif" ]; then
             echo "::error::the action did not expose the path it wrote (got '$SARIF_OUTPUT')"
             exit 1
           fi
@@ -278,7 +290,7 @@ jobs:
             // here is trivially true of an empty results array.
             const EXPECTED_RESULTS = 6;
 
-            const doc = JSON.parse(fs.readFileSync("action-check.sarif", "utf8"));
+            const doc = JSON.parse(fs.readFileSync("out/action-check.sarif", "utf8"));
             const run = doc.runs[0];
             console.log("results:", run.results.length);
 
@@ -367,7 +379,7 @@ jobs:
       # TINY_EVIL makes the fixture serve a poisoned tool and a broken schema,
       # so the document carries real findings rather than an empty `results`.
       # `check` exits non-zero on error-level findings by design, and the file is
-      # written before it does — the gate firing is the point, not a failure.
+      # written before it does: the gate firing is the point, not a failure.
       # The anchor is a committed snapshot of this same poisoned fixture, so
       # every finding points at the line in the repository that actually
       # declares the tool it is about. Anchoring to a file generated here and

@@ -119,7 +119,7 @@ jobs:
               echo "The latest official SDK still drives a classic-lifecycle stdio server the way mcp-cassette expects."
             else
               echo "**Signal:** the latest official SDK did not complete the classic lifecycle against the fixture server."
-              echo "This is upstream news, not a defect here — read the log before changing anything."
+              echo "This is upstream news, not a defect here. Read the log before changing anything."
             fi
             echo
             echo '```'
@@ -202,7 +202,7 @@ jobs:
           $CONFORMANCE server --help > "$RUNNER_TEMP/server-help.txt" 2>&1 || true
           if grep -qiE -- '--stdio|--command' "$RUNNER_TEMP/server-help.txt"; then
             echo "stdio=yes" >> "$GITHUB_OUTPUT"
-            echo "stdio support is present — running the suite against our replay"
+            echo "stdio support is present: running the suite against our replay"
             # The flag name follows the request in #258. If upstream shipped a
             # different spelling this run fails loudly here, which is the
             # correct outcome for a probe: the log then says what to change.
@@ -211,7 +211,7 @@ jobs:
             echo "run_status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
           else
             echo "stdio=no" >> "$GITHUB_OUTPUT"
-            echo "no stdio option yet — 'conformance server' still takes --url only"
+            echo "no stdio option yet: 'conformance server' still takes --url only"
             echo "tracking: https://github.com/modelcontextprotocol/conformance/issues/258"
           fi
 
@@ -262,7 +262,7 @@ jobs:
               echo "- stdio support: **present**"
               echo "- our replay against the active suite: **${PASS:-?} passed, ${FAIL:-?} failed**"
             else
-              echo "- stdio support: not yet — \`conformance server\` still takes \`--url\` only"
+              echo "- stdio support: not yet, \`conformance server\` still takes \`--url\` only"
               echo "- the suite cannot be pointed at \`replay\` until it does:"
               echo "  <https://github.com/modelcontextprotocol/conformance/issues/258>"
             fi

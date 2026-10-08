@@ -159,7 +159,7 @@ jobs:
 | `mode` | `both` | `check` (health + safety lint), `snapshot` (contract drift), or `both`. |
 | `fail-on` | `breaking` | Lowest drift tier that fails the job. `dangerous` also gates enum widening, default-value drift and added optional parameters. |
 | `lint-fail-on` | `error` | Lowest `CAS-L` safety-lint finding level that fails the job. `warn` is the stricter setting: it also gates the warn tier. `never` keeps the lint reporting without gating on it, and reaches the description lint only. |
-| `sarif-file` | *(empty)* | Write the lint findings as SARIF to this path, for a later `upload-sarif` step. Empty writes nothing. See [SARIF from the action](#sarif-from-the-action). |
+| `sarif-file` | *(empty)* | Write the check's findings, `CAS-C` and `CAS-L` alike, as SARIF to this path, for a later `upload-sarif` step. Empty writes nothing. See [SARIF from the action](#sarif-from-the-action). |
 | `comment` | `true` | Post and afterwards update one results comment. Ignored outside pull requests. |
 | `version` | pinned | Version of `mcp-cassette` to run from npm. |
 | `github-token` | `${{ github.token }}` | Needs `pull-requests: write` to comment. A fork's read-only token makes the action warn, not fail. |
@@ -424,7 +424,8 @@ steps:
       server-command: node dist/my-server.js
       sarif-file: mcp-cassette.sarif
 
-  - uses: github/codeql-action/upload-sarif@v3
+  - if: steps.contract.outputs.sarif-file != ''
+    uses: github/codeql-action/upload-sarif@v3
     with:
       sarif_file: ${{ steps.contract.outputs.sarif-file }}
       category: mcp-cassette
@@ -438,8 +439,11 @@ steps:
 Findings are anchored to `snapshot-file` when that file exists, and otherwise
 by the CLI's own resolution below. The path the action wrote is exposed as the
 `sarif-file` output, and that output stays empty when the input was unset or
-when the server could not be inspected at all, so the upload step is never
-handed a file that is not a SARIF document.
+when no document was produced, so the upload step is never handed a file that
+is not a SARIF document. The `if:` on the upload step is what turns that empty
+output into a skipped step: passed an empty `sarif_file`, `upload-sarif` fails
+with `Input required and not supplied` rather than falling back to its default,
+which would end the job at the upload with an error about the wrong thing.
 
 Setting `sarif-file` starts your server a second time. One `check` run emits one
 format, and both are wanted: the human-readable run is what the job log and the
