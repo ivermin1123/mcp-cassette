@@ -149,6 +149,39 @@ jobs:
             exit 1
           fi
 
+      # The two ends of `lint-fail-on`, against the same poisoned fixture, so
+      # the pair is a difference of one input and nothing else. TINY_EVIL serves
+      # a tool with error-level lint findings; `never` must report them and stay
+      # green, and the default must go red on them. Proving only the green half
+      # would pass just as well if the fixture had stopped being poisoned.
+      - name: Keep a poisoned server reporting without gating on it
+        uses: ./
+        with:
+          server-command: env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs
+          mode: check
+          version: local
+          lint-fail-on: never
+          comment: 'false'
+
+      - name: Gate the same poisoned server at the default level (expected to fail)
+        id: lint-gate
+        continue-on-error: true
+        uses: ./
+        with:
+          server-command: env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs
+          mode: check
+          version: local
+          comment: 'false'
+
+      - name: Assert the lint gate fired
+        env:
+          OUTCOME: ${{ steps.lint-gate.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::the safety lint passed a poisoned server (outcome: $OUTCOME)"
+            exit 1
+          fi
+
   # Half of `check --format sarif`: the half that can afford to run on every
   # commit. The suite already validates the document against the OASIS schema.
   # What the schema cannot express is the one rule that actually costs findings,

@@ -336,7 +336,11 @@ program
   // Kept permanently, not deprecated: it predates --format, it is in every
   // README and workflow written so far, and an alias costs one line.
   .option("--json", "alias for --format json")
-  .option("--fail-on <level>", "lowest finding level that fails the run: error | warn", "error")
+  .option(
+    "--fail-on <level>",
+    "lowest finding level that fails the run: error | warn | never (never reports every finding and gates on none)",
+    "error"
+  )
   .option(
     "--sarif-location <file>",
     "file in the repository to anchor SARIF findings to, e.g. mcp-contract.snapshot.json (default: the contract snapshot, if one exists)"
@@ -351,7 +355,8 @@ program
       "  # SARIF for GitHub code scanning, anchored to a committed file\n" +
       "  mcp-cassette check --stdio \"node dist/my-server.js\" \\\n" +
       "    --format sarif --sarif-location mcp-contract.snapshot.json > mcp-cassette.sarif\n\n" +
-      "Exit codes: 0 clean, 1 a finding at or above --fail-on.\n"
+      "Exit codes: 0 clean, 1 a finding at or above --fail-on, 2 the server could not be inspected.\n" +
+      "--fail-on never still reports and still exits 2 on a server that could not be inspected.\n"
   )
   .action(
     async (opts: {
@@ -364,8 +369,8 @@ program
       sarifLocation?: string;
     }) => {
     try {
-      if (opts.failOn !== "error" && opts.failOn !== "warn") {
-        process.stderr.write(`check: --fail-on must be error or warn (got '${opts.failOn}')\n`);
+      if (opts.failOn !== "error" && opts.failOn !== "warn" && opts.failOn !== "never") {
+        process.stderr.write(`check: --fail-on must be error, warn or never (got '${opts.failOn}')\n`);
         process.exit(2);
       }
       const format = opts.json ? "json" : opts.format;

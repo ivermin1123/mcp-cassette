@@ -62,6 +62,41 @@ risk map in the same file, and the fixture pair in `tests/lint-rules.test.ts`.
 The `CAS-C*` ids are under the same law but have no freeze gate; they live in
 `src/check.ts` and `src/sarif.ts`.
 
+## A new rule ships at `warn` before it may gate
+
+**A rule that is new to a release lands at `warn`, and may only be promoted to
+`error` in a later minor.** One minor at `warn` is the minimum; there is no
+maximum, and a rule that keeps producing findings people disagree with has not
+earned the promotion yet.
+
+The reason is arithmetic, not caution. An `error`-level rule added in a minor
+turns an unchanged server red on the day a consumer bumps the tag, so a release
+that adds rules is indistinguishable from a release that broke something. 0.3.0
+shipped three such rules at once, and the only escapes a consumer had were
+swallowing the whole rule set or dropping the lint from the gate entirely.
+
+Two things carry this now, and they are meant to be used together:
+
+- **Here, on the way in.** A pull request that adds a rule at `error` is asked
+  to land it at `warn` instead and say in [CHANGELOG.md](CHANGELOG.md) which
+  release it became visible in. The promotion is then its own entry in a later
+  minor, which is also where it belongs under `### BREAKING`: promoting a rule
+  can turn a consumer's passing gate red, which is the definition this
+  repository uses.
+- **There, on the way out.** The action's `lint-fail-on` input and
+  `check --fail-on` let a consumer keep the lint reporting while they work
+  through findings, so a rule that does graduate is adoptable rather than an
+  ultimatum.
+
+The discipline is upstream of the input, not replaced by it. `lint-fail-on`
+exists for the consumer who was surprised; shipping at `warn` is how we stop
+surprising them.
+
+This does not loosen the fixture-double law above. An `intent`-class rule is
+pinned at `warn` permanently by `tests/lint-rules.test.ts` and never graduates;
+what this section governs is the `shape`-class rule that is eventually allowed
+to gate.
+
 ## Negative claims decay
 
 **"This exists" stays true. "Nobody has done this" and "the name is free" stop

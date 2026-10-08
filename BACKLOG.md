@@ -8,9 +8,44 @@ picking the obvious implementation would be the mistake.
 
 ---
 
-## The action has no intermediate lint setting
+## The action has no intermediate lint setting: DECIDED
 
-**Raised** 2026-08-16, out of the 0.3.0 release notes.
+**Raised** 2026-08-16, out of the 0.3.0 release notes. **Decided** 2026-10-08:
+a `lint-fail-on: error|warn|never` input, spelled `never` rather than `none`,
+implemented as a third level of `check --fail-on` rather than as exit-code
+handling in the action, plus a release rule that new lint rules ship at `warn`
+for one minor before they may become `error`. Kept here for the measurement and
+for the mechanism not taken.
+
+**The decision, and the two questions it had to answer.**
+
+*Does it overlap `mode: snapshot`?* No, and the overlap was the reason to build
+it. `mode: snapshot` removes the report along with the gate; `never` keeps the
+check running, the findings in the log, the pull-request comment, and
+`check --format sarif`. The only thing it waives is the job result. The comment
+names the gate it passed under, so a green verdict over a log full of findings
+is accountable rather than confusing. `never` is also not a mute switch for a
+broken server: `check` exits 2 when the handshake or a listing fails, at every
+level, because a run that produced no report has nothing to waive.
+
+*Is this release discipline's job instead?* It is both, and the discipline is
+the upstream half. The input alone would have left every rule-adding release an
+ultimatum that consumers answer under deadline pressure. The rule written into
+[CONTRIBUTING.md](CONTRIBUTING.md) is what stops the cliff from forming; the
+input is what the consumer who already hit one reaches for.
+
+**The mechanism, and why the other one was not taken.** The level is passed to
+the CLI (`check --fail-on "$LINT_FAIL_ON"`) rather than applied to the exit code
+inside `action.yml`. The action had to pass a level through regardless, because
+`warn` has no other spelling: the lint step ran `$CLI check` bare, fixed at
+error. Once the flag is being passed, `never` costs one empty array in
+`src/check.ts`. Swallowing exit 1 in the action's gate step instead would have
+cost about as much shell, and bought two problems: it cannot tell a lint finding
+from any future non-lint exit 1, and it would give the action a level the CLI
+cannot express, so `mcp-cassette check` run locally could no longer reproduce
+what CI did.
+
+**The original entry, kept because the measurement is what argued for this:**
 
 A consumer of the composite action meeting a new lint rule has exactly two
 moves: swallow the whole rule set, or drop the lint from the gate with
@@ -29,7 +64,8 @@ three such rules.
 
 **Sketch, to be argued rather than assumed:** a `lint-fail-on` input taking
 `error｜warn｜none`, passed through to `check`, so a rule set can be adopted
-gradually.
+gradually. *(Shipped as `error｜warn｜never`: `none` reads as "no gate
+configured", which is the opposite of what the value asks for.)*
 
 **Why this is a design checkpoint:**
 

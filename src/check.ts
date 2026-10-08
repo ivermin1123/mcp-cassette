@@ -51,6 +51,8 @@ export interface CheckReport {
   resourceCount?: number;
   promptCount?: number;
   findings: CheckFinding[];
+  /** The gate `ok` was decided against, so a verdict can be read without the flag. */
+  failOn: CheckFailOn;
   ok: boolean;
 }
 
@@ -65,8 +67,15 @@ const TOOL_NAME_RE = /^[a-zA-Z0-9_.-]{1,128}$/;
  * to pass a mute flag, which is the one outcome worse than not reporting them.
  * `warn` is there for anyone who wants the stricter gate deliberately, and it
  * reads the same way as `snapshot --fail-on`.
+ *
+ * `never` reports every finding and gates on none of them. It exists because
+ * the alternative a consumer reaches for when a new rule lands mid-sprint is
+ * dropping the lint altogether, which removes the report as well as the gate.
+ * It cannot hide a server that could not be inspected: a failed handshake or an
+ * unreadable listing throws before a report exists, and the caller still exits
+ * non-zero on it.
  */
-export type CheckFailOn = "error" | "warn";
+export type CheckFailOn = "error" | "warn" | "never";
 
 export async function runCheck(
   target: Target,
@@ -181,7 +190,7 @@ export async function runCheck(
       }
     }
 
-    const fails = failOn === "warn" ? ["error", "warn"] : ["error"];
+    const fails = failOn === "never" ? [] : failOn === "warn" ? ["error", "warn"] : ["error"];
     const ok = !findings.some((f) => fails.includes(f.level));
     return {
       target: targetLabel,
@@ -191,6 +200,7 @@ export async function runCheck(
       resourceCount,
       promptCount,
       findings,
+      failOn,
       ok,
     };
   } finally {
@@ -225,5 +235,7 @@ export function printReport(report: CheckReport): void {
   line();
   const errors = report.findings.filter((f) => f.level === "error").length;
   const warns = report.findings.filter((f) => f.level === "warn").length;
-  line(`result: ${report.ok ? "PASS" : "FAIL"} (${errors} error(s), ${warns} warning(s))`);
+  line(
+    `result: ${report.ok ? "PASS" : "FAIL"} (${errors} error(s), ${warns} warning(s), gate: ${report.failOn})`
+  );
 }

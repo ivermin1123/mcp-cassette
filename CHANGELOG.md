@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [Unreleased]
+
+### Added
+
+- **`lint-fail-on` input on the action, and `check --fail-on never`.** The
+  safety lint can now report without gating. `lint-fail-on: error` is the
+  default and is exactly today's behaviour; `warn` also gates the warn tier;
+  `never` runs the check, writes every finding to the job log, the pull-request
+  comment and `check --format sarif`, and does not fail the job over them. It is
+  not a way to green an unreachable server: a failed handshake or an unreadable
+  listing still exits 2 and still fails the job at every level, because a run
+  that produced no report has nothing to waive. The comment names the gate it
+  passed under. An unknown value is rejected by the action before the CLI runs,
+  the way `mode`, `fail-on` and `version` already are.
+
+  This is the half a consumer reaches for after a rule has already surprised
+  them. The other half is release discipline, now written into
+  [CONTRIBUTING.md](CONTRIBUTING.md): a rule that is new to a release ships at
+  `warn`, and may only be promoted to `error` in a later minor, so an upgrade
+  that adds rules cannot turn an unchanged server red on the day it lands.
+
+### Changed
+
+- **`check` names its gate in the report.** The text report's result line now
+  ends `, gate: error` (or `warn`, or `never`), and `--format json` carries the
+  same value as `failOn`. Without it, `result: PASS` over six error-level
+  findings reads as a bug rather than as the level that was asked for.
+
+  `failOn` is a required field of the exported `CheckReport` interface, so the
+  rare library caller who builds one by hand (rather than taking the one
+  `runCheck` returns) has one property to add.
+
 ## [0.5.0] - 2026-10-08
 
 Protocol revision 2026-07-28 moved sampling, elicitation and roots into

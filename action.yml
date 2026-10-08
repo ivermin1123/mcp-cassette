@@ -30,6 +30,15 @@ inputs:
       gate enum widening, default-value drift and added optional parameters.
     required: false
     default: breaking
+  lint-fail-on:
+    description: >-
+      Lowest safety-lint finding level that fails the job: "error", "warn" to
+      also gate on the warn tier, or "never" to keep the lint reporting without
+      gating on it. "never" still runs the check, still writes its output to the
+      log and the pull-request comment, and still fails the job when the server
+      cannot be inspected at all.
+    required: false
+    default: error
   comment:
     description: >-
       Post (and afterwards update in place) a single results comment on the pull
@@ -61,6 +70,7 @@ runs:
       env:
         MODE: ${{ inputs.mode }}
         FAIL_ON: ${{ inputs.fail-on }}
+        LINT_FAIL_ON: ${{ inputs.lint-fail-on }}
         COMMENT: ${{ inputs.comment }}
         VERSION: ${{ inputs.version }}
         ACTION_PATH: ${{ github.action_path }}
@@ -74,6 +84,10 @@ runs:
         case "$FAIL_ON" in
           breaking|dangerous) ;;
           *) echo "::error::fail-on must be breaking or dangerous (got '$FAIL_ON')"; exit 1 ;;
+        esac
+        case "$LINT_FAIL_ON" in
+          error|warn|never) ;;
+          *) echo "::error::lint-fail-on must be error, warn or never (got '$LINT_FAIL_ON')"; exit 1 ;;
         esac
         case "$COMMENT" in
           true|false) ;;
@@ -125,9 +139,14 @@ runs:
       env:
         CLI: ${{ steps.setup.outputs.cli }}
         SERVER_COMMAND: ${{ inputs.server-command }}
+        LINT_FAIL_ON: ${{ inputs.lint-fail-on }}
       run: |
         set -uo pipefail
-        $CLI check --stdio "$SERVER_COMMAND" 2>&1 | tee "$RUNNER_TEMP/mcp-cassette-check.log"
+        # The gate level goes to the CLI rather than being applied to the exit
+        # code here: `never` has to keep exit 2 meaning "the server could not be
+        # inspected", and only `check` itself knows which of the two it hit.
+        $CLI check --fail-on "$LINT_FAIL_ON" --stdio "$SERVER_COMMAND" 2>&1 \
+          | tee "$RUNNER_TEMP/mcp-cassette-check.log"
         echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
     - name: Contract drift
@@ -166,6 +185,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         MODE: ${{ inputs.mode }}
         FAIL_ON: ${{ inputs.fail-on }}
+        LINT_FAIL_ON: ${{ inputs.lint-fail-on }}
         SNAPSHOT_FILE: ${{ inputs.snapshot-file }}
         COMMENT: ${{ inputs.comment }}
         CHECK_STATUS: ${{ steps.check.outputs.status }}
