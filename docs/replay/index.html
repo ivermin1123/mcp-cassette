@@ -313,6 +313,27 @@ first three: ['echo', 'get-annotated-message', 'get-env']</code></pre>
 
 <p>Over HTTP the same rule runs through a stream rather than through stdout. The legacy standalone GET stream and a modern subscription stream are both held open and fed at the anchors, and a client that opens the stream after the anchor was already answered gets the frame on connect, because that is where the recording put it relative to what this session has done so far.</p>
 
+<h2>A task is a sequence, and sequences have two ends</h2>
+
+<p>The <code>io.modelcontextprotocol/tasks</code> extension is the one place where the answer to a request is not a value. A server that will take a while answers a <code>tools/call</code> with a handle (<code>resultType: "task"</code>) instead of a result, and the client polls <code>tasks/get</code> until the status is terminal. The obvious worry is timing: the client on replay will not poll at the interval it polled at while recording.</p>
+
+<p>It is not a worry, and the reason is worth stating because it is the same reason the rest of this page keeps giving. Replay is driven by the recording's order, not by a clock. Every poll for one task carries the same params, so they share a fingerprint and come out of one pool in recorded order: the client sees the recorded state sequence, one state per poll, and reaches the recorded end on the poll the recording ended on. Poll twice as fast and nothing changes. Poll fewer times and the session is still clean, because a client that lost interest is a client, not a failure.</p>
+
+<p>What does need deciding is the poll after the last recorded one, and the extension's own terminal states decide it:</p>
+
+<blockquote>
+  <p>Once the recorded sequence for a task id ends in a terminal status (<code>completed</code>, <code>failed</code> or <code>cancelled</code>), that last answer is served again for every further poll, without being consumed. If the recording ended on a non-terminal status, a further poll is a miss whose reason names the task id and the status the recording stopped on.</p>
+</blockquote>
+
+<p>Re-serving a terminal answer is not a tolerance, it is what the extension says is true: a finished task does not change. It is also the only thing that can answer a client which persisted its task id and came back after a restart, which the extension explicitly tells clients to do. The other half is the half that would be tempting to fudge. A recording that stopped while the task was still <code>working</code> holds no later state, and the convenient move is to keep serving <code>working</code> forever; that turns a client's completion check into an infinite loop against a file that was never going to finish. So it misses, and the message says which task and what to do about it:</p>
+
+<pre><code>mcp-cassette replay: fingerprint miss for "tasks/get": the recording holds 3 poll(s)
+for task "task-0001" and ends with status "working", which is not terminal: the task
+was still running when recording stopped, so there is no later state to serve.
+Re-record until the task reaches completed, failed or cancelled</code></pre>
+
+<p>Two neighbouring methods needed no new machinery at all, which is the part worth checking rather than claiming. <code>tasks/update</code> carries the client's <code>inputResponses</code>, which is the same field an MRTR retry carries, so it already falls under the rule that an answer bound to an input is never lent to a different one: answer <code>staging</code> where the recording answered <code>production</code> and it misses, under <code>--on-miss warn</code> too. And <code>notifications/tasks</code> is a server-initiated notification on a <code>subscriptions/listen</code> stream, so the position rule above already carries it, re-keyed to the subscription id the client's own listen request used.</p>
+
 <h2>What replay does not do</h2>
 
 <p>Three limits, stated as they are in the machine-readable index:</p>

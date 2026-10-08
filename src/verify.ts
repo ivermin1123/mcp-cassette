@@ -75,7 +75,11 @@ function isVolatileString(s: string): boolean {
 }
 
 /** Keys whose values are volatile by contract, at any depth. */
-const VOLATILE_KEYS = new Set(["_meta", "ttlMs"]);
+// `taskId` joins them for the tasks extension: a live server mints a fresh
+// handle for every run, so comparing one to the recorded one reports drift that
+// is only the server doing its job. `pollIntervalMs` and `lastUpdatedAt` are a
+// server's own pacing and clock; `createdAt` is caught by the timestamp rule.
+const VOLATILE_KEYS = new Set(["_meta", "ttlMs", "taskId", "pollIntervalMs", "lastUpdatedAt"]);
 
 const VOLATILE_SENTINEL = "[volatile]";
 
@@ -178,6 +182,19 @@ export function classifyPair(
 const LIFECYCLE_METHODS = new Set(["initialize"]);
 
 /**
+ * Methods whose params name a handle that died with the recorded session.
+ *
+ * A `tasks/get` carries the task id the recorded server minted. Re-firing it at
+ * a live server asks about a task that server has never heard of, so the answer
+ * is an error about an unknown handle rather than anything about drift. Verify
+ * reports these as skipped rather than diffing a question the live server could
+ * not have been asked. Re-polling properly means driving the task again from
+ * the `tools/call` that created it and following the new handle, which is a
+ * larger change than a diff pass.
+ */
+const TASK_SCOPED_METHODS = new Set(["tasks/get", "tasks/update", "tasks/cancel"]);
+
+/**
  * Ordered c2s requests that both have a recorded response and are worth
  * re-firing: notifications have no response by definition, lifecycle requests
  * are excluded, and unanswered requests can't be diffed against anything.
@@ -192,7 +209,7 @@ export function collectVerifyPairs(cassette: Cassette): VerifyPair[] {
   const pairs: VerifyPair[] = [];
   for (const entry of cassette.entries) {
     if (entry.type !== "frame" || entry.dir !== "c2s" || !isRequest(entry.frame)) continue;
-    if (LIFECYCLE_METHODS.has(entry.frame.method)) continue;
+    if (LIFECYCLE_METHODS.has(entry.frame.method) || TASK_SCOPED_METHODS.has(entry.frame.method)) continue;
     const response = responsesById.get(String(entry.frame.id));
     if (response) pairs.push({ request: entry.frame, response });
   }

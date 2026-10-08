@@ -192,6 +192,45 @@ server-to-client *request* (legacy sampling, elicitation, roots) is not
 replayed at all: replay counts them and says so, because originating a request
 means consuming the client's answer to it, which is a different machine.
 
+### Tasks: a sequence is the answer
+
+The `io.modelcontextprotocol/tasks` extension is the one place where the answer
+to a request is a sequence rather than a value. A server that will take a while
+answers with a task handle (`resultType: "task"`), and the client polls
+`tasks/get` until the status is terminal.
+
+Nothing in the format changes for it. Every poll for one task carries the same
+params, so they share a fingerprint and come out of one pool in recorded order,
+which is why the interval a client polls at never matters: it sees the recorded
+state sequence one state per poll, and reaches the recorded end on the poll the
+recording ended on. Polling fewer times than the recording did is a client that
+stopped early, not an error.
+
+What needs a rule is the poll *after* the last recorded one, and the extension's
+terminal states answer it:
+
+> Once the recorded sequence for a task id ends in a terminal status
+> (`completed`, `failed` or `cancelled`), that last answer is served again for
+> every further poll, without being consumed. If the recording ended on a
+> non-terminal status, a further poll is a miss whose reason names the task id
+> and the status the recording stopped on.
+
+A finished task is still finished, so re-serving its answer is the faithful
+thing and not a tolerance: it is also what answers a client that persisted the
+task id and came back after a restart. A recording that stopped mid-task holds
+no later state, and inventing one would tell the client a build finished that
+never did, so the miss says to re-record for longer instead.
+
+Two neighbouring methods need no rule of their own. `tasks/update` carries the
+client's `inputResponses`, which puts it under the same matching as an MRTR
+retry: it is matched on the input it carried and never borrows another
+recording's acknowledgment, because the rest of the task was built on the answer
+that was actually given. And `notifications/tasks` is a server-initiated
+notification on a `subscriptions/listen` stream, so it is replayed by the
+position rule above like any other, tagged with the subscription id the client's
+own listen request carried. Replay does not interpret the subscription filter;
+it matches the listen request's params as recorded.
+
 ### `state` / `seq`: scenario states
 
 v1 answers repeated identical requests from an ordered pool, which encodes

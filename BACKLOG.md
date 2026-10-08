@@ -250,6 +250,63 @@ emission, the README roadmap's server-initiated flows.
 
 ---
 
+## Two limits left by tasks replay
+
+**Raised** 2026-10-09, from the change that made the
+`io.modelcontextprotocol/tasks` extension replay. Neither blocks a tasks
+session from recording and replaying; both are places where replay serves the
+recording faithfully and the recording is not the whole truth.
+
+### `tasks/cancel` does not change the states a later poll receives
+
+Replay serves the recorded `tasks/get` sequence for a task id in order. A client
+that cancels earlier on replay than it did while recording still receives
+whatever states the recording holds next, including `working`, before reaching
+the recorded end.
+
+**Measured 2026-10-09** against a cassette recorded as working, cancel,
+working, completed. A client that polls once, sends `tasks/cancel`, then keeps
+polling reads:
+
+```text
+poll1       : working
+cancel      : {"resultType":"complete"}
+poll2       : working
+poll3       : completed
+poll4 (past): completed
+```
+
+The cancel is an ordinary request with its own recorded acknowledgment, and
+nothing ties it to the poll pool for its task id. The extension calls
+cancellation cooperative and says the task may still reach a non-`cancelled`
+terminal status, so this is defensible; it is recorded because a reader will
+reasonably expect a cancel to end the sequence.
+
+**Cost:** tying a recorded `tasks/cancel` to the poll pool for its task id, so a
+cancel jumps to the first recorded `cancelled` state if the recording has one.
+It needs a decision first: a recording where the server ignored the cancel has
+no such state, and replay must not invent one.
+
+### TTL is not enforced on a re-served terminal answer
+
+Once a recorded sequence ends terminal, replay serves that answer for every
+further poll, with no expiry. The extension lets a server discard a task after
+`ttlMs` and answer later polls with an error instead.
+
+**Measured 2026-10-09:** a cassette whose task completed with `ttlMs: 60000`
+answers a poll indefinitely, where the recorded server would have stopped after
+a minute. `verify` already treats `ttlMs` as volatile, because a live server's
+TTL is its own business, so the recorded number is not a deadline replay could
+honour against a wall clock anyway.
+
+**Cost:** a real expiry needs replay to hold a session clock and decide what a
+discarded task answers, which is a behaviour the recording does not contain
+unless the recorded session actually outlived the TTL. Worth doing only if a
+consumer is testing expiry handling, and then the honest fixture is a recording
+that holds the expired answer.
+
+---
+
 ## Four limits left by server-frame replay
 
 **Raised** 2026-10-08, from the review of the change that made replay originate
