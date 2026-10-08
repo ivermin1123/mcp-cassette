@@ -250,6 +250,87 @@ emission, the README roadmap's server-initiated flows.
 
 ---
 
+## Four limits left by server-frame replay
+
+**Raised** 2026-10-08, from the review of the change that made replay originate
+server frames. None of these is a regression: each is either a case that change
+did not cover or a pre-existing behaviour it made easy to reach. They are
+recorded here rather than fixed because each needs an owner decision about
+scope, not a patch.
+
+### Replay does not honour `notifications/cancelled` on a subscription
+
+A client that opens a `subscriptions/listen` and then cancels it, which on stdio
+means sending `notifications/cancelled` naming the listen request id, keeps
+receiving that subscription's recorded notifications until the cassette runs
+out. Replay treats every client notification as `silent` (`resolveFrame` in
+`src/replay.ts`) and has no cancellation state.
+
+**Measured:** no test covers it, because no fixture cancels. The recorded
+sessions this was built against never cancelled either, so a cassette that would
+exercise the fix does not exist yet.
+
+**Cost:** roughly five lines in `resolveFrame` to drop the live mapping, plus a
+fixture that cancels. The reason to wait is that a recording whose client
+cancelled would also hold whatever the server did next, and it is not yet clear
+whether replay should stop at the cancellation or follow the recording past it.
+
+### `--on-miss passthrough` on an unrecorded listen stalls the whole session
+
+A `subscriptions/listen` the cassette does not hold is an ordinary miss, and
+under `passthrough` a miss is forwarded through `MiniClient.relay`, which waits
+for a JSON-RPC response. A real server answers a listen only when it ends the
+subscription gracefully, so the forward does not return.
+
+**Measured:** the stdio front-end serialises every frame behind the in-flight
+forward (the `queue` chain in `runReplay`), so the stall is not confined to the
+listen: the session answers nothing after it. An official SDK client configured
+with `ClientOptions.listChanged` opens that listen on its own, without the
+caller asking for it, which is what makes this easy to hit.
+
+**Pre-existing:** the same holds for any request a server never answers, and did
+before server frames were replayed. The fix is a timeout or a method list that
+passthrough refuses to forward; both are a behaviour decision.
+
+### `record` keeps only the last connection when a client probes on a throwaway one
+
+The official SDK in `versionNegotiation: { mode: { pin } }` opens one connection
+for the `server/discover` probe and a second for the session. Each connection
+spawns its own `record` process against the same output path, and the second one
+under `--mode all` truncates the first.
+
+**Measured 2026-10-08:** recording a pinned modern session produced a cassette
+whose first entry was `subscriptions/listen`; the probe exchange was gone, and
+replaying it failed the client's negotiation with `the server did not offer
+pinned protocol version 2026-07-28 via server/discover`. Splicing the probe pair
+back in by hand made the replay work. Under the default `--mode once` the second
+spawn instead refuses to start, which fails the session with a clearer message
+but is no more usable.
+
+**Related:** `ensureWritable` and `CassetteWriter` in `src/record.ts`. An append
+mode, or a per-connection suffix, would fix it; both change what a cassette path
+means.
+
+### A frame recorded with two requests in flight is attributed to the wrong one
+
+The position rule parks a frame recorded while any answerable request is
+outstanding and releases it before whichever answer lands first
+(`scheduleServerFrames` in `src/replay.ts`). With requests A and B both in
+flight, a `notifications/progress` for B recorded in that window becomes B's
+frame only if B is answered first; otherwise replay emits it when it answers A,
+before the client has sent B.
+
+**Measured:** sequential clients, which is what every fixture and every recorded
+session here uses, are exact. The limit shows only with a client that pipelines,
+and the recording does carry enough to resolve it: `params._meta.progressToken`
+on a progress notification names the request it belongs to.
+
+**Cost:** matching the token is a small follow-up, and it only covers progress.
+`notifications/message` carries no such correlation under 2026-07-28, so the
+general case stays ambiguous and the rule above stays the fallback.
+
+---
+
 ## Schema-diff completeness: CANCELLED
 
 **Raised** 2026-08-16. **Cancelled** 2026-08-16, the same day, after

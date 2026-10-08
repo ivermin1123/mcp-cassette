@@ -153,7 +153,10 @@ the order the file already carries is the answer:
 The second sentence is what keeps a request's own `notifications/progress`
 where it belongs. On stdio those frames sit between the request and its
 response, so the first sentence alone would send a call's progress out before
-the client had even sent the call.
+the client had even sent the call. "Outstanding" means a request the recording
+goes on to answer: one the server never answered has no answer for anything to
+precede, so it holds nothing back and every later frame keeps the position it
+would have had without it.
 
 Four consequences are worth stating, because they are what the rule costs:
 

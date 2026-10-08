@@ -3,7 +3,7 @@
  * A stdio MCP server that speaks on its own, which the other fixture server
  * never does: it pushes change notifications no request asked for.
  *
- * No dependencies — plain newline-delimited JSON-RPC, like tiny-server.mjs.
+ * No dependencies, plain newline-delimited JSON-RPC, like tiny-server.mjs.
  *
  * Env flags:
  *   PUSHY_ERA=legacy (default)  classic lifecycle; an unsolicited

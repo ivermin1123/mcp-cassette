@@ -416,11 +416,12 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
         // the server's graceful closure much later.
         subscriptions++;
         holdOpen(res, frame.id);
+        release(listen.request, "before");
+        // The acknowledgment is the answer to the listen rather than a frame
+        // replayed at a position, so it is not counted among the pushed ones:
+        // the stdio front-end has to report the same number for the same file.
         const acknowledgment = acknowledgmentFor(index, listen);
-        if (acknowledgment) {
-          pushed++;
-          res.write(sseLine(acknowledgment));
-        }
+        if (acknowledgment) res.write(sseLine(acknowledgment));
         release(listen.request, "after");
         return;
       }

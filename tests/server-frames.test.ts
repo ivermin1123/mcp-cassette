@@ -23,7 +23,9 @@ import {
   buildReplayIndex,
   diagnoseMiss,
   handleExchange,
+  handleFrame,
   pendingServerFrames,
+  reportServerFrames,
   SUBSCRIPTION_ID_KEY,
 } from "../src/replay.js";
 import { startHttpReplay } from "../src/http-replay.js";
@@ -304,10 +306,88 @@ describe("subscriptions/listen", () => {
     expect(meta(after[2]!)).toBe(300);
   });
 
+  it("holds back a notification for a subscription this client never opened", () => {
+    const index = buildReplayIndex(MODERN);
+    // The client skips the listen and makes the call the change followed. The
+    // recorded tag names a subscription it has never heard of, and a conforming
+    // client correlates on exactly that tag, so the frame is held back.
+    const out = handleExchange(index, ask(78, "tools/call", { name: "add_tool", arguments: { name: "extra" } }));
+    expect(methodsOf(out)).toEqual(["#78"]);
+
+    const said: string[] = [];
+    reportServerFrames(index, 0, 0, (message) => said.push(message));
+    expect(said.join("\n")).toContain("belong to a subscription this client never opened");
+  });
+
   it("misses a listen the recording never held, and says so without inventing a stream", () => {
     const index = buildReplayIndex(stdioCassette([c2s(0, ask(1, "tools/list")), s2c(1, { jsonrpc: "2.0", id: 1, result: {} })]));
     const [out] = handleExchange(index, { ...LISTEN, id: 77 });
     expect(out).toMatchObject({ id: 77, error: { code: -32601 } });
+  });
+});
+
+describe("a listen the recording holds but cannot serve", () => {
+  const LISTEN = ask(2, "subscriptions/listen", { notifications: { toolsListChanged: true } });
+  const ACK = {
+    jsonrpc: "2.0" as const,
+    method: "notifications/subscriptions/acknowledged",
+    params: { _meta: { [SUBSCRIPTION_ID_KEY]: 2 }, notifications: { toolsListChanged: true } },
+  };
+  const ONE = stdioCassette([c2s(0, LISTEN), s2c(1, ACK), c2s(2, ask(3, "tools/list")), s2c(3, { jsonrpc: "2.0", id: 3, result: {} })], "modern");
+
+  it("says the subscription is already open rather than that the method was never recorded", () => {
+    const index = buildReplayIndex(ONE);
+    handleExchange(index, { ...LISTEN, id: 77 });
+    const diagnosis = diagnoseMiss(index, { ...LISTEN, id: 78 });
+    expect(diagnosis).toContain("this exact subscription was recorded 1 time(s), and every one is already open");
+    expect(diagnosis).not.toContain("no recorded request has method");
+  });
+
+  it("names the filter that drifted rather than the method, when the client asks for other notifications", () => {
+    const index = buildReplayIndex(ONE);
+    const diagnosis = diagnoseMiss(index, ask(77, "subscriptions/listen", { notifications: { resourcesListChanged: true } }));
+    expect(diagnosis).toContain("/notifications/toolsListChanged");
+    expect(diagnosis).not.toContain("no recorded request has method");
+  });
+});
+
+describe("handleFrame", () => {
+  it("returns the answer, not a frame the recording put in front of it", () => {
+    const PROGRESS = { jsonrpc: "2.0" as const, method: "notifications/progress", params: { progressToken: "p", progress: 1 } };
+    const index = buildReplayIndex(
+      stdioCassette([
+        c2s(0, ask(1, "tools/call", { name: "slow", arguments: {} })),
+        s2c(1, PROGRESS),
+        s2c(2, { jsonrpc: "2.0", id: 1, result: { content: "done" } }),
+      ])
+    );
+    // The single-frame API means "the frame to send back", and a cassette that
+    // happens to carry progress must not turn that into a notification.
+    expect(handleFrame(index, ask(90, "tools/call", { name: "slow", arguments: {} }))).toMatchObject({
+      id: 90,
+      result: { content: "done" },
+    });
+  });
+
+  it("returns the acknowledgment for a recorded listen", () => {
+    const LISTEN = ask(1, "subscriptions/listen", { notifications: { toolsListChanged: true } });
+    const index = buildReplayIndex(
+      stdioCassette(
+        [
+          c2s(0, LISTEN),
+          s2c(1, {
+            jsonrpc: "2.0",
+            method: "notifications/subscriptions/acknowledged",
+            params: { _meta: { [SUBSCRIPTION_ID_KEY]: 1 }, notifications: { toolsListChanged: true } },
+          }),
+        ],
+        "modern"
+      )
+    );
+    expect(handleFrame(index, { ...LISTEN, id: 55 })).toMatchObject({
+      method: "notifications/subscriptions/acknowledged",
+      params: { _meta: { [SUBSCRIPTION_ID_KEY]: 55 } },
+    });
   });
 });
 
@@ -439,13 +519,9 @@ describe("the modern era over stdio, end to end", () => {
 describe("the legacy standalone stream opened late", () => {
   const PUSHED = { jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri: "file:///config.json" } };
 
-  it("delivers what is already due the moment the client connects", async () => {
-    const file = path.join(tmpDir, "late-get.cassette.jsonl");
-    const entries: CassetteEntry[] = [
-      c2s(0, ask(1, "initialize")),
-      s2c(1, { jsonrpc: "2.0", id: 1, result: {} }),
-      { type: "chunks", t: 2, dir: "s2c", via: "get", chunks: [{ t: 2, frame: PUSHED }] } as CassetteEntry,
-    ];
+  /** One `initialize`, answered, and one frame the server pushed after it on the GET stream. */
+  function standaloneCassette(name: string): string {
+    const file = path.join(tmpDir, `${name}.cassette.jsonl`);
     const head = {
       type: "header",
       cassetteVersion: 2,
@@ -454,8 +530,33 @@ describe("the legacy standalone stream opened late", () => {
       transport: "http",
       era: "legacy",
     };
+    const entries: CassetteEntry[] = [
+      c2s(0, ask(1, "initialize")),
+      s2c(1, { jsonrpc: "2.0", id: 1, result: {} }),
+      { type: "chunks", t: 2, dir: "s2c", via: "get", chunks: [{ t: 2, frame: PUSHED }] } as CassetteEntry,
+    ];
     fs.writeFileSync(file, [head, ...entries].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    return file;
+  }
 
+  it("says so when an untagged frame comes due and nobody ever opened the stream", async () => {
+    const file = standaloneCassette("get-never-opened");
+    const [, stderr] = await withStderr(async () => {
+      const server = await startHttpReplay(file, { listen: "127.0.0.1:0" });
+      // The anchor is answered, so the frame is due, and the GET endpoint it
+      // belongs on was never opened: it waits, and the session says so.
+      await fetch(server.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(ask(9, "initialize")),
+      }).then((r) => r.text());
+      await server.close();
+    });
+    expect(stderr).toContain("came due with no stream open to carry them");
+  }, 20_000);
+
+  it("delivers what is already due the moment the client connects", async () => {
+    const file = standaloneCassette("late-get");
     const server = await startHttpReplay(file, { listen: "127.0.0.1:0" });
     // The anchor is answered before the stream exists, so the frame is waiting
     // rather than lost: this is the position it has in *this* session.
@@ -616,7 +717,7 @@ describe("the modern era over HTTP", () => {
     expect(server.misses()).toBe(0);
   }, 20_000);
 
-  it("says so when a frame comes due and no stream is open to carry it", async () => {
+  it("holds back a notification for a subscription nobody opened, and names that reason", async () => {
     const [server, stderr] = await withStderr(async () => {
       const s = await startHttpReplay(cassetteFile("modern-http-nostream"), { listen: "127.0.0.1:0" });
       // The call that the change notification follows, with nobody listening.
@@ -625,7 +726,7 @@ describe("the modern era over HTTP", () => {
       return s;
     });
     expect(server.misses()).toBe(0);
-    expect(stderr).toContain("came due with no stream open to carry them");
+    expect(stderr).toContain("belong to a subscription this client never opened");
   }, 20_000);
 
   it("holds nothing hostage: a session with an open subscription still closes", async () => {

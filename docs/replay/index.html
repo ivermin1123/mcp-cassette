@@ -320,8 +320,8 @@ first three: ['echo', 'get-annotated-message', 'get-env']</code></pre>
 <ul>
   <li>A replay answers from the recording, so it cannot compare models or servers and cannot tell you whether a live server still behaves that way. Use <code>verify</code> for that.</li>
   <li>Replay is a test double, not a conformance checker. A missing session id or a mismatched protocol header is a warning on stderr, never a protocol error.</li>
-  <li>Replay reproduces notifications the <em>server</em> initiated, at their recorded position. It does not originate server-to-client <em>requests</em>: legacy sampling, elicitation and roots are a direction of the protocol replay still does not speak, and it says how many it is holding back:
-    <pre><code>mcp-cassette replay: 1 server-initiated request(s) in the cassette are not replayed</code></pre>
+  <li>Replay reproduces notifications the <em>server</em> initiated, at their recorded position. It does not originate server-to-client <em>requests</em>: legacy sampling, elicitation and roots are a direction of the protocol replay still does not speak, and it says how many it is holding back. The message has this shape, and the count is whatever the cassette holds:
+    <pre><code>mcp-cassette replay: N server-initiated request(s) in the cassette are not replayed</code></pre>
   </li>
 </ul>
 
