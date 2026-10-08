@@ -6,7 +6,19 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
-## [Unreleased]
+## [0.6.0] - 2026-10-08
+
+Replay now sends what the recorded server said on its own, where it said it:
+change notifications, the `subscriptions/listen` stream of protocol revision
+2026-07-28, and the legacy `list_changed` frames, in both eras and over both
+transports. Until this release a cassette that held them replayed as if the
+server had never spoken. The action gains a setting between gating on the
+safety lint and switching it off: `lint-fail-on: never` keeps the lint and its
+comment without failing the job, while a broken schema still fails it.
+
+Both changes are BREAKING for some callers, listed below, so this is a minor.
+Workflows using the action are not affected by either: its default behaviour
+is unchanged.
 
 ### BREAKING
 
@@ -551,6 +563,7 @@ Packaging fixes for the first release.
 First public release: stdio record/replay, contract snapshots, safety checks,
 secrets redaction, and the `verify` command.
 
+[0.6.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.6.0
 [0.5.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.5.0
 [0.4.1]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.4.0
