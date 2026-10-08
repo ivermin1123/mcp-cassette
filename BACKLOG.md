@@ -8,9 +8,51 @@ picking the obvious implementation would be the mistake.
 
 ---
 
-## The action has no intermediate lint setting
+## The action has no intermediate lint setting: DECIDED
 
-**Raised** 2026-08-16, out of the 0.3.0 release notes.
+**Raised** 2026-08-16, out of the 0.3.0 release notes. **Decided** 2026-10-08:
+a `lint-fail-on: error|warn|never` input, spelled `never` rather than `none`,
+carried by a new `check --lint-fail-on` level rather than by the existing
+`--fail-on`, plus a release rule that new lint rules ship at `warn` and may not
+graduate to `error` for one minor release and four weeks. Kept here for the
+measurement and for the mechanisms not taken.
+
+**The decision, and the three questions it had to answer.**
+
+*Does it overlap `mode: snapshot`?* No, and the overlap was the reason to build
+it. `mode: snapshot` removes the report along with the gate; `never` keeps the
+check running, the findings in the log, and the pull-request comment, which
+names the gate it passed under so a green verdict over a log full of findings is
+accountable rather than confusing.
+
+*What exactly may it waive?* The `CAS-L` description lint, and nothing else.
+That is the only part of a check that is an opinion about text an attacker
+wrote. A `CAS-C` finding is the other kind: a duplicate tool name or an
+`inputSchema` that is not valid JSON Schema is the server being broken, so it
+still fails at `never`. So does a server that could not be inspected at all,
+which exits 2 at every level, because a run that produced no report has nothing
+to waive. Without that boundary an input named for the lint would be a mute
+switch for the health check, which is the one thing it must not become.
+
+*Is this release discipline's job instead?* It is both, and the discipline is
+the upstream half. The input alone would have left every rule-adding release an
+ultimatum that consumers answer under deadline pressure. The rule written into
+[CONTRIBUTING.md](CONTRIBUTING.md) is what stops the cliff from forming; the
+input is what the consumer who already hit one reaches for.
+
+**The mechanisms not taken.**
+
+- *Swallowing exit 1 in the action's gate step, leaving the CLI alone.* It
+  cannot tell a waived lint finding from a structural error or from any future
+  non-lint exit 1, which is exactly the boundary above. It would also give the
+  action a level the CLI cannot express, so `mcp-cassette check` run locally
+  could no longer reproduce what CI did.
+- *A third level on the existing `check --fail-on`.* Rejected once the boundary
+  was clear: `--fail-on` spans every finding, so a `never` on it would waive
+  `CAS-C` too. `--lint-fail-on` is its own flag, defaulting to `--fail-on` so
+  that `--fail-on warn` keeps gating lint warnings exactly as it did before.
+
+**The original entry, kept because the measurement is what argued for this:**
 
 A consumer of the composite action meeting a new lint rule has exactly two
 moves: swallow the whole rule set, or drop the lint from the gate with
@@ -29,7 +71,8 @@ three such rules.
 
 **Sketch, to be argued rather than assumed:** a `lint-fail-on` input taking
 `error｜warn｜none`, passed through to `check`, so a rule set can be adopted
-gradually.
+gradually. *(Shipped as `error｜warn｜never`: `none` reads as "no gate
+configured", which is the opposite of what the value asks for.)*
 
 **Why this is a design checkpoint:**
 

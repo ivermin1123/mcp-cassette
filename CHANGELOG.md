@@ -6,6 +6,65 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [Unreleased]
+
+### BREAKING
+
+- **`CheckReport` gains two required fields, `failOn` and `lintFailOn`.** A
+  report now carries the gates its `ok` was decided against, so a verdict can be
+  read without knowing which flags produced it.
+
+  *What you see:* TypeScript callers who build a `CheckReport` by hand, rather
+  than taking the one `runCheck` returns, fail to compile with the two
+  properties missing. Nothing changes at runtime, and nothing changes for a
+  caller who only consumes a report.
+
+  *What to do:* add `failOn: "error"` and `lintFailOn: "error"` to the literal,
+  or whichever levels it is standing in for. Both field types are now exported
+  from the entry point as `CheckFailOn` and `LintFailOn`, so they can be named
+  directly instead of through `CheckReport["lintFailOn"]`.
+
+  Optional fields would have been the compatible shape and the wrong one:
+  `printReport` would then render a gate the report does not actually know.
+
+### Added
+
+- **`lint-fail-on` input on the action, and `check --lint-fail-on`.** The
+  safety lint can now report without gating. `error` is the default and is
+  exactly today's behaviour; `warn` is the stricter setting, gating the warn
+  tier as well; `never` runs the check, writes every finding to the job log and
+  the pull-request comment, and does not fail the job over them. The comment
+  names the gate it passed under.
+
+  `never` reaches the `CAS-L` description lint and nothing else. A structural
+  `CAS-C` error (a duplicate tool name, an `inputSchema` that is not valid JSON
+  Schema) still fails the job, because that is the server being broken rather
+  than the linter having an opinion about text an attacker wrote. So does a
+  server that cannot be inspected at all, which still exits 2 at every level: a
+  run that produced no report has nothing to waive. An unknown value is rejected
+  by the action before the CLI runs, the way `mode`, `fail-on` and `version`
+  already are.
+
+  On the CLI the level is its own flag, `check --lint-fail-on <level>`, and it
+  defaults to whatever `--fail-on` is set to. `check --fail-on warn` therefore
+  still gates lint warnings exactly as it did before, and `--fail-on` itself is
+  unchanged: it has no `never`.
+
+  This is the half a consumer reaches for after a rule has already surprised
+  them. The other half is release discipline, now written into
+  [CONTRIBUTING.md](CONTRIBUTING.md): a rule that is new to a release ships at
+  `warn`, and may graduate to `error` only in a later minor and no sooner than
+  four weeks after the release that introduced it.
+
+### Changed
+
+- **`check` names its gates in the report.** The text report's result line now
+  ends `, gate: error)`, and `, gate: error, lint: never)` when the two differ.
+  `--format json` carries both as `failOn` and `lintFailOn`. Without them,
+  `result: PASS` over five error-level findings reads as a bug rather than as
+  the level that was asked for. The interface change this implies is under
+  BREAKING above.
+
 ## [0.5.0] - 2026-10-08
 
 Protocol revision 2026-07-28 moved sampling, elicitation and roots into

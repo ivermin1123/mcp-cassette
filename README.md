@@ -19,7 +19,7 @@ surface: 13 tools, 7 resources, 4 prompts
 
 [OK] no findings
 
-result: PASS (0 error(s), 0 warning(s))
+result: PASS (0 error(s), 0 warning(s), gate: error)
 ```
 
 ```
@@ -51,7 +51,7 @@ surface: 3 tools
 
 [OK] no findings
 
-result: PASS (0 error(s), 0 warning(s))
+result: PASS (0 error(s), 0 warning(s), gate: error)
 ```
 
 **A breaking contract change fails the build.**
@@ -144,6 +144,7 @@ jobs:
           snapshot-file: mcp-contract.snapshot.json
           mode: both            # check | snapshot | both
           fail-on: breaking     # or: dangerous
+          lint-fail-on: error   # or: warn | never
           comment: 'true'
 
       # Agent integration tests, offline, against a recorded cassette:
@@ -156,10 +157,28 @@ jobs:
 | `server-command` | *(required)* | Command that starts your MCP server on stdio. |
 | `snapshot-file` | `mcp-contract.snapshot.json` | The committed contract to diff against. Create it once with `mcp-cassette snapshot` and commit it. |
 | `mode` | `both` | `check` (health + safety lint), `snapshot` (contract drift), or `both`. |
-| `fail-on` | `breaking` | Lowest tier that fails the job. `dangerous` also gates enum widening, default-value drift and added optional parameters. |
+| `fail-on` | `breaking` | Lowest drift tier that fails the job. `dangerous` also gates enum widening, default-value drift and added optional parameters. |
+| `lint-fail-on` | `error` | Lowest `CAS-L` safety-lint finding level that fails the job. `warn` is the stricter setting: it also gates the warn tier. `never` keeps the lint reporting without gating on it, and reaches the description lint only. |
 | `comment` | `true` | Post and afterwards update one results comment. Ignored outside pull requests. |
 | `version` | pinned | Version of `mcp-cassette` to run from npm. |
 | `github-token` | `${{ github.token }}` | Needs `pull-requests: write` to comment. A fork's read-only token makes the action warn, not fail. |
+
+`lint-fail-on: never` is the setting for adopting a rule set gradually. The
+check still runs, every finding still reaches the job log and the pull-request
+comment, and the comment names the gate it passed under. It is deliberately not
+the same as dropping the lint with `mode: snapshot`, which removes the report
+along with the gate.
+
+What it waives is narrow, and the boundary is the point:
+
+| Still fails the job at `never` | Why |
+|---|---|
+| A structural `CAS-C` error: a duplicate tool name, an `inputSchema` that is not valid JSON Schema | That is the server being broken, not the linter having an opinion about text an attacker wrote. |
+| A server that cannot be inspected at all: a failed handshake, an unreadable listing | There is no report to waive. A `never` that greened this would pass hardest when it ran least. |
+
+`error` is the default and is what every existing workflow already does, so
+nothing changes for a consumer who does not set the input. `warn` moves the gate
+the other way: it is stricter than the default, not looser.
 
 A pull request from a fork gets a read-only `GITHUB_TOKEN`, so the comment is skipped there with a warning; the gate itself still runs and still blocks.
 
@@ -249,7 +268,7 @@ A process spawned by the client is a process the adapter does not own, so misses
 | `record -o <file> [--no-redact] [--mode once\|all] [--http <url> [--listen <host:port>]] -- <server cmd>` | Transparent stdio proxy; captures every JSON-RPC frame (both directions) into an open JSONL cassette. Bytes are forwarded verbatim, so recording is invisible to both sides. Secrets are [redacted](#secrets-redaction) before they hit the file. `--mode once` (default) refuses to overwrite an existing cassette; `--mode all` always re-records. With `--http <url>` it records a **Streamable HTTP** session instead: a reverse proxy on `127.0.0.1:6402` (override with `--listen`) forwards every request to the upstream verbatim and relays the answer back streaming, capturing frames on the way through. Streamed (SSE) answers are captured as `chunks` entries, whole. Header *values* are never written (the cassette records that the server minted a session, never which one), and the lifecycle era is decided by the first *successful* exchange, so a dual-era client's failed probe is recorded honestly without deciding it. |
 | `replay <file> [--listen <host:port>] [--timing none\|recorded] [--on-miss error\|warn\|passthrough [-- <server cmd>]]` | Serves the cassette as a deterministic MCP server: on stdio by default, or over Streamable HTTP with `--listen` (HTTP cassettes only; a stdio cassette is refused loudly). Requests are matched by method + arguments (volatile `_meta` ignored), so one cassette serves either lifecycle era; repeated identical calls replay in recorded order; unrecorded `ping` is synthesized. Matching is exact: a request whose fingerprint was never recorded, or whose recordings are all spent, is a miss. An MRTR retry (2026-07-28: the same call repeated with `inputResponses` and `requestState`) is matched on what it answered too, so a retry that declines where the recording accepted is a miss, not the recorded outcome. A miss comes with near-miss diagnostics (closest recorded fingerprint + exactly which component diverged) and follows `--on-miss`: **error** (default) answers with a JSON-RPC error and exits 1 at session end; **warn** exits 0 and adds one tolerance, for arguments that change every run (timestamps, generated ids): it answers a miss with the next unused recording of the same method when one is left, naming what diverged on stderr every time, and with the JSON-RPC error otherwise (an MRTR retry never borrows, and a retry's answer is never lent); **passthrough** forwards the miss to the real server after `--` and appends the new interaction to the cassette tagged `origin:"live"`, over HTTP too, where a streamed live answer is appended as a `chunks` entry and relayed to the client still streaming. A live `input_required` answer is relayed like any other, so an MRTR exchange passes through, and is learned, one step at a time. Over HTTP the era comes from the cassette header and is never guessed: the recorded status is reproduced (including a non-default one like `400`), notifications get `202`, a legacy `sessioned` cassette mints a **fresh** session id per run and answers `DELETE`, and everything the era forbids answers `405` with `Allow`. A recorded streamed (SSE) answer is replayed as SSE, one `data:` line per frame, closing after the final one, and a recorded legacy standalone `GET` stream is served and held open; `--timing recorded` spaces the frames by their recorded offsets instead of emitting them back to back. Replay is a test double, not a conformance checker: a missing session id or a mismatched `Mcp-Method`/`MCP-Protocol-Version` is a warning on stderr, never a `400`. |
 | `verify <file> [--ignore <ptr>]* [--allow-changed-paths <ptr>]* -- <server cmd>` | Re-fires the recorded requests (in order, lifecycle excluded) at a live server and diffs each response against the recording. Volatile fields (`_meta`, `ttlMs`, timestamp/UUID-shaped values) are ignored by default; add project-specific JSON Pointers with `--ignore`. An MRTR exchange verifies end to end: the recorded retry is re-fired with its recorded `inputResponses` and the live server's own `requestState` (or none, if it minted none), whose value is opaque and never compared (whether one was sent is). Each pair is classified **MATCH** / **CHANGED** (with concrete paths) / **ERROR-SHAPE-CHANGED** (result↔error flip) / **MISSING** (no answer). Exit 1 on any non-match, unless every changed path falls under `--allow-changed-paths`; the explicit waive-everything switch is `--allow-all-changes` (an empty `--allow-changed-paths ""` is rejected, so an unset shell variable can't open that valve by accident). ⚠️ The recorded calls **execute for real** on the live server, so don't point `verify` at tools with side effects you can't repeat. Cassettes recorded with redaction (the default) re-fire placeholder credentials, so auth-bearing calls will report drift; the report says so in its header and suggests `--ignore` or a separate `--no-redact` recording. |
-| `check [--stdio "cmd" \| --url <url>] [--json]` | Lifecycle handshake, `tools/resources/prompts` listing, JSON Schema validation (ajv; draft-07 + 2020-12 by declared dialect), duplicate/name/description checks, and the safety lint below. Exit 1 on errors. |
+| `check [--stdio "cmd" \| --url <url>] [--json] [--fail-on error\|warn] [--lint-fail-on error\|warn\|never]` | Lifecycle handshake, `tools/resources/prompts` listing, JSON Schema validation (ajv; draft-07 + 2020-12 by declared dialect), duplicate/name/description checks, and the safety lint below. Exit 1 on a finding at or above its gate, exit 2 when the server could not be inspected at all. `--lint-fail-on` gates the `CAS-L` lint alone and defaults to `--fail-on`; its extra `never` level reports every lint finding and gates on none, which is what the action's `lint-fail-on` passes through, and it does not reach the structural `CAS-C` checks. |
 | `snapshot [--check] [--update] [--fail-on tier] [--json] [-f file]` | Canonical contract snapshot (tools + schemas + annotations). `--check` classifies drift into four tiers (below) and exits 1 at `--fail-on` (default `breaking`). `--json` emits the whole diff, rule IDs included, for tooling. |
 | `lint <cassette>` | Checks a cassette's header against its own frames: an era that claims `modern` while recording an `initialize` handshake, sessions or a standalone `GET` stream the modern era removed, a `stdio` header carrying a URL or a streamed answer, an `http` header carrying a spawn command. Exits 1 on any inconsistency. A cassette is an open text format, so it gets hand-edited; this is where that shows up instead of at replay time. |
 | `redact <cassette> -o <out> \| --scan` | Redact an existing cassette, or audit one in place. `--scan` writes nothing and exits 1 if it finds anything. |
@@ -330,6 +349,10 @@ The **evidence** column is the one to read first. It says whether text alone can
 They scan the tool's `description` and `title`, its `annotations`, and, because an attacker writes the whole schema rather than just its prose ([SAFE-T1501](https://github.com/fkautz/safe-mcp), full-schema poisoning), every `description`, `title`, `default`, `const`, `enum` and `examples` string at any depth of the input schema.
 
 `check` fails on error-level findings only. `check --fail-on warn` opts into the stricter gate, the same way `snapshot --fail-on` works.
+
+`check --lint-fail-on <error|warn|never>` moves the gate for these `CAS-L` rules alone, and is what the action's `lint-fail-on` input passes through. It defaults to whatever `--fail-on` is, so `--fail-on warn` still gates lint warnings exactly as it did before the flag existed. `never` reports every lint finding and gates on none; it does not reach the structural `CAS-C` checks (a duplicate tool name, an invalid `inputSchema`), which still fail, and every level still exits 2 when the server cannot be inspected at all.
+
+New rules reach you at `warn` first: a rule that is new to a release ships at `warn`, and may graduate to `error` only in a later minor and no sooner than four weeks after the release that introduced it. So at the default gate, an upgrade that adds rules cannot turn an unchanged server red on the day it lands. At `warn` you asked for the stricter gate and a new rule does fail you on arrival, which is the trade you made.
 
 Heuristics, not proofs: treat findings as review triggers, and pair with a dedicated security scanner for depth.
 

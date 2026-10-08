@@ -338,6 +338,11 @@ program
   .option("--json", "alias for --format json")
   .option("--fail-on <level>", "lowest finding level that fails the run: error | warn", "error")
   .option(
+    "--lint-fail-on <level>",
+    "the same, for the CAS-L safety lint alone: error | warn | never (default: --fail-on). " +
+      "never reports every lint finding and gates on none; a broken server still fails"
+  )
+  .option(
     "--sarif-location <file>",
     "file in the repository to anchor SARIF findings to, e.g. mcp-contract.snapshot.json (default: the contract snapshot, if one exists)"
   )
@@ -351,7 +356,9 @@ program
       "  # SARIF for GitHub code scanning, anchored to a committed file\n" +
       "  mcp-cassette check --stdio \"node dist/my-server.js\" \\\n" +
       "    --format sarif --sarif-location mcp-contract.snapshot.json > mcp-cassette.sarif\n\n" +
-      "Exit codes: 0 clean, 1 a finding at or above --fail-on.\n"
+      "Exit codes: 0 clean, 1 a finding at or above its gate, 2 the server could not be inspected.\n" +
+      "--lint-fail-on never waives the CAS-L lint only: a duplicate tool name or an invalid\n" +
+      "inputSchema (CAS-C) still fails, and so does a server that could not be inspected.\n"
   )
   .action(
     async (opts: {
@@ -361,11 +368,21 @@ program
       json?: boolean;
       format: string;
       failOn: string;
+      lintFailOn?: string;
       sarifLocation?: string;
     }) => {
     try {
       if (opts.failOn !== "error" && opts.failOn !== "warn") {
         process.stderr.write(`check: --fail-on must be error or warn (got '${opts.failOn}')\n`);
+        process.exit(2);
+      }
+      // Unset means "follow --fail-on", so the stricter gate keeps covering the
+      // lint and nothing about `--fail-on warn` changed when this flag landed.
+      const lintFailOn = opts.lintFailOn ?? opts.failOn;
+      if (lintFailOn !== "error" && lintFailOn !== "warn" && lintFailOn !== "never") {
+        process.stderr.write(
+          `check: --lint-fail-on must be error, warn or never (got '${opts.lintFailOn}')\n`
+        );
         process.exit(2);
       }
       const format = opts.json ? "json" : opts.format;
@@ -374,7 +391,7 @@ program
         process.exit(2);
       }
       const { target, label } = resolveTarget(opts);
-      const report = await runCheck(target, label, resolveEra(opts.era), opts.failOn);
+      const report = await runCheck(target, label, resolveEra(opts.era), opts.failOn, lintFailOn);
       if (format === "sarif") {
         const anchor = resolveSarifAnchor(opts);
         if (!anchor) process.stderr.write(NO_ANCHOR_WARNING);

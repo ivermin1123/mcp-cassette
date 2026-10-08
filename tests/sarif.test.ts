@@ -45,6 +45,8 @@ const report = (findings: CheckReport["findings"], ok = false): CheckReport => (
   protocolVersion: "2025-06-18",
   toolCount: 2,
   findings,
+  failOn: "error",
+  lintFailOn: "error",
   ok,
 });
 

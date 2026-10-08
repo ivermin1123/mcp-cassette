@@ -9,7 +9,7 @@
  * one comment showing the current state rather than twenty showing its history.
  *
  * Reads its inputs from the environment the action sets up:
- *   MODE, FAIL_ON, SNAPSHOT_FILE, COMMENT, EVENT_NAME, PR_NUMBER
+ *   MODE, FAIL_ON, LINT_FAIL_ON, SNAPSHOT_FILE, COMMENT, EVENT_NAME, PR_NUMBER
  *   CHECK_STATUS, SNAPSHOT_STATUS   (empty when that step was skipped)
  *   RUNNER_TEMP                     (holds the check log and the --json diff)
  *   GH_TOKEN, GITHUB_REPOSITORY     (for the comment; gh reads GH_TOKEN itself)
@@ -32,6 +32,7 @@ const env = process.env;
 const tmp = env.RUNNER_TEMP ?? process.cwd();
 const mode = env.MODE ?? "both";
 const failOn = env.FAIL_ON ?? "breaking";
+const lintFailOn = env.LINT_FAIL_ON ?? "error";
 
 const TIER_LABEL = {
   breaking: "🚨 breaking",
@@ -73,8 +74,10 @@ function renderCheck(status) {
   if (status === null) return "";
   const log = readIfPresent(path.join(tmp, "mcp-cassette-check.log")) ?? "(no output captured)";
   const verdict = status === 0 ? "✅ passed" : "❌ failed";
+  // The gate is named because `lint-fail-on: never` reports a pass over a log
+  // full of findings, and a verdict nobody can account for is read as a bug.
   return [
-    `**Safety check**: ${verdict}`,
+    `**Safety check** (gate: \`${lintFailOn}\`): ${verdict}`,
     "",
     "<details><summary>check output</summary>",
     "",
@@ -140,7 +143,7 @@ function render(checkStatus, snapshotStatus) {
     `### mcp-cassette: ${failed ? "❌ FAIL" : "✅ PASS"}`,
     renderCheck(checkStatus),
     renderDiff(snapshotStatus),
-    `<sub>mode: \`${mode}\`, gate: \`${failOn}\`. Rule IDs are stable, so match on those rather than on the wording.</sub>`,
+    `<sub>mode: \`${mode}\`, drift gate: \`${failOn}\`, lint gate: \`${lintFailOn}\`. Rule IDs are stable, so match on those rather than on the wording.</sub>`,
   ]
     .filter((part) => part !== "")
     .join("\n\n");

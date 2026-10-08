@@ -22,7 +22,7 @@ Or run without installing: `npx mcp-cassette <command>`. Node.js >= 20.
 
 - `record -o <file> -- <server command>`: sit between a client and a live server, write every message to a cassette.
 - `replay <cassette>`: serve the cassette as a real MCP server on stdio, or over Streamable HTTP with `--listen <host:port>`.
-- `check --stdio "<server command>"`: validate handshake and schemas, lint tool descriptions for poisoning. `--format text|json|sarif`. Exit 1 on a finding at or above `--fail-on`.
+- `check --stdio "<server command>"`: validate handshake and schemas, lint tool descriptions for poisoning. `--format text|json|sarif`. Two gates: `--fail-on error|warn` covers every finding, and `--lint-fail-on error|warn|never` covers the `CAS-L` description lint alone, defaulting to whatever `--fail-on` is. Exit 1 on a finding at or above its gate; `--lint-fail-on never` reports every lint finding and gates on none, while a structural `CAS-C` finding still fails. Exit 2 at every level when the server could not be inspected at all.
 - `snapshot --stdio "<server command>"`: write the tool contract to a file. With `--check`, diff a live server against it and exit 1 on a breaking change.
 - `verify <cassette> -- <server command>`: re-fire recorded requests at a live server and diff the answers.
 - `redact <cassette>`: redact secrets in an existing cassette, or `--scan` to audit without writing.

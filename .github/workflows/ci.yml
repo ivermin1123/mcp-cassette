@@ -149,6 +149,60 @@ jobs:
             exit 1
           fi
 
+      # The three cases that define `lint-fail-on`, each one input apart from
+      # its neighbour. TINY_POISONED serves a tool with error-level CAS-L
+      # findings on a server that is otherwise sound; TINY_EVIL adds a tool
+      # whose inputSchema is not valid JSON Schema. Proving only the green case
+      # would pass just as well if the fixture had stopped being poisoned, and
+      # proving only the two lint cases would not catch a `never` that had grown
+      # into a mute switch for the health check.
+      - name: Keep a poisoned server reporting without gating on it
+        uses: ./
+        with:
+          server-command: env TINY_POISONED=1 node tests/fixtures/tiny-server.mjs
+          mode: check
+          version: local
+          lint-fail-on: never
+          comment: 'false'
+
+      - name: Gate the same poisoned server at the default level (expected to fail)
+        id: lint-gate
+        continue-on-error: true
+        uses: ./
+        with:
+          server-command: env TINY_POISONED=1 node tests/fixtures/tiny-server.mjs
+          mode: check
+          version: local
+          comment: 'false'
+
+      # `never` covers the description lint, not the server being broken.
+      - name: Refuse to waive a structural error at never (expected to fail)
+        id: structural-gate
+        continue-on-error: true
+        uses: ./
+        with:
+          server-command: env TINY_EVIL=1 node tests/fixtures/tiny-server.mjs
+          mode: check
+          version: local
+          lint-fail-on: never
+          comment: 'false'
+
+      - name: Assert both gates fired
+        env:
+          LINT_OUTCOME: ${{ steps.lint-gate.outcome }}
+          STRUCTURAL_OUTCOME: ${{ steps.structural-gate.outcome }}
+        run: |
+          FAILED=0
+          if [ "$LINT_OUTCOME" != "failure" ]; then
+            echo "::error::the safety lint passed a poisoned server (outcome: $LINT_OUTCOME)"
+            FAILED=1
+          fi
+          if [ "$STRUCTURAL_OUTCOME" != "failure" ]; then
+            echo "::error::lint-fail-on never waived an invalid inputSchema (outcome: $STRUCTURAL_OUTCOME)"
+            FAILED=1
+          fi
+          exit "$FAILED"
+
   # Half of `check --format sarif`: the half that can afford to run on every
   # commit. The suite already validates the document against the OASIS schema.
   # What the schema cannot express is the one rule that actually costs findings,
