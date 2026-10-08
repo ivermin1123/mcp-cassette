@@ -86,6 +86,26 @@ recording. Matching is now exact unless you ask for the tolerance by name.
   does, exported for callers who want it; and `ReplayServer.borrowed()`, the
   count of answers `--on-miss warn` borrowed over HTTP.
 
+## [0.4.1] - 2026-10-08
+
+The action ran the wrong CLI. Its `version` input defaulted to `0.3.0`, so a
+workflow using `ivermin1123/mcp-cassette@v0.4` or `@v0` without a `version:`
+ran 0.3.0, the release whose `snapshot --check` stayed silent on breaking
+changes nested inside a schema and whose SARIF GitHub discarded. Those are the
+two defects 0.4.0 was cut to correct, and the action shipped with neither fix.
+This release changes that default and nothing else: the npm package is the
+0.4.0 code under a new number.
+
+### Fixed
+
+- **The action's `version` input now defaults to `0.4.1`.** Workflows on
+  `@v0.4` or `@v0` that pass no `version:` move from CLI 0.3.0 to 0.4.1 on
+  their next run, and with it pick up the 0.4.0 changes below, including the
+  nested-schema walk that can turn a green drift gate red against a server
+  nobody touched. Read the findings before assuming a regression, and pin
+  `version:` to choose when that happens. From the next release on,
+  `npm version` rewrites the default and a test fails the build if it drifts.
+
 ## [0.4.0] - 2026-08-16
 
 Two things this tool claimed to do, and did not. `snapshot --check` stayed
@@ -380,6 +400,7 @@ Packaging fixes for the first release.
 First public release: stdio record/replay, contract snapshots, safety checks,
 secrets redaction, and the `verify` command.
 
+[0.4.1]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.4.0
 [0.3.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.2.0

@@ -82,6 +82,44 @@ describe("the site pins the version it ships", () => {
 });
 
 /**
+ * The action's `version` input default is the CLI a consumer runs when they
+ * pass nothing, so it is a pin like the site's, and it rotted twice: it said
+ * 0.1.2 through 0.2.0 and 0.3.0 through 0.4.0, which put `@v0.4` on the very
+ * release 0.4.0 was cut to correct. Nothing failed, because the action works
+ * with any version; it just ran the wrong one.
+ */
+describe("the action runs the version it ships", () => {
+  const SYNC = path.join(ROOT, "scripts/sync-version-pins.mjs");
+  const actionDefault = (yaml: string) => /^ {2}version:\n(?: {4,}.*\n)*? {4}default: (.*)$/m.exec(yaml)?.[1];
+
+  it("defaults the `version` input to the manifest's version", () => {
+    const yaml = fs.readFileSync(path.join(ROOT, "action.yml"), "utf8");
+    expect(actionDefault(yaml), "action.yml's `version` default").toBe(pkg.version);
+  });
+
+  it("is repaired by the sync script, which rewrites every pin and only pins", () => {
+    const root = fs.mkdtempSync(path.join(tmpDir, "sync-"));
+    fs.mkdirSync(path.join(root, "docs/nested"), { recursive: true });
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "10.20.30" }));
+    fs.copyFileSync(path.join(ROOT, "action.yml"), path.join(root, "action.yml"));
+    fs.writeFileSync(
+      path.join(root, "docs/nested/page.html"),
+      "<code>npx mcp-cassette@0.1.2 check</code> <code>uses: ivermin1123/mcp-cassette@v0.4</code>"
+    );
+
+    execFileSync("node", [SYNC, root], { encoding: "utf8" });
+
+    const yaml = fs.readFileSync(path.join(root, "action.yml"), "utf8");
+    expect(actionDefault(yaml)).toBe("10.20.30");
+    const original = fs.readFileSync(path.join(ROOT, "action.yml"), "utf8");
+    expect(yaml.split("\n").filter((line, i) => line !== original.split("\n")[i])).toHaveLength(1);
+    expect(fs.readFileSync(path.join(root, "docs/nested/page.html"), "utf8")).toBe(
+      "<code>npx mcp-cassette@10.20.30 check</code> <code>uses: ivermin1123/mcp-cassette@v0.4</code>"
+    );
+  });
+});
+
+/**
  * An attribute value that is never closed does not break the page loudly. The
  * parser reads on to the next quote, which lands somewhere in the stylesheet,
  * and everything in between, the <style> tag included, becomes part of the

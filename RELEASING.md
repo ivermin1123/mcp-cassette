@@ -174,6 +174,13 @@ block again and revoke the token.
    > `--version` and the cassette `recorder` field both read it at runtime
    > through `src/version.ts`, and `tests/version.test.ts` fails if any of them
    > drifts back to a literal.
+   >
+   > Two things keep a copy that cannot read it at runtime: the action's
+   > `version` input default (the CLI a consumer gets when they pass nothing)
+   > and the site's `mcp-cassette@x.y.z` pins. `npm version` rewrites both
+   > through the `version` lifecycle script and commits them with the bump. If
+   > you edit `package.json` by hand, run `npm run sync-version` before you
+   > commit; `tests/version.test.ts` fails the build if either copy drifts.
 
 4. **Verify the tarball before pushing.**
 
