@@ -6,6 +6,76 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [Unreleased]
+
+### BREAKING
+
+- **`ReplayIndex` gains a required `volatile` field.** The index carries the
+  declared-volatile pointers in force for the session, the cassette header's own
+  followed by the invocation's, so every fingerprint in both front-ends is
+  computed over the same declaration.
+
+  *What you see:* a TypeScript caller who builds a `ReplayIndex` by hand, rather
+  than taking the one `buildReplayIndex` returns, fails to compile with
+  `volatile` missing. Nothing changes at runtime for a caller who only consumes
+  one, and an index built from a cassette that declares nothing carries an empty
+  list, which is exactly the old behaviour.
+
+  *What to do:* take the index from `buildReplayIndex`, which is the only
+  supported way to build one. It accepts the declarations as a second argument:
+  `buildReplayIndex(cassette, { volatile: ["/arguments/requestedAt"] })`.
+
+### Added
+
+- **Declared volatility: `replay --volatile <json-pointer>`, and a `volatile`
+  cassette header.** A request field that changes every run (a timestamp the
+  client stamps, an id it generates) can be named, and replay drops it before
+  matching instead of missing on it. This is the precise version of the
+  tolerance `--on-miss warn` gives approximately, and unlike warn it never
+  answers a request with another request's recording: everything that was not
+  declared is still matched exactly.
+
+  A declaration is a JSON Pointer into the request's `params`
+  (`/arguments/requestedAt`), optionally scoped to one method by naming that
+  method before a colon (`tools/call:/arguments/requestedAt`). A JSON Pointer
+  always starts with `/`, which is what tells the two forms apart, so a `:`
+  inside a pointer stays an ordinary character. The flag is repeatable, and the
+  same list may live in the cassette header as `volatile`, so a cassette carries
+  what is true of the recording while the invocation adds what is true of this
+  run; the two are added together. A malformed declaration is refused by name
+  while the index is built, rather than ignored, and so is one that names a
+  field replay itself matches a rule on: `/name` or `/inputResponses` on a
+  `tools/call`, `/taskId` on a `tasks/get`, `/inputResponses` on any method at
+  all. Dropping one of those would not loosen a match, it would change which
+  rule runs, and the request would then be answered with another tool's,
+  another retry's or another task's recording in silence. The same names stay
+  declarable on a method that does not match on them, so `prompts/get:/name`
+  and `tasks/update:/taskId` are accepted.
+
+  The pointer is dropped from both sides, the recorded request as the index is
+  built and the live one as it arrives, over stdio and over HTTP alike,
+  including the redacted-request path and the pools that hold streamed answers.
+  The miss diagnosis drops them too, so a miss never blames a field the session
+  already said would move: the paths it names are the ones that really diverged.
+  Nothing else bends. An MRTR retry still matches on the `inputResponses` it
+  carried and still never borrows, a `tasks/get` still pools per task and still
+  obeys the terminal rule, and `subscriptions/listen` still matches its own
+  params. A declaration decides what the fingerprint is computed over, not which
+  rule computes it.
+
+  Both test adapters take the same list, `useCassette(file, { volatile: [...] })`
+  in `mcp-cassette/vitest` and `mcp-cassette/jest` alike, because the option
+  lives in the one implementation they share. A stdio cassette carries the
+  declarations on the `command` the adapter hands back, since the process the
+  client spawns is the one that has to honor them.
+
+  *What you see:* nothing, unless you declare something. A cassette with no
+  `volatile` header replayed with no `--volatile` flag matches exactly as it did
+  before. An older mcp-cassette handed a cassette that carries the new header
+  field reads it without complaint, because an unknown header field has always
+  been ignorable; it just matches on the declared fields again, so a request
+  whose timestamp moved misses there.
+
 ## [0.7.0] - 2026-10-09
 
 Replay now serves the tasks extension: a task's polls come back in recorded

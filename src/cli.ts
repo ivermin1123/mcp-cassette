@@ -201,6 +201,19 @@ program
     }
   });
 
+/** Repeatable-option accumulator for commander. */
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+interface ReplayCliOptions {
+  onMiss: string;
+  listen?: string;
+  timing: string;
+  /** Repeatable `--volatile`; commander hands back the accumulated list. */
+  volatile: string[];
+}
+
 program
   .command("replay")
   .description("Serve a cassette as a real MCP server, so a client talks to it instead of the live one")
@@ -212,6 +225,12 @@ program
     "on fingerprint miss: error (fail the session), warn (answer with an error, exit 0), or passthrough (forward to the real server after -- and append the interaction)",
     "error"
   )
+  .option(
+    "--volatile <pointer>",
+    "a request field that changes every run, as a JSON Pointer into the request params (/arguments/requestedAt), optionally scoped to one method (tools/call:/arguments/requestedAt). Dropped before matching, on the recorded side too. Repeatable, and added to whatever the cassette header declares",
+    collect,
+    [] as string[]
+  )
   .argument("[command...]", "real server command for --on-miss passthrough (prefix with -- )")
   .addHelpText(
     "after",
@@ -219,9 +238,11 @@ program
       "  # point any MCP client at this command instead of the real server\n" +
       "  mcp-cassette replay session.cassette.jsonl\n\n" +
       "  # serve the same cassette over Streamable HTTP\n" +
-      "  mcp-cassette replay session.cassette.jsonl --listen 127.0.0.1:6402\n"
+      "  mcp-cassette replay session.cassette.jsonl --listen 127.0.0.1:6402\n\n" +
+      "  # ignore a field that changes every run, on this tool call only\n" +
+      "  mcp-cassette replay session.cassette.jsonl --volatile tools/call:/arguments/requestedAt\n"
   )
-  .action(async (cassette: string, command: string[], opts: { onMiss: string; listen?: string; timing: string }) => {
+  .action(async (cassette: string, command: string[], opts: ReplayCliOptions) => {
     try {
       if (opts.onMiss !== "error" && opts.onMiss !== "warn" && opts.onMiss !== "passthrough") {
         throw new Error(`replay: unknown --on-miss "${opts.onMiss}" (expected error, warn, or passthrough)`);
@@ -235,6 +256,7 @@ program
           onMiss: opts.onMiss,
           timing: opts.timing,
           serverCommand: command,
+          volatile: opts.volatile,
         });
         return;
       }
@@ -242,17 +264,16 @@ program
       if (opts.timing !== "none") {
         throw new Error("replay --timing applies to streamed answers, which only --listen serves. Add --listen or drop --timing");
       }
-      await runReplay(cassette, { onMiss: opts.onMiss as OnMissMode, serverCommand: command });
+      await runReplay(cassette, {
+        onMiss: opts.onMiss as OnMissMode,
+        serverCommand: command,
+        volatile: opts.volatile,
+      });
     } catch (err) {
       process.stderr.write(`${(err as Error).message}\n`);
       process.exit(1);
     }
   });
-
-/** Repeatable-option accumulator for commander. */
-function collect(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
 
 program
   .command("lint")
