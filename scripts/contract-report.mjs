@@ -143,7 +143,7 @@ function render(checkStatus, snapshotStatus) {
     `### mcp-cassette: ${failed ? "❌ FAIL" : "✅ PASS"}`,
     renderCheck(checkStatus),
     renderDiff(snapshotStatus),
-    `<sub>mode: \`${mode}\`, gate: \`${failOn}\`. Rule IDs are stable, so match on those rather than on the wording.</sub>`,
+    `<sub>mode: \`${mode}\`, drift gate: \`${failOn}\`, lint gate: \`${lintFailOn}\`. Rule IDs are stable, so match on those rather than on the wording.</sub>`,
   ]
     .filter((part) => part !== "")
     .join("\n\n");

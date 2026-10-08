@@ -103,10 +103,10 @@ surprising them. Note which one of them the input cannot help with: `never`
 waives `CAS-L` findings only, so a rule that belongs in the structural `CAS-C`
 set is not covered by any of this and should not be written as a lint rule.
 
-This does not loosen the fixture-double law above. An `intent`-class rule is
-pinned at `warn` permanently by `tests/lint-rules.test.ts` and never graduates;
-what this section governs is the `shape`-class rule that is eventually allowed
-to gate.
+This does not loosen the fixture pair that `tests/lint-rules.test.ts` requires of
+every rule. An `intent`-class rule is pinned at `warn` there permanently and
+never graduates; what this section governs is the `shape`-class rule that is
+eventually allowed to gate.
 
 ## Negative claims decay
 

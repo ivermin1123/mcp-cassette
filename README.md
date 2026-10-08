@@ -19,7 +19,7 @@ surface: 13 tools, 7 resources, 4 prompts
 
 [OK] no findings
 
-result: PASS (0 error(s), 0 warning(s))
+result: PASS (0 error(s), 0 warning(s), gate: error)
 ```
 
 ```
@@ -51,7 +51,7 @@ surface: 3 tools
 
 [OK] no findings
 
-result: PASS (0 error(s), 0 warning(s))
+result: PASS (0 error(s), 0 warning(s), gate: error)
 ```
 
 **A breaking contract change fails the build.**
@@ -352,7 +352,7 @@ They scan the tool's `description` and `title`, its `annotations`, and, because 
 
 `check --lint-fail-on <error|warn|never>` moves the gate for these `CAS-L` rules alone, and is what the action's `lint-fail-on` input passes through. It defaults to whatever `--fail-on` is, so `--fail-on warn` still gates lint warnings exactly as it did before the flag existed. `never` reports every lint finding and gates on none; it does not reach the structural `CAS-C` checks (a duplicate tool name, an invalid `inputSchema`), which still fail, and every level still exits 2 when the server cannot be inspected at all.
 
-New rules reach you at `warn` first: a rule that is new to a release ships at `warn`, and may graduate to `error` only in a later minor and no sooner than four weeks after the release that introduced it. An upgrade that adds rules cannot turn an unchanged server red on the day it lands.
+New rules reach you at `warn` first: a rule that is new to a release ships at `warn`, and may graduate to `error` only in a later minor and no sooner than four weeks after the release that introduced it. So at the default gate, an upgrade that adds rules cannot turn an unchanged server red on the day it lands. At `warn` you asked for the stricter gate and a new rule does fail you on arrival, which is the trade you made.
 
 Heuristics, not proofs: treat findings as review triggers, and pair with a dedicated security scanner for depth.
 
