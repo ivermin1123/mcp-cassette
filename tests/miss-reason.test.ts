@@ -223,12 +223,13 @@ describe("ReplayServer.takeMisses", () => {
   it("drains what happened since the last call, while misses() keeps counting", async () => {
     const server = await startHttpReplay(httpCassette("drain"), { listen: "127.0.0.1:0", onMiss: "warn" });
     try {
-      // matchResponse falls back to the method pool when the fingerprint misses,
-      // so the first wrong-argument call is *answered*, not missed. That is the
-      // engine's loose matching, and it has to be spent before a miss can happen.
+      // warn borrows from the method pool when the fingerprint misses, so the
+      // first wrong-argument call is *answered*, not missed. That loan has to
+      // be spent before a miss can happen.
       const answered = await post(server.url, call(1, "echo", { m: "wrong" }));
       expect(await answered.json()).toMatchObject({ result: { ok: true } });
       expect(server.takeMisses()).toEqual([]);
+      expect(server.borrowed()).toBe(1);
 
       await post(server.url, call(2, "echo", { m: "wrong" }));
       const first = server.takeMisses();
@@ -249,6 +250,21 @@ describe("ReplayServer.takeMisses", () => {
       expect(server.misses()).toBe(2);
       expect(server.takeMisses()).toEqual([]);
       expect(server.misses()).toBe(2);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("borrows nothing by default: a wrong-argument call is a miss on the first try", async () => {
+    const server = await startHttpReplay(httpCassette("strict"), { listen: "127.0.0.1:0" });
+    try {
+      const missed = await post(server.url, call(1, "echo", { m: "wrong" }));
+      expect(await missed.json()).toMatchObject({ error: { code: -32601 } });
+      expect(server.takeMisses()[0]!.reason.kind).toBe("arguments-differ");
+      expect(server.borrowed()).toBe(0);
+      // Nothing was lent, so the recording still answers the call it belongs to.
+      const hit = await post(server.url, call(2, "echo", { m: "recorded" }));
+      expect(await hit.json()).toMatchObject({ result: { ok: true } });
     } finally {
       await server.close();
     }

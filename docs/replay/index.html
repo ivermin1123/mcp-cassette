@@ -229,7 +229,7 @@ footer {
 
 <h2>replay: the recording answers</h2>
 
-<p>Replay reads that file and serves it as an MCP server on stdio (<a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/replay.ts">src/replay.ts</a>). Requests are fingerprinted and matched against recorded pairs: lifecycle calls by method, <code>tools/call</code> by tool name plus stable-stringified arguments, everything else by method plus params with the volatile parts (<code>_meta</code>, pagination cursors) removed. A fingerprint miss falls back to the next unconsumed response for the same method in recorded order, so a reordered test run still lands. A true miss reports the closest recorded fingerprint and exactly which component diverged.</p>
+<p>Replay reads that file and serves it as an MCP server on stdio (<a href="https://github.com/ivermin1123/mcp-cassette/blob/main/src/replay.ts">src/replay.ts</a>). Requests are fingerprinted and matched against recorded pairs: lifecycle calls by method, <code>tools/call</code> by tool name plus stable-stringified arguments, everything else by method plus params with the volatile parts (<code>_meta</code>, pagination cursors) removed. Matching is exact, so order does not matter: a reordered test run still lands, and repeated identical calls consume their recordings in turn. A miss reports the closest recorded fingerprint and exactly which component diverged. <code>--on-miss warn</code> adds one tolerance, for arguments that change every run: it may answer a miss with the next unused recording of the same method, and says so on stderr every time.</p>
 
 <p>The claim in the pitch is testable, so here it is tested: the same health check against a live reference server, then against the recording of it.</p>
 

@@ -109,6 +109,25 @@ describe("a streamed answer to a POST", () => {
     expect(server.misses()).toBe(0);
   });
 
+  it("serves a call its own recorded stream, never a borrowed JSON answer of the same method", async () => {
+    // A JSON-answered tools/call of another tool, unconsumed, beside the stream.
+    const other: CassetteEntry[] = [
+      { type: "frame", t: 0, dir: "c2s", frame: { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "lint", arguments: {} } } },
+      { type: "frame", t: 1, dir: "s2c", frame: { jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "lint" }] } } },
+    ] as CassetteEntry[];
+    for (const onMiss of ["error", "warn"] as const) {
+      const server = await startHttpReplay(cassette(`own-stream-${onMiss}`, { era: "legacy" }, [...other, ...STREAMED]), {
+        listen: "127.0.0.1:0",
+        onMiss,
+      });
+      const res = await post(server.url, call(31));
+      expect(res.headers.get("content-type")).toBe("text/event-stream");
+      await res.text();
+      await server.close();
+      expect(server.borrowed()).toBe(0);
+    }
+  });
+
   it("consumes the recorded stream exactly once, then diagnoses the extra call", async () => {
     const file = cassette("exhaust", { era: "legacy" }, STREAMED);
     const server = await startHttpReplay(file, { listen: "127.0.0.1:0" });

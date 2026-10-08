@@ -14,7 +14,33 @@ retries the same call carrying its answers in `inputResponses` and the
 server's `requestState`. The tool was dual-era before this, but three of its
 paths had never met a retry, and each one got it wrong.
 
+Fixing the first of them uncovered an older answer that was wrong in the same
+way: a request replay had never seen was quietly given another request's
+recording. Matching is now exact unless you ask for the tolerance by name.
+
 ### BREAKING
+
+- **`replay` matching is exact by default; borrowing moves behind
+  `--on-miss warn`.** When a request's exact fingerprint was never recorded,
+  replay used to answer it from the next unused recording of the same method,
+  whatever its arguments, and say nothing. Measured on 0.4.0: with only
+  `add {a:1, b:2}` recorded, `add {a:5, b:5}` got `"3"`, and the call that *was*
+  recorded then missed as "exhausted". Under `error` (the default) and
+  `passthrough` such a request is now a miss; under `passthrough` that means
+  it is forwarded, where before a recording of any tool could answer it first.
+  `warn` keeps the old tolerance for arguments that change every run, and names
+  the diverging paths on stderr for every borrowed answer. The vitest adapter
+  runs replay in `error` mode, so it matches exactly too.
+
+  *What you see:* a replay that passed under 0.4.0 can now miss with a
+  diagnosis such as `arguments differ at: /a (recorded 1, got 5); /b (recorded
+  2, got 5)`, and a passthrough session can append calls it used to answer
+  from the cassette.
+
+  *What to do:* read the diagnosis. If the argument is one that legitimately
+  changes every run (a timestamp, a generated id), run with `--on-miss warn` to
+  keep borrowing, and you will see each loan on stderr. Library callers who want
+  the old matching compose it: `matchResponse(index, req) ?? matchFallback(index, req)`.
 
 - **`replay` no longer answers a differently-answered MRTR retry with the
   recorded outcome.** A `tools/call` fingerprint was `name` + `arguments` only,
@@ -35,6 +61,11 @@ paths had never met a retry, and each one got it wrong.
 
 ### Fixed
 
+- **`replay --listen` serves a call its own recorded stream.** The same-method
+  borrowing ran before the stream pools were consulted, so a call whose answer
+  was recorded as a stream got any unused JSON answer of the same method
+  instead, from another tool if need be. Exact matches, JSON or streamed, now
+  always come first, under every `--on-miss` mode.
 - **`replay --on-miss passthrough` relays `input_required` to the client.** It
   used to treat the answer as a failed forward and send `-32603`, so an MRTR
   flow could not pass through at all. Both front-ends, stdio and HTTP, now
@@ -51,6 +82,9 @@ paths had never met a retry, and each one got it wrong.
 - `MiniClient.relay()`: send one request and get back whatever answered it,
   `input_required` included. `request()` keeps throwing `InputRequiredError`
   for callers with no input to give.
+- `matchFallback()`, the same-method borrowing that `matchResponse()` no longer
+  does, exported for callers who want it; and `ReplayServer.borrowed()`, the
+  count of answers `--on-miss warn` borrowed over HTTP.
 
 ## [0.4.0] - 2026-08-16
 
