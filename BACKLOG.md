@@ -143,8 +143,11 @@ answer prints the paths that diverged, and the session summary counts them. A
 suite that relied on the silent fallback finds out on its first 0.5.0 run and
 has a one-flag way back. The deciding fact was the reality check of the same
 day: no external user was found, so this is the cheapest moment the default
-will ever have to become honest. Declared volatility stays on the roadmap as
-the precise version of the same tolerance, for when someone asks for it.
+will ever have to become honest. Declared volatility stayed on the roadmap as
+the precise version of the same tolerance, and shipped in the Unreleased
+section: `replay --volatile <json-pointer>` and the `volatile` cassette header
+name the fields that change every run, and `fingerprint` drops them from both
+sides before matching.
 
 When a request's exact fingerprint was never recorded, `matchResponse` served
 the next unconsumed recording of the same *method* before it reported a miss.
@@ -182,14 +185,20 @@ back.
   honest answer.)*
 - **Replace it with declared volatility:** `--volatile <json-pointer>` (or a
   cassette-header list) that `fingerprint` drops, and no fallback at all. The
-  honest version, and a new public input. *(Not taken yet; on the roadmap.)*
+  honest version, and a new public input. *(Taken. Both inputs ship, scoped to
+  one method or to every one, dropped on the recorded side as well as the live
+  one and in the miss diagnosis too. The fallback stays where this entry put
+  it, behind `--on-miss warn`: a declaration is what replaces it for a suite
+  that wants the tolerance without the wrong answer.)*
 
 MRTR retries were already outside the fallback, in both directions, because a
 retry's answer is bound to the input it carried, and they stay outside it under
 `warn`.
 
-**Related:** `src/replay.ts` (`matchResponse`, `matchFallback`), the `replay`
-row in the README, CHANGELOG 0.5.0.
+**Related:** `src/replay.ts` (`matchResponse`, `matchFallback`, `fingerprint`),
+`tests/volatile.test.ts`, the `replay` row in the README, the "Declared
+volatility" section of `docs/cassette-format-v2.md`, CHANGELOG 0.5.0 and
+Unreleased.
 
 ---
 

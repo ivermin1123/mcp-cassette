@@ -1,0 +1,3 @@
+{"type":"header","cassetteVersion":2,"recorder":"mcp-cassette@fixture","startedAt":"2026-10-09T00:00:00Z","transport":"http","era":"modern","volatile":["/arguments/requestedAt"]}
+{"type":"frame","t":1,"dir":"c2s","frame":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"m":"hi","requestedAt":"2026-10-09T00:00:00Z","runId":"run-1"}}}}
+{"type":"frame","t":2,"dir":"s2c","frame":{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"recorded"}]}}}

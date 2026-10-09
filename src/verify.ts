@@ -16,7 +16,11 @@
  */
 
 import { Cassette } from "./cassette.js";
-import { DiffEntry, diffValues, formatValue, splitPointer } from "./diff.js";
+import { DiffEntry, diffValues, formatValue, removePointer, splitPointer } from "./diff.js";
+
+// Pointer removal moved next to the pointer parsing it is built on. Re-exported
+// here because verify is where callers have always imported it from.
+export { removePointer } from "./diff.js";
 import { EraOption, MiniClient, Target } from "./client.js";
 import { isRequest, isResponse, JsonRpcRequest, JsonRpcResponse } from "./jsonrpc.js";
 
@@ -119,29 +123,6 @@ export function normalizeForDiff(value: unknown): unknown {
   return value;
 }
 
-const IGNORED_SENTINEL = "[ignored]";
-
-/** Blank out the value at a JSON Pointer, if present. Missing paths are a no-op. */
-export function removePointer(value: unknown, pointer: string): void {
-  const segments = splitPointer(pointer);
-  if (segments.length === 0) return; // "" points at the root; nothing to remove it from
-  let parent: unknown = value;
-  for (const seg of segments.slice(0, -1)) {
-    if (Array.isArray(parent)) parent = /^\d+$/.test(seg) ? parent[Number(seg)] : undefined;
-    else if (parent && typeof parent === "object") parent = (parent as Record<string, unknown>)[seg];
-    else return;
-  }
-  const last = segments[segments.length - 1]!;
-  if (Array.isArray(parent)) {
-    // Replace, never splice: removal would re-index the tail and misalign the
-    // two payloads when their lengths differ. A non-numeric segment under an
-    // array is a typo'd pointer, not index 0, so leave the payload untouched.
-    if (!/^\d+$/.test(last) || Number(last) >= parent.length) return;
-    parent[Number(last)] = IGNORED_SENTINEL;
-  } else if (parent && typeof parent === "object") {
-    delete (parent as Record<string, unknown>)[last];
-  }
-}
 
 /** The opaque state an MRTR `input_required` result asks the retry to echo, if any. */
 function requestStateOf(res: JsonRpcResponse): string | undefined {

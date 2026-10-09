@@ -13,6 +13,9 @@
  *     (volatile `_meta` is ignored).
  *   - matching is exact: repeated identical calls consume their recordings in
  *     order, and anything else is a miss.
+ *   - fields declared volatile (`--volatile`, or the cassette header's own
+ *     list) are dropped from the request's params on both sides first, so a
+ *     request that differs only in a timestamp or a generated id still lands.
  *
  * If the cassette was recorded with redaction on, incoming requests are redacted
  * before fingerprinting: a client sending a live token produces the same
@@ -48,7 +51,9 @@ import {
   stableStringify,
 } from "./jsonrpc.js";
 import { Cassette, ChunksEntry, Direction, FrameEntry, readCassette } from "./cassette.js";
-import { diffValues, formatValue, type DiffEntry } from "./diff.js";
+// `removePointer` is the one pointer removal in the codebase, reused rather than
+// written twice: the array rule it already settled is the rule a fingerprint needs.
+import { diffValues, formatValue, removePointer, splitPointer, type DiffEntry } from "./diff.js";
 import { MiniClient } from "./client.js";
 import { redactFrame } from "./redact.js";
 
@@ -155,9 +160,197 @@ function isMrtrRetry(req: { params?: unknown }): boolean {
   return mrtrPart(req.params) !== undefined;
 }
 
-export function fingerprint(req: { method: string; params?: unknown }): string {
+/**
+ * Declared volatility: the request fields a user says change every run.
+ *
+ * A declaration is a JSON Pointer into the request's `params`
+ * (`/arguments/requestedAt`), optionally scoped to one method by naming that
+ * method before a colon (`tools/call:/arguments/requestedAt`). A JSON Pointer
+ * always starts with `/`, which is what tells the two forms apart with no
+ * ambiguity: a declaration that does not start with one must name a method
+ * first, and a `:` inside a pointer is an ordinary character.
+ *
+ * Both sides drop them before hashing, the recorded one as it is indexed and
+ * the live one as it arrives, so a request differing only in a declared field
+ * matches its recording. This is the precise version of the tolerance the
+ * same-method fallback used to give silently, and dropping happens in exactly
+ * one place (`fingerprint`) so the next pre-hash rewrite has one place to go.
+ */
+interface VolatileField {
+  /** Only requests with this method drop this pointer; every method when absent. */
+  method?: string;
+  pointer: string;
+}
+
+/**
+ * The fields replay reads to decide which rule applies, rather than to tell two
+ * requests apart.
+ *
+ * Erasing one of these does not loosen a match, it changes which rule runs, and
+ * every way that goes is a wrong answer delivered in silence: a `tools/call`
+ * that lost its `name` is answered with another tool's recording, a retry that
+ * lost its `inputResponses` falls into the pool of the call it retried while
+ * the fallback still refuses to lend it one, and a `tasks/get` that lost its
+ * `taskId` pools every task together and then re-serves one task's final state
+ * to a poll about another. That is the silent wrong answer this whole feature
+ * exists to replace, so a declaration naming one is refused instead of served.
+ *
+ * `inputResponses` is reserved on every method rather than on `tools/call`
+ * alone, because `isMrtrRetry` reads it on every method: `tasks/update` carries
+ * it too and travels under the same rule.
+ */
+const ENGINE_READ: readonly { method?: string; key: string; refusal: string }[] = [
+  {
+    key: "inputResponses",
+    refusal:
+      "replay matches on /inputResponses to tell a retry from the call it retried, on every method, " +
+      "so dropping it would answer a retry with the recording of the call it retried",
+  },
+  {
+    method: "tools/call",
+    key: "name",
+    refusal: "replay matches a tools/call on /name, so dropping it would answer a call with another tool's recording",
+  },
+  {
+    method: "tasks/get",
+    key: "taskId",
+    refusal:
+      "replay matches a tasks/get on /taskId, so dropping it would pool every task's polls together and " +
+      "serve one task's final state for another",
+  },
+];
+
+/**
+ * Refuse a declaration that would erase a field replay matches a rule on.
+ *
+ * An unscoped declaration reaches the rule's method as surely as a scoped one,
+ * so both are refused; only a declaration scoped to some other method is safe,
+ * which is what keeps `prompts/get:/name` and `tasks/update:/taskId` available.
+ */
+function checkEngineRead(spec: string, field: VolatileField): void {
+  const first = splitPointer(field.pointer)[0];
+  if (first === undefined) return;
+  for (const rule of ENGINE_READ) {
+    if (rule.key !== first) continue;
+    if (rule.method !== undefined && field.method !== undefined && field.method !== rule.method) continue;
+    throw new Error(
+      `mcp-cassette: cannot declare "${spec}" volatile: ${rule.refusal}` +
+        (rule.method === undefined ? "" : ". Scope the declaration to a method that does not match on it")
+    );
+  }
+}
+
+function parseVolatileField(spec: string): VolatileField {
+  // One message for both sources, because a declaration is the same thing
+  // whether the invocation passed it or the cassette header carries it.
+  const reject = (why: string): never => {
+    throw new Error(
+      `mcp-cassette: ${why}: "${spec}". A volatile declaration is a JSON Pointer into the request ` +
+        `params (/arguments/requestedAt), optionally scoped to one method ` +
+        `(tools/call:/arguments/requestedAt); it comes from replay --volatile or the cassette ` +
+        `header's "volatile" list`
+    );
+  };
+  const field = ((): VolatileField => {
+    // RFC 6901 calls "" a pointer, the whole document, so the empty forms are
+    // refused for what they would do rather than for being malformed: a
+    // declaration that erased all of `params` would make every request it
+    // applies to identical.
+    if (spec === "") return reject("the declaration names no field");
+    if (spec.startsWith("/")) {
+      splitPointer(spec); // rejects a pointer this engine cannot walk, by name
+      return { pointer: spec };
+    }
+    const colon = spec.indexOf(":");
+    if (colon === -1) return reject("neither a JSON Pointer nor a method-scoped one");
+    const method = spec.slice(0, colon);
+    const pointer = spec.slice(colon + 1);
+    if (method === "") return reject("the method scope is empty");
+    if (pointer === "") return reject(`the declaration names no field, only the method "${method}"`);
+    if (!pointer.startsWith("/")) return reject(`the pointer after "${method}:" does not start with "/"`);
+    splitPointer(pointer);
+    return { method, pointer };
+  })();
+  checkEngineRead(spec, field);
+  return field;
+}
+
+/**
+ * Parsed declarations, memoized on the very array they came in: every call of a
+ * session is handed the index's own list, so the parse happens once per replay
+ * rather than once per fingerprint.
+ */
+const parsedVolatile = new WeakMap<readonly string[], VolatileField[]>();
+
+/**
+ * Refuse a malformed declaration now rather than wherever it would next be
+ * read. `buildReplayIndex` does this for every replay; the test adapters call
+ * it while the suite is being collected, so a stdio cassette, whose
+ * declarations only reach a replay inside the child the client spawns, fails
+ * where the mistake is instead of inside that child's stderr.
+ */
+export function validateVolatile(specs: readonly string[]): void {
+  volatileFields(specs);
+}
+
+/** Parse a declaration list, naming a malformed declaration rather than ignoring it. */
+function volatileFields(specs: readonly string[]): VolatileField[] {
+  let fields = parsedVolatile.get(specs);
+  if (!fields) {
+    fields = specs.map(parseVolatileField);
+    parsedVolatile.set(specs, fields);
+  }
+  return fields;
+}
+
+/**
+ * A request's params with every declaration that applies to its method dropped,
+ * and the params themselves when nothing applies: a session that declares
+ * nothing never leaves the path it was on.
+ *
+ * The removal is verify's `removePointer`, deliberately rather than a second
+ * one: it blanks an array element instead of splicing it out, which is what a
+ * fingerprint needs (both sides get the same constant) and is what keeps two
+ * declared indices of one array from re-indexing each other.
+ */
+function dropVolatile(method: string, params: unknown, specs: readonly string[]): unknown {
+  if (specs.length === 0) return params;
+  const fields = volatileFields(specs).filter((f) => f.method === undefined || f.method === method);
+  if (fields.length === 0) return params;
+  const dropped = structuredClone(params);
+  for (const field of fields) removePointer(dropped, field.pointer);
+  return dropped;
+}
+
+/** The same request with its declared-volatile fields gone: what every comparison sees. */
+function withoutVolatile(index: ReplayIndex, req: JsonRpcRequest): JsonRpcRequest {
+  if (index.volatile.length === 0) return req;
+  return { ...req, params: dropVolatile(req.method, req.params, index.volatile) };
+}
+
+/**
+ * An incoming request in the shape the recording is keyed on: redacted if the
+ * cassette was, then with its declared-volatile fields dropped.
+ *
+ * The order is the recorder's. A redacted cassette holds placeholders because
+ * redaction ran at record time and the drop ran as the index was built, so a
+ * live request has to travel the same two steps in the same order to land on
+ * the same fingerprint. Both front-ends go through here rather than spelling
+ * the pair out, which is what keeps them from drifting apart and gives the next
+ * change to the request path one site instead of four.
+ */
+export function effectiveRequest(index: ReplayIndex, req: JsonRpcRequest): JsonRpcRequest {
+  const redacted = index.redactRequests ? (redactFrame(req) as JsonRpcRequest) : req;
+  return withoutVolatile(index, redacted);
+}
+
+export function fingerprint(
+  req: { method: string; params?: unknown },
+  /** Declared-volatile pointers, dropped before anything is hashed. */
+  volatile: readonly string[] = []
+): string {
   if (METHOD_ONLY.has(req.method)) return req.method;
-  const params = req.params as Record<string, unknown> | undefined;
+  const params = dropVolatile(req.method, req.params, volatile) as Record<string, unknown> | undefined;
   if (req.method === "tools/call" && params && typeof params === "object") {
     const call = `tools/call${SEP}${String(params.name)}${SEP}${stableStringify(params.arguments ?? {})}`;
     // Appended only when present, so every non-retry fingerprint is unchanged.
@@ -242,6 +435,12 @@ export interface ReplayIndex {
   serverInitiatedRequests: number;
   /** Recorded fingerprints are redacted, so incoming requests must be too. */
   redactRequests: boolean;
+  /**
+   * The declared-volatile pointers in force: the cassette header's own,
+   * followed by the ones the invocation added. Empty is the whole of the old
+   * behaviour, and the list is held as written so one parse covers the session.
+   */
+  volatile: readonly string[];
 }
 
 /**
@@ -446,7 +645,28 @@ function scheduleServerFrames(
   return { schedule, serverInitiatedRequests };
 }
 
-export function buildReplayIndex(cassette: Cassette): ReplayIndex {
+export function buildReplayIndex(
+  cassette: Cassette,
+  /** `volatile`: declarations from the CLI or an adapter, added to the cassette header's own. */
+  options: { volatile?: readonly string[] } = {}
+): ReplayIndex {
+  // Hand-editing the header is how a declaration gets into a cassette today, so
+  // its shape is checked before it is spread: a list that is not one, or one
+  // holding something other than strings, is refused by name like a malformed
+  // entry rather than reaching the parser as a TypeError.
+  const declared: unknown = cassette.header.volatile ?? [];
+  if (!Array.isArray(declared) || declared.some((entry) => typeof entry !== "string")) {
+    throw new Error(
+      `mcp-cassette: the cassette header's "volatile" must be a list of strings, got ${JSON.stringify(declared)}`
+    );
+  }
+  // Header first, invocation after: the cassette carries its own declaration
+  // and the run adds to it.
+  const volatile: readonly string[] = Object.freeze([...(declared as string[]), ...(options.volatile ?? [])]);
+  // Parsed (and cached) here so a malformed declaration is refused while the
+  // index is being built, by name, rather than thrown in the middle of a match.
+  volatileFields(volatile);
+
   const responsesById = new Map<string, JsonRpcResponse>();
 
   for (const entry of cassette.entries) {
@@ -473,7 +693,7 @@ export function buildReplayIndex(cassette: Cassette): ReplayIndex {
       // response pool, even on the rare recording that holds its closure.
       const listen = recorded.find((l) => l.request === frame);
       if (listen) {
-        const fp = fingerprint(frame);
+        const fp = fingerprint(frame, volatile);
         if (!listens.has(fp)) listens.set(fp, []);
         listens.get(fp)!.push(listen);
         // It is still a recorded request, so a listen that misses can be
@@ -489,7 +709,7 @@ export function buildReplayIndex(cassette: Cassette): ReplayIndex {
       continue;
     }
     recordedRequests.push(frame);
-    const fp = fingerprint(frame);
+    const fp = fingerprint(frame, volatile);
     if (!byFingerprint.has(fp)) byFingerprint.set(fp, []);
     byFingerprint.get(fp)!.push(response);
     // A retry's answer is bound to the input that retry carried. Handed to any
@@ -510,7 +730,7 @@ export function buildReplayIndex(cassette: Cassette): ReplayIndex {
     // recorded request would otherwise pay for a stable stringify of its params
     // that only a poll can use.
     if (request.method !== TASK_GET_METHOD) continue;
-    const fp = fingerprint(request);
+    const fp = fingerprint(request, volatile);
     const pool = byFingerprint.get(fp) ?? [];
     const last = pool[pool.length - 1];
     if (!last) continue;
@@ -534,6 +754,7 @@ export function buildReplayIndex(cassette: Cassette): ReplayIndex {
     serverFrames: schedule,
     serverInitiatedRequests,
     redactRequests: cassette.header.redaction?.applied === true,
+    volatile,
   };
 }
 
@@ -619,7 +840,7 @@ export function pendingServerFrames(index: ReplayIndex): number {
  * registered so every frame on it is re-keyed to the client's own.
  */
 export function matchListen(index: ReplayIndex, req: JsonRpcRequest): RecordedListen | null {
-  const fp = fingerprint(index.redactRequests ? (redactFrame(req) as JsonRpcRequest) : req);
+  const fp = fingerprint(effectiveRequest(index, req));
   const pool = index.listens.get(fp);
   if (!pool || pool.length === 0) return null;
   const listen = pool.shift()!;
@@ -638,7 +859,7 @@ export function acknowledgmentFor(index: ReplayIndex, listen: RecordedListen): J
 
 /** The recorded answer to exactly this request, consumed; null when there is none left. */
 export function matchResponse(index: ReplayIndex, req: JsonRpcRequest): JsonRpcResponse | null {
-  const fp = fingerprint(index.redactRequests ? (redactFrame(req) as JsonRpcRequest) : req);
+  const fp = fingerprint(effectiveRequest(index, req));
   const exact = index.byFingerprint.get(fp);
   if (exact && exact.length > 0) {
     const res = exact.shift()!;
@@ -742,8 +963,11 @@ export interface MissEvent {
  * arguments path?). This is what turns "no recorded response" into a fix.
  */
 export function diagnoseMissReason(index: ReplayIndex, req: JsonRpcRequest): MissReason {
-  const effective = index.redactRequests ? (redactFrame(req) as JsonRpcRequest) : req;
-  const fp = fingerprint(effective);
+  // Every comparison below runs on the declared fields' absence, on both sides.
+  // A field the user said changes every run must never be the path a miss
+  // blames: it is the one divergence the session already said to expect.
+  const incoming = effectiveRequest(index, req);
+  const fp = fingerprint(incoming);
 
   // Checked before the plain exhausted pool it is a special case of: "you polled
   // more than the recording did" is true of both, and only this one can say why
@@ -763,22 +987,24 @@ export function diagnoseMissReason(index: ReplayIndex, req: JsonRpcRequest): Mis
   // "Recorded but never answered" is its own cause. Reporting it as an unknown
   // method would be a lie about the file, and would send the reader looking for
   // a request that is sitting right there in the recording.
-  const unanswered = index.unansweredRequests.filter((r) => r.method === effective.method);
-  if (unanswered.some((r) => fingerprint(r) === fp)) {
-    return { kind: "recorded-unanswered", method: effective.method, exact: true };
+  const unanswered = index.unansweredRequests.filter((r) => r.method === incoming.method);
+  if (unanswered.some((r) => fingerprint(r, index.volatile) === fp)) {
+    return { kind: "recorded-unanswered", method: incoming.method, exact: true };
   }
   if (index.recordedRequests.length === 0 && unanswered.length === 0) return { kind: "empty-cassette" };
 
-  const sameMethod = index.recordedRequests.filter((r) => r.method === effective.method);
+  const sameMethod = index.recordedRequests
+    .filter((r) => r.method === incoming.method)
+    .map((r) => withoutVolatile(index, r));
   if (sameMethod.length === 0) {
-    if (unanswered.length > 0) return { kind: "recorded-unanswered", method: effective.method, exact: false };
+    if (unanswered.length > 0) return { kind: "recorded-unanswered", method: incoming.method, exact: false };
     const all = [...index.recordedRequests, ...index.unansweredRequests];
     const recordedMethods = [...new Set(all.map((r) => r.method))].sort();
-    return { kind: "unknown-method", method: effective.method, recordedMethods };
+    return { kind: "unknown-method", method: incoming.method, recordedMethods };
   }
 
-  if (effective.method === "tools/call") {
-    const wanted = String((effective.params as Record<string, unknown> | undefined)?.name);
+  if (incoming.method === "tools/call") {
+    const wanted = String((incoming.params as Record<string, unknown> | undefined)?.name);
     const byName = sameMethod.filter(
       (r) => String((r.params as Record<string, unknown> | undefined)?.name) === wanted
     );
@@ -787,24 +1013,24 @@ export function diagnoseMissReason(index: ReplayIndex, req: JsonRpcRequest): Mis
       return { kind: "unknown-tool", tool: wanted, recordedTools };
     }
     const argsOf = (r: JsonRpcRequest) => (r.params as Record<string, unknown>).arguments ?? {};
-    const changes = nearestChanges(byName.map(argsOf), argsOf(effective));
+    const changes = nearestChanges(byName.map(argsOf), argsOf(incoming));
     if (changes.length > 0) return { kind: "arguments-differ", changes };
     // The arguments equal a recording's, so what diverged is the MRTR retry
     // part: the input the client answered with, or the state it echoed back.
-    const sameArgs = byName.filter((r) => diffValues(argsOf(r), argsOf(effective)).length === 0);
+    const sameArgs = byName.filter((r) => diffValues(argsOf(r), argsOf(incoming)).length === 0);
     // A retry is nearest to a recorded retry, never to the call it retried:
     // "inputResponses recorded (absent)" would point at the wrong recording.
     const retries = sameArgs.filter(isMrtrRetry);
-    const candidates = isMrtrRetry(effective) && retries.length > 0 ? retries : sameArgs;
+    const candidates = isMrtrRetry(incoming) && retries.length > 0 ? retries : sameArgs;
     return {
       kind: "params-differ",
-      changes: nearestChanges(candidates.map((r) => mrtrPart(r.params) ?? {}), mrtrPart(effective.params) ?? {}),
+      changes: nearestChanges(candidates.map((r) => mrtrPart(r.params) ?? {}), mrtrPart(incoming.params) ?? {}),
     };
   }
 
   return {
     kind: "params-differ",
-    changes: nearestChanges(sameMethod.map((r) => r.params ?? {}), effective.params ?? {}),
+    changes: nearestChanges(sameMethod.map((r) => r.params ?? {}), incoming.params ?? {}),
   };
 }
 
@@ -1103,6 +1329,12 @@ export interface ReplayOptions {
   onMiss?: OnMissMode;
   /** Real server command, required for passthrough. */
   serverCommand?: string[];
+  /**
+   * Request fields that change every run, as JSON Pointers into the request
+   * `params`, each optionally scoped to one method. Added to whatever the
+   * cassette header declares; see `fingerprint`.
+   */
+  volatile?: readonly string[];
 }
 
 export async function runReplay(cassettePath: string, opts: ReplayOptions = {}): Promise<void> {
@@ -1114,7 +1346,7 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
   }
 
   const cassette = readCassette(cassettePath);
-  const index = buildReplayIndex(cassette);
+  const index = buildReplayIndex(cassette, { volatile: opts.volatile });
   let misses = 0;
   let borrowed = 0;
   let appended = 0;

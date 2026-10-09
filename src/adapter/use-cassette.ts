@@ -26,6 +26,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readCassette } from "../cassette.js";
 import { startHttpReplay, type ReplayServer, type Timing } from "../http-replay.js";
+import { validateVolatile } from "../replay.js";
 import { missesToError } from "./errors.js";
 
 export interface UseCassetteOptions {
@@ -37,6 +38,15 @@ export interface UseCassetteOptions {
   /** "host:port" to bind; defaults to an ephemeral port on 127.0.0.1. */
   listen?: string;
   timing?: Timing;
+  /**
+   * Request fields that change every run, as JSON Pointers into the request
+   * `params` (`/arguments/requestedAt`), each optionally scoped to one method
+   * (`tools/call:/arguments/requestedAt`). Replay drops them from both sides
+   * before matching, so a call whose timestamp or generated id is new every
+   * run still lands on its recording. Added to whatever the cassette header
+   * declares; a stdio cassette carries them on the `command` it hands back.
+   */
+  volatile?: readonly string[];
 }
 
 export interface CassetteHandle {
@@ -92,6 +102,11 @@ export function useCassetteWith(
   // cassette should fail while the suite is being collected, naming the file,
   // instead of surfacing as a timeout inside the first test.
   const { transport } = readCassette(file).header;
+  // Checked here for the same reason the cassette is read here: a mistake in
+  // the call should fail while the suite is being collected, naming it. The
+  // HTTP path would reach this in `beforeAll`, the stdio path only inside the
+  // child the client spawns.
+  validateVolatile(options.volatile ?? []);
 
   let server: ReplayServer | null = null;
 
@@ -109,6 +124,7 @@ export function useCassetteWith(
       server = await startHttpReplay(file, {
         listen: options.listen ?? "127.0.0.1:0",
         ...(options.timing ? { timing: options.timing } : {}),
+        ...(options.volatile?.length ? { volatile: options.volatile } : {}),
       });
     });
 
@@ -136,7 +152,10 @@ export function useCassetteWith(
       if (transport !== "stdio") {
         throw new Error(`mcp-cassette: ${file} is an http cassette; connect to .url instead of spawning .command`);
       }
-      return [process.execPath, cliPath(), "replay", file];
+      // The declarations travel as flags, because the process that will honor
+      // them is the one the client spawns, not this one.
+      const declared = (options.volatile ?? []).flatMap((pointer) => ["--volatile", pointer]);
+      return [process.execPath, cliPath(), "replay", file, ...declared];
     },
     get server(): ReplayServer {
       if (transport !== "http") {

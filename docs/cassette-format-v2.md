@@ -44,7 +44,11 @@ version and new, optional fields. No field of v1 is renamed or removed.
   // NEW: which lifecycle the recorded session spoke.
   //   "legacy": classic initialize handshake (every v1 cassette is this)
   //   "modern": the stateless lifecycle, once the spec ships it
-  "era": "legacy"
+  "era": "legacy",
+
+  // NEW: request fields that change every run, as JSON Pointers into the
+  // request `params`. See "Declared volatility" below.
+  "volatile": ["tools/call:/arguments/requestedAt"]
 }
 ```
 
@@ -244,6 +248,65 @@ notification on a `subscriptions/listen` stream, so it is replayed by the
 position rule above like any other, tagged with the subscription id the client's
 own listen request carried. Replay does not interpret the subscription filter;
 it matches the listen request's params as recorded.
+
+### Declared volatility
+
+Replay matches exactly, which is what makes a cassette a test double rather
+than a guess. The cost is a request field that changes every run: a timestamp
+the client stamps, an id it generates. Nothing about such a field identifies
+the request, and matching on it turns every run into a miss.
+
+`volatile` is how a cassette says which fields those are:
+
+```jsonc
+{
+  "type": "header",
+  "volatile": [
+    "/arguments/requestedAt",
+    "tools/call:/arguments/runId"
+  ]
+}
+```
+
+Each entry is a JSON Pointer into the request's `params`, optionally scoped to
+one method by naming that method before a colon. A JSON Pointer always starts
+with `/`, which is what tells the two forms apart with no ambiguity: an entry
+that does not start with one must name a method first, and a `:` inside a
+pointer is an ordinary character. `replay --volatile <pointer>` is the same
+declaration passed per invocation, repeatable, and the two are added together:
+the cassette carries what is true of the recording, the invocation adds what is
+true of this run.
+
+The rules worth stating, because they are what the field costs:
+
+- The declaration is dropped from both sides before anything is hashed, the
+  recorded request as the index is built and the live one as it arrives. A
+  declaration that only moved the live side would match nothing.
+- A pointer that resolves to an object property removes it; one that resolves
+  to an array element blanks that element rather than splicing it out, so two
+  declared indices of one array cannot re-index each other.
+- A pointer that resolves to nothing is a no-op, which is what lets one
+  declaration cover a field some calls carry and others do not.
+- The miss diagnosis drops them too, so a miss never names a field the session
+  already said would move: the paths it reports are the ones that really
+  diverged.
+- Nothing else bends. An MRTR retry still matches on the `inputResponses` it
+  carried and still never borrows; a `tasks/get` still pools per task and still
+  obeys the terminal rule; `subscriptions/listen` still matches its own params.
+  A declaration decides what the fingerprint is computed over, not which rule
+  computes it.
+- Which is why a declaration naming a field replay matches a rule on is refused
+  rather than honoured: `/name` and `/inputResponses` on a `tools/call`,
+  `/taskId` on a `tasks/get`, and `/inputResponses` on any method, since that is
+  the field telling a retry from the call it retried wherever it appears.
+  Erasing one of them changes which rule runs, and the request is then answered
+  with another tool's, another retry's or another task's recording with nothing
+  on stderr. The same names stay declarable on a method that does not match on
+  them (`prompts/get:/name`, `tasks/update:/taskId`), and so does a field of the
+  same name further down a pointer (`tools/call:/arguments/name`).
+- A reader that predates the field ignores it, because an unknown header field
+  has always been ignorable. Such a reader matches on the declared fields
+  again, so a request whose timestamp moved misses there.
 
 ### `state` / `seq`: scenario states
 

@@ -34,6 +34,7 @@ import { bindFailure, isLocalOrigin, parseListen, warnIfExposed, DEFAULT_LISTEN 
 import {
   buildReplayIndex,
   diagnoseMissReason,
+  effectiveRequest,
   fingerprint,
   formatBorrowed,
   formatMiss,
@@ -56,7 +57,6 @@ import {
   type RecordedTaskPolls,
 } from "./replay.js";
 import { MiniClient, type Target } from "./client.js";
-import { redactFrame } from "./redact.js";
 
 /** "none" (default) emits chunks back to back; "recorded" honors the offsets the recorder stamped. */
 export type Timing = "none" | "recorded";
@@ -69,6 +69,12 @@ export interface HttpReplayOptions {
   timing?: Timing;
   /** The real server to forward misses to, for `--on-miss passthrough`. */
   serverCommand?: string[];
+  /**
+   * Request fields that change every run, as JSON Pointers into the request
+   * `params`, each optionally scoped to one method. Added to whatever the
+   * cassette header declares; see `fingerprint` in `src/replay.ts`.
+   */
+  volatile?: readonly string[];
 }
 
 export interface ReplayServer {
@@ -129,7 +135,7 @@ interface StreamedTask {
  * legacy standalone GET stream answers nothing and belongs to the endpoint
  * rather than to any request (§1.3).
  */
-function streamIndex(cassette: Cassette): {
+function streamIndex(cassette: Cassette, volatile: readonly string[]): {
   pools: Map<string, ChunksEntry[]>;
   recorded: Map<string, number>;
   /**
@@ -166,7 +172,7 @@ function streamIndex(cassette: Cassette): {
     // A subscription stream is not an answer to pool: it is held open and fed
     // frame by frame, which is `buildReplayIndex`'s schedule rather than a pool.
     if (answered.method === LISTEN_METHOD) continue;
-    const fp = fingerprint(answered);
+    const fp = fingerprint(answered, volatile);
     if (!pools.has(fp)) pools.set(fp, []);
     pools.get(fp)!.push(entry);
     asked.set(fp, answered);
@@ -232,9 +238,11 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
     );
   }
   const era: Era = cassetteEra(cassette.header);
-  const index = buildReplayIndex(cassette);
+  const index = buildReplayIndex(cassette, { volatile: opts.volatile });
   const statuses = recordedStatuses(cassette);
-  const streams = streamIndex(cassette);
+  // The stream pools are keyed by the same fingerprint the engine uses, so they
+  // take the declarations the index resolved rather than resolving them again.
+  const streams = streamIndex(cassette, index.volatile);
   // The standalone stream is a legacy-era thing; the modern era removed GET entirely.
   const standalone = era === "legacy" ? streams.standalone : undefined;
   // Sessions exist in the legacy era only; the modern era removed them entirely.
@@ -478,7 +486,7 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
       send(res, 200, { jsonrpc: "2.0", id: frame.id, result: {} }); // parity with the stdio front-end
       return;
     }
-    const fp = fingerprint(index.redactRequests ? (redactFrame(frame) as JsonRpcRequest) : frame);
+    const fp = fingerprint(effectiveRequest(index, frame));
     const pool = streams.pools.get(fp);
     if (pool && pool.length > 0) {
       // Consumed exactly like a JSON answer, and before a byte goes out: the

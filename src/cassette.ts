@@ -43,6 +43,15 @@ export interface CassetteHeader {
   sessioned?: boolean;
   /** Absent on cassettes written before redaction existed; treat as not applied. */
   redaction?: { applied: boolean };
+  /**
+   * Request fields that change every run, as JSON Pointers into the request
+   * `params` (`/arguments/requestedAt`), each optionally scoped to one method
+   * (`tools/call:/arguments/requestedAt`). Replay drops them from both sides
+   * before matching, so the cassette carries its own declaration and
+   * `replay --volatile` adds to it. Absent on every cassette that declares
+   * nothing, which is every cassette written before the field existed.
+   */
+  volatile?: string[];
 }
 
 /** The era a cassette speaks; a missing header field means "legacy" (the v1→v2 migration rule). */
