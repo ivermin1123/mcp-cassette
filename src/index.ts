@@ -41,6 +41,9 @@ export {
   type VerifyStatus,
 } from "./verify.js";
 export {
+  checkRedactConfig,
+  compileRedactConfig,
+  readRedactConfig,
   maskSecret,
   redactCassette,
   redactCommand,
@@ -50,8 +53,12 @@ export {
   scanRawLine,
   scanCassette,
   scanFrame,
+  BUILTIN_REDACTION,
   REDACT_RULES,
   type CassetteSecretHit,
+  type CompiledRedactConfig,
+  type RedactConfig,
+  type RedactConfigCheck,
   type RedactRule,
   type SecretHit,
 } from "./redact.js";

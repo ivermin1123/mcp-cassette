@@ -10,6 +10,38 @@ below.
 
 ### BREAKING
 
+- **`ReplayIndex` gains a required `redactConfig` field.** The index carries the
+  compiled redaction rules the session runs, so both front-ends redact an
+  incoming request the same way the recording was redacted.
+
+  *What you see:* a TypeScript caller who builds a `ReplayIndex` by hand, rather
+  than taking the one `buildReplayIndex` returns, fails to compile with
+  `redactConfig` missing. Nothing changes at runtime for a caller who only
+  consumes one, and an index built without a config carries the built-in rules,
+  which is exactly the old behaviour.
+
+  *What to do:* take the index from `buildReplayIndex`, which is the only
+  supported way to build one. It accepts a compiled config as a second
+  argument: `buildReplayIndex(cassette, { redactConfig: readRedactConfig(path) })`.
+  `readRedactConfig`, `compileRedactConfig`, `checkRedactConfig`,
+  `BUILTIN_REDACTION` and the config types are exported from the package entry
+  for exactly this.
+
+- **`replay` refuses a cassette recorded under a redaction config it was not
+  given.** Redaction runs before fingerprinting, so the rules are part of what a
+  fingerprint means; a cassette recorded with custom rules and replayed without
+  them used to start and then miss every request, with a near-miss diff naming a
+  field whose recorded value was a placeholder and whose live value was the
+  secret.
+
+  *What you see:* `buildReplayIndex`, `runReplay` and `startHttpReplay` throw
+  before serving anything, naming which side is short a config. Only a cassette
+  carrying `redaction.configHash` can reach this, and nothing written before
+  this release carries one, so no existing cassette changes behaviour.
+
+  *What to do:* pass the same `--redact-config` the recording used, or re-record
+  without one.
+
 - **`ReplayIndex` gains a required `volatile` field.** The index carries the
   declared-volatile pointers in force for the session, the cassette header's own
   followed by the invocation's, so every fingerprint in both front-ends is
@@ -26,6 +58,73 @@ below.
   `buildReplayIndex(cassette, { volatile: ["/arguments/requestedAt"] })`.
 
 ### Added
+
+- **Configurable redaction: `--redact-config <file>` on `record`, `redact` and
+  `replay`.** The built-in rules match the shapes everyone shares, so a
+  credential in a house format, or a field name only one server uses, went
+  through untouched and the only answer was `--no-redact`, which protects
+  nothing. A config file adds three things:
+
+  ```json
+  {
+    "patterns": [{ "name": "acme", "regex": "ACME-[A-Z0-9-]{10,}" }],
+    "keys": ["handle"],
+    "allow": ["sk-THIS-ONE-IS-PUBLIC-000000"]
+  }
+  ```
+
+  `patterns` adds token shapes. The name becomes the rule label inside the
+  placeholder, so it is lowercase letters only and may not be one of the
+  built-in names: a reader seeing `[REDACTED:bearer:...]` is entitled to
+  conclude the bearer rule put it there. User patterns run before the built-ins,
+  so a house format wins over a generic shape that would only partly match it,
+  and each is compiled global whatever was written, because a value that occurs
+  twice has leaked twice. Only the `i` and `u` flags are accepted. `keys` adds
+  names whose string values are secrets whatever their shape, matched against
+  the whole key or any one of its segments, so `handle` covers `session_handle`
+  and `sessionHandle` but not `handler`. `allow` exempts specific values the
+  built-in rules over-redact, which is the narrow alternative to turning
+  redaction off; each is compared exactly against what a rule would replace,
+  which is the token after `Bearer` and the password inside a URL rather than
+  the whole match. A pattern that can match the empty string is refused at load
+  time, and no pattern may rewrite text inside a placeholder, so `redact` stays
+  idempotent whatever a config adds.
+
+  The same file has to go to `record` and to `replay`, because redaction runs
+  before fingerprinting on both sides. A recording made under a config carries a
+  hash of it in `redaction.configHash`, and replay refuses a cassette whose hash
+  does not match the config it was given, saying which side is short one, and
+  `redact` refuses to rewrite such a cassette under any other config rather than
+  dropping the hash. Only the hash is stored, because a regex describes the
+  secrets it catches and an allowed value is a value; it is not itself a secret,
+  being an unsalted sha256 of a small document that anyone with a candidate
+  config can confirm offline, so `allow` is for values that are already public.
+  The hash is taken over what the config does rather than how it was written:
+  `keys` lowercased, deduplicated and sorted, `allow` deduplicated and sorted,
+  flags sorted, pattern order kept. A config that declares nothing produces no
+  hash, so an empty config is the same as none, and an older mcp-cassette
+  ignores the field and replays with the built-in rules.
+
+  `redact` gained `--check-config` and the cassette argument became optional for
+  it, so `redact` with no arguments reports a usage error of its own and still
+  exits 1.
+
+  `redact --redact-config <file> --check-config` analyses the patterns for
+  catastrophic backtracking, because they run over every string a server answers
+  with, which on a hostile server is attacker-controlled text, and reading a
+  regex does not tell you whether it backtracks. It uses `recheck`, now an
+  optional peer dependency rather than a runtime one: without it the command
+  exits 2 and says the patterns are unanalysed, rather than reporting a pass
+  nobody computed. `scripts/recheck-rules.mjs` now holds the built-in redaction
+  rules to the same standard it already held the safety lint's.
+
+  Both test adapters take the same file, `useCassette(file, { redactConfig })`
+  in `mcp-cassette/vitest` and `mcp-cassette/jest` alike, and a stdio cassette
+  carries it on the `command` the adapter hands back.
+
+  *What you see:* nothing, unless you pass a config. Without one, `record`,
+  `redact`, `replay` and the scanner run the built-in rules exactly as before,
+  byte for byte.
 
 - **Declared volatility: `replay --volatile <json-pointer>`, and a `volatile`
   cassette header.** A request field that changes every run (a timestamp the
@@ -50,7 +149,10 @@ below.
   rule runs, and the request would then be answered with another tool's,
   another retry's or another task's recording in silence. The same names stay
   declarable on a method that does not match on them, so `prompts/get:/name`
-  and `tasks/update:/taskId` are accepted.
+  and `tasks/update:/taskId` are accepted. `/requestState` is reserved for the
+  same reason as `/inputResponses`: a request carrying it and no
+  `inputResponses` is still a retry to the matcher, and dropping it would land
+  that retry in the pool of the call it retried.
 
   The pointer is dropped from both sides, the recorded request as the index is
   built and the live one as it arrives, over stdio and over HTTP alike,

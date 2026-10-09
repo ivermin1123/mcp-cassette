@@ -15,7 +15,7 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { cassetteExists, CassetteWriter } from "./cassette.js";
 import { LineBuffer, parseFrame } from "./jsonrpc.js";
-import { redactCommand, redactFrame, redactRawLine } from "./redact.js";
+import { redactCommand, redactFrame, redactRawLine, BUILTIN_REDACTION, type CompiledRedactConfig } from "./redact.js";
 import type { JsonRpcFrame } from "./jsonrpc.js";
 
 export type RecordMode = "once" | "all";
@@ -27,6 +27,8 @@ export interface RecordOptions {
   redact?: boolean;
   /** "once" (default): refuse to overwrite an existing cassette. "all": always re-record. */
   mode?: RecordMode;
+  /** The user's own redaction rules, compiled. Built-ins only when absent. */
+  redactConfig?: CompiledRedactConfig;
 }
 
 /**
@@ -60,10 +62,13 @@ export function runRecord(opts: RecordOptions): Promise<number> {
     }
 
     const redact = opts.redact !== false;
+    const cfg = opts.redactConfig ?? BUILTIN_REDACTION;
     const writer = new CassetteWriter(
       opts.out,
-      redact ? redactCommand(opts.command) : opts.command,
-      { applied: redact }
+      redact ? redactCommand(opts.command, cfg) : opts.command,
+      // The hash goes in only when redaction actually ran: a --no-redact
+      // recording was written under no rules at all, whatever file was passed.
+      { applied: redact, ...(redact && cfg.hash ? { configHash: cfg.hash } : {}) }
     );
     const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "inherit"] });
 
@@ -74,8 +79,8 @@ export function runRecord(opts: RecordOptions): Promise<number> {
       for (const line of lines) {
         if (line.trim() === "") continue;
         const frame = parseFrame(line);
-        if (frame) writer.frame(dir, redact ? (redactFrame(frame) as JsonRpcFrame) : frame);
-        else writer.raw(dir, redact ? redactRawLine(line) : line);
+        if (frame) writer.frame(dir, redact ? (redactFrame(frame, cfg) as JsonRpcFrame) : frame);
+        else writer.raw(dir, redact ? redactRawLine(line, cfg) : line);
       }
     };
 

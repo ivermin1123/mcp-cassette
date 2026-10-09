@@ -55,7 +55,7 @@ import { Cassette, ChunksEntry, Direction, FrameEntry, readCassette } from "./ca
 // written twice: the array rule it already settled is the rule a fingerprint needs.
 import { diffValues, formatValue, removePointer, splitPointer, type DiffEntry } from "./diff.js";
 import { MiniClient } from "./client.js";
-import { redactFrame } from "./redact.js";
+import { readRedactConfig, redactFrame, BUILTIN_REDACTION, type CompiledRedactConfig } from "./redact.js";
 
 const METHOD_ONLY = new Set(["initialize", "ping", "tools/list", "resources/list", "prompts/list", "resources/templates/list"]);
 
@@ -207,6 +207,16 @@ const ENGINE_READ: readonly { method?: string; key: string; refusal: string }[] 
       "so dropping it would answer a retry with the recording of the call it retried",
   },
   {
+    // `mrtrPart` reads both fields, so a request carrying only `requestState`
+    // is still a retry to `isMrtrRetry`. Dropping it would leave that request
+    // keyed on nothing a retry is keyed on, and it would land in the pool of
+    // the call it retried.
+    key: "requestState",
+    refusal:
+      "replay matches on /requestState to tell a retry from the call it retried, on every method, " +
+      "so dropping it would answer a retry carrying no /inputResponses with the recording of the plain call",
+  },
+  {
     method: "tools/call",
     key: "name",
     refusal: "replay matches a tools/call on /name, so dropping it would answer a call with another tool's recording",
@@ -322,6 +332,42 @@ function dropVolatile(method: string, params: unknown, specs: readonly string[])
   return dropped;
 }
 
+/**
+ * Refuse a cassette whose recording ran under different redaction rules than
+ * this session was given.
+ *
+ * Redaction runs before fingerprinting on both sides, so the rules are part of
+ * what a fingerprint means. A custom rule present at record time and absent at
+ * replay time leaves every recorded request hashed over a placeholder and every
+ * live one over the secret itself, which is not a miss anyone can diagnose: the
+ * diff names a field whose recorded value is a placeholder and whose live value
+ * is the value, and the fix is a flag rather than the recording. So it is
+ * caught where it can still be named, and the message says which side is short
+ * a config rather than only that the two differ.
+ */
+function assertRedactConfigMatches(cassette: Cassette, cfg: CompiledRedactConfig): void {
+  const recorded = cassette.header.redaction?.configHash;
+  if (recorded === cfg.hash) return;
+  const refuse = (why: string): never => {
+    throw new Error(
+      `mcp-cassette: ${why}. Redaction runs before matching, so replay must use the rules the recording used`
+    );
+  };
+  if (recorded === undefined) {
+    refuse(
+      "this replay was given a redaction config, but the cassette was recorded without one; " +
+        "drop --redact-config, or re-record with it"
+    );
+  }
+  if (cfg.hash === undefined) {
+    refuse(
+      "the cassette was recorded with a redaction config this replay was not given; " +
+        "pass the same --redact-config the recording used"
+    );
+  }
+  refuse("the cassette was recorded with a different redaction config than this replay was given");
+}
+
 /** The same request with its declared-volatile fields gone: what every comparison sees. */
 function withoutVolatile(index: ReplayIndex, req: JsonRpcRequest): JsonRpcRequest {
   if (index.volatile.length === 0) return req;
@@ -340,7 +386,7 @@ function withoutVolatile(index: ReplayIndex, req: JsonRpcRequest): JsonRpcReques
  * change to the request path one site instead of four.
  */
 export function effectiveRequest(index: ReplayIndex, req: JsonRpcRequest): JsonRpcRequest {
-  const redacted = index.redactRequests ? (redactFrame(req) as JsonRpcRequest) : req;
+  const redacted = index.redactRequests ? (redactFrame(req, index.redactConfig) as JsonRpcRequest) : req;
   return withoutVolatile(index, redacted);
 }
 
@@ -441,6 +487,13 @@ export interface ReplayIndex {
    * behaviour, and the list is held as written so one parse covers the session.
    */
   volatile: readonly string[];
+  /**
+   * The redaction rules this session runs, which must be the ones the recording
+   * ran under: redaction happens before fingerprinting, so a rule present on
+   * one side only leaves the two hashing different text. `buildReplayIndex`
+   * refuses a cassette whose recorded hash does not match.
+   */
+  redactConfig: CompiledRedactConfig;
 }
 
 /**
@@ -647,9 +700,15 @@ function scheduleServerFrames(
 
 export function buildReplayIndex(
   cassette: Cassette,
-  /** `volatile`: declarations from the CLI or an adapter, added to the cassette header's own. */
-  options: { volatile?: readonly string[] } = {}
+  /**
+   * `volatile`: declarations from the CLI or an adapter, added to the cassette
+   * header's own. `redactConfig`: the user's compiled redaction rules, which
+   * must be the ones the cassette was recorded under.
+   */
+  options: { volatile?: readonly string[]; redactConfig?: CompiledRedactConfig } = {}
 ): ReplayIndex {
+  const redactConfig = options.redactConfig ?? BUILTIN_REDACTION;
+  assertRedactConfigMatches(cassette, redactConfig);
   // Hand-editing the header is how a declaration gets into a cassette today, so
   // its shape is checked before it is spread: a list that is not one, or one
   // holding something other than strings, is refused by name like a malformed
@@ -755,6 +814,7 @@ export function buildReplayIndex(
     serverInitiatedRequests,
     redactRequests: cassette.header.redaction?.applied === true,
     volatile,
+    redactConfig,
   };
 }
 
@@ -1245,7 +1305,9 @@ export class LiveAppender {
     private path: string,
     cassette: Cassette,
     /** A redacted cassette never gains raw secrets through the passthrough door. */
-    private redact: boolean
+    private redact: boolean,
+    /** The rules it was redacted under, so an appended frame is redacted like the rest. */
+    private cfg: CompiledRedactConfig = BUILTIN_REDACTION
   ) {
     // Seed past any ids an earlier passthrough session left behind.
     for (const entry of cassette.entries) {
@@ -1267,7 +1329,7 @@ export class LiveAppender {
   }
 
   private clean(frame: JsonRpcFrame): JsonRpcFrame {
-    return this.redact ? (redactFrame(frame) as JsonRpcFrame) : frame;
+    return this.redact ? (redactFrame(frame, this.cfg) as JsonRpcFrame) : frame;
   }
 
   frame(dir: Direction, frame: JsonRpcFrame): void {
@@ -1335,6 +1397,8 @@ export interface ReplayOptions {
    * cassette header declares; see `fingerprint`.
    */
   volatile?: readonly string[];
+  /** Path to a `--redact-config` file; must be the one the recording used. */
+  redactConfig?: string;
 }
 
 export async function runReplay(cassettePath: string, opts: ReplayOptions = {}): Promise<void> {
@@ -1346,7 +1410,10 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
   }
 
   const cassette = readCassette(cassettePath);
-  const index = buildReplayIndex(cassette, { volatile: opts.volatile });
+  const index = buildReplayIndex(cassette, {
+    volatile: opts.volatile,
+    ...(opts.redactConfig ? { redactConfig: readRedactConfig(opts.redactConfig) } : {}),
+  });
   let misses = 0;
   let borrowed = 0;
   let appended = 0;
@@ -1364,7 +1431,7 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
   const connectLive = (): Promise<MiniClient> =>
     (livePromise ??= MiniClient.connect({ kind: "stdio", command: opts.serverCommand! }).then((r) => r.client));
 
-  const live = new LiveAppender(cassettePath, cassette, index.redactRequests);
+  const live = new LiveAppender(cassettePath, cassette, index.redactRequests, index.redactConfig);
 
   if (index.serverInitiatedRequests > 0) {
     process.stderr.write(

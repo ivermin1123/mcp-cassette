@@ -22,7 +22,7 @@ import { printVerifyReport, verifyAgainstServer, verifyFailed } from "./verify.j
 import { runCheck, printReport } from "./check.js";
 import { fileAnchor, snapshotAnchor, toSarif, type SarifAnchor } from "./sarif.js";
 import { readCassette, writeCassette } from "./cassette.js";
-import { redactCassette, scanCassette } from "./redact.js";
+import { checkRedactConfig, readRedactConfig, redactCassette, scanCassette } from "./redact.js";
 import { lintCassette } from "./lint.js";
 import { VERSION } from "./version.js";
 import {
@@ -170,6 +170,7 @@ program
   .description("Sit between your client and a live server, and write every message to a cassette file")
   .requiredOption("-o, --out <file>", "cassette output path, e.g. session.cassette.jsonl")
   .option("--no-redact", "record secrets verbatim instead of redacting them")
+  .option("--redact-config <file>", "JSON file of extra redaction rules: { patterns: [{ name, regex }], keys: [...], allow: [...] }. The same file must be given to replay, because redaction runs before matching")
   .option("--mode <mode>", "once: refuse to overwrite an existing cassette; all: always re-record", "once")
   .option("--http <url>", "record a Streamable HTTP server, e.g. http://127.0.0.1:3000/mcp")
   .option("--listen <host:port>", "address the HTTP recording proxy binds, e.g. 127.0.0.1:6402", DEFAULT_LISTEN)
@@ -179,27 +180,43 @@ program
     "\nExample:\n" +
       "  mcp-cassette record -o session.cassette.jsonl -- npx -y @modelcontextprotocol/server-everything stdio\n"
   )
-  .action(async (command: string[], opts: { out: string; redact: boolean; mode: string; http?: string; listen: string }) => {
-    try {
-      if (opts.mode !== "once" && opts.mode !== "all") {
-        throw new Error(`record: unknown --mode "${opts.mode}" (expected once or all)`);
+  .action(
+    async (
+      command: string[],
+      opts: { out: string; redact: boolean; mode: string; http?: string; listen: string; redactConfig?: string }
+    ) => {
+      try {
+        if (opts.mode !== "once" && opts.mode !== "all") {
+          throw new Error(`record: unknown --mode "${opts.mode}" (expected once or all)`);
+        }
+        const mode = opts.mode as RecordMode;
+        if (opts.redactConfig && !opts.redact) {
+          throw new Error("record: --no-redact removes every rule, so --redact-config would do nothing. Drop one of the two");
+        }
+        const redactConfig = opts.redactConfig ? readRedactConfig(opts.redactConfig) : undefined;
+        if (opts.http && command.length > 0) throw new Error("record: use either --http or a server command, not both");
+        if (opts.http) {
+          const httpCode = await runHttpRecord({
+            out: opts.out,
+            url: opts.http,
+            listen: opts.listen,
+            redact: opts.redact,
+            mode,
+            redactConfig,
+          });
+          process.exit(httpCode);
+        }
+        if (command.length === 0) {
+          throw new Error("record: missing target. Pass a server command after -- , or --http <url>");
+        }
+        const code = await runRecord({ out: opts.out, command, redact: opts.redact, mode, redactConfig });
+        process.exit(code);
+      } catch (err) {
+        process.stderr.write(`${(err as Error).message}\n`);
+        process.exit(1);
       }
-      const mode = opts.mode as RecordMode;
-      if (opts.http && command.length > 0) throw new Error("record: use either --http or a server command, not both");
-      if (opts.http) {
-        const httpCode = await runHttpRecord({ out: opts.out, url: opts.http, listen: opts.listen, redact: opts.redact, mode });
-        process.exit(httpCode);
-      }
-      if (command.length === 0) {
-        throw new Error("record: missing target. Pass a server command after -- , or --http <url>");
-      }
-      const code = await runRecord({ out: opts.out, command, redact: opts.redact, mode });
-      process.exit(code);
-    } catch (err) {
-      process.stderr.write(`${(err as Error).message}\n`);
-      process.exit(1);
     }
-  });
+  );
 
 /** Repeatable-option accumulator for commander. */
 function collect(value: string, previous: string[]): string[] {
@@ -210,6 +227,7 @@ interface ReplayCliOptions {
   onMiss: string;
   listen?: string;
   timing: string;
+  redactConfig?: string;
   /** Repeatable `--volatile`; commander hands back the accumulated list. */
   volatile: string[];
 }
@@ -225,6 +243,7 @@ program
     "on fingerprint miss: error (fail the session), warn (answer with an error, exit 0), or passthrough (forward to the real server after -- and append the interaction)",
     "error"
   )
+  .option("--redact-config <file>", "the redaction config the cassette was recorded with; replay refuses a cassette whose recorded config hash does not match")
   .option(
     "--volatile <pointer>",
     "a request field that changes every run, as a JSON Pointer into the request params (/arguments/requestedAt), optionally scoped to one method (tools/call:/arguments/requestedAt). Dropped before matching, on the recorded side too. Repeatable, and added to whatever the cassette header declares",
@@ -257,6 +276,7 @@ program
           timing: opts.timing,
           serverCommand: command,
           volatile: opts.volatile,
+          ...(opts.redactConfig ? { redactConfig: opts.redactConfig } : {}),
         });
         return;
       }
@@ -268,6 +288,7 @@ program
         onMiss: opts.onMiss as OnMissMode,
         serverCommand: command,
         volatile: opts.volatile,
+        ...(opts.redactConfig ? { redactConfig: opts.redactConfig } : {}),
       });
     } catch (err) {
       process.stderr.write(`${(err as Error).message}\n`);
@@ -504,14 +525,86 @@ program
     }
   );
 
+interface RedactCliOptions {
+  out?: string;
+  scan?: boolean;
+  redactConfig?: string;
+  checkConfig?: boolean;
+}
+
+/**
+ * Print what the analyser found, and decide the exit code.
+ *
+ * A check that could not run is not a check that passed: without the optional
+ * `recheck` peer the command says so and fails, because the user asked for an
+ * analysis and would otherwise read silence as a clean bill of health.
+ */
+async function reportConfigCheck(cfg: Parameters<typeof checkRedactConfig>[0]): Promise<number> {
+  const results = await checkRedactConfig(cfg);
+  if (results === null) {
+    process.stderr.write(
+      "redact --check-config: this needs the optional `recheck` peer, which is not installed. " +
+        "Run `npm install --no-save recheck` and try again; until then these patterns are unanalysed, " +
+        "and they run over whatever a server answers\n"
+    );
+    return 2;
+  }
+  if (results.length === 0) {
+    process.stdout.write("redact --check-config: the config declares no patterns, so there is nothing to analyse\n");
+    return 0;
+  }
+  const width = Math.max(...results.map((r) => r.name.length));
+  const lines = results.map((r) => `${r.name.padEnd(width)}  ${r.status.padEnd(10)}  ${r.detail}\n`);
+  const failures = results.filter((r) => r.status !== "safe");
+  lines.push(
+    failures.length === 0
+      ? `result: ${results.length} pattern(s) proven free of super-linear blowup\n`
+      : `result: ${failures.length} of ${results.length} pattern(s) NOT proven linear-time\n`
+  );
+  process.stdout.write(lines.join(""));
+  return failures.length === 0 ? 0 : 1;
+}
+
 program
   .command("redact")
   .description("Redact secrets in an existing cassette, or --scan to audit one without writing")
-  .argument("<cassette>", "path to a .cassette.jsonl file")
+  // Optional, because --check-config reads only the config and writes nothing.
+  .argument("[cassette]", "path to a .cassette.jsonl file")
   .option("-o, --out <file>", "write the redacted cassette here")
   .option("--scan", "report detected secrets and exit 1 if any were found (no file is written)")
-  .action((cassettePath: string, opts: { out?: string; scan?: boolean }) => {
+  .option("--redact-config <file>", "JSON file of extra redaction rules: { patterns: [{ name, regex }], keys: [...], allow: [...] }. The same file must be given to replay, because redaction runs before matching")
+  .option(
+    "--check-config",
+    "analyse --redact-config's patterns for catastrophic backtracking and exit, writing no cassette. Needs the optional `recheck` peer"
+  )
+  .action(async (cassettePath: string | undefined, opts: RedactCliOptions) => {
     try {
+      const cfg = opts.redactConfig ? readRedactConfig(opts.redactConfig) : undefined;
+
+      if (opts.checkConfig && (cassettePath || opts.scan || opts.out)) {
+        process.stderr.write(
+          "redact: --check-config reads the config and writes nothing. Drop the cassette, --scan and -o, or drop --check-config\n"
+        );
+        process.exitCode = 2;
+        return;
+      }
+      if (opts.checkConfig) {
+        if (!cfg) {
+          process.stderr.write("redact --check-config: pass --redact-config <file>, there is nothing else to check\n");
+          process.exitCode = 2;
+          return;
+        }
+        process.exitCode = await reportConfigCheck(cfg);
+        return;
+      }
+
+      if (!cassettePath) {
+        // Exit 1, as commander's own "missing required argument" did before the
+        // argument became optional for --check-config. A usage error either way.
+        process.stderr.write("redact: pass a cassette, or --check-config with --redact-config\n");
+        process.exitCode = 1;
+        return;
+      }
       if (opts.scan && opts.out) {
         process.stderr.write("redact: --scan writes nothing. Drop -o, or drop --scan\n");
         process.exitCode = 2;
@@ -520,7 +613,7 @@ program
       const cassette = readCassette(cassettePath);
 
       if (opts.scan) {
-        const hits = scanCassette(cassette);
+        const hits = scanCassette(cassette, cfg);
         // One write: process.exit() would truncate an unbounded report on a pipe.
         const lines = hits.map((hit) => {
           const where = hit.method ? `${hit.dir} ${hit.method}` : hit.dir;
@@ -542,8 +635,8 @@ program
         return;
       }
 
-      const found = scanCassette(cassette).length;
-      writeCassette(opts.out, redactCassette(cassette));
+      const found = scanCassette(cassette, cfg).length;
+      writeCassette(opts.out, redactCassette(cassette, cfg));
       process.stdout.write(`wrote ${opts.out} (${found} secret(s) redacted)\n`);
     } catch (err) {
       process.stderr.write(`redact failed: ${(err as Error).message}\n`);

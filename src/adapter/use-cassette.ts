@@ -47,6 +47,12 @@ export interface UseCassetteOptions {
    * declares; a stdio cassette carries them on the `command` it hands back.
    */
   volatile?: readonly string[];
+  /**
+   * Path to the `--redact-config` the cassette was recorded with. Redaction
+   * runs before matching, so it has to be the same file: replay refuses a
+   * cassette whose recorded config hash does not match the one it was given.
+   */
+  redactConfig?: string;
 }
 
 export interface CassetteHandle {
@@ -125,6 +131,7 @@ export function useCassetteWith(
         listen: options.listen ?? "127.0.0.1:0",
         ...(options.timing ? { timing: options.timing } : {}),
         ...(options.volatile?.length ? { volatile: options.volatile } : {}),
+        ...(options.redactConfig ? { redactConfig: options.redactConfig } : {}),
       });
     });
 
@@ -155,7 +162,8 @@ export function useCassetteWith(
       // The declarations travel as flags, because the process that will honor
       // them is the one the client spawns, not this one.
       const declared = (options.volatile ?? []).flatMap((pointer) => ["--volatile", pointer]);
-      return [process.execPath, cliPath(), "replay", file, ...declared];
+      const redaction = options.redactConfig ? ["--redact-config", path.resolve(options.redactConfig)] : [];
+      return [process.execPath, cliPath(), "replay", file, ...declared, ...redaction];
     },
     get server(): ReplayServer {
       if (transport !== "http") {
