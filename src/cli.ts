@@ -421,7 +421,7 @@ program
 
 program
   .command("check")
-  .description("Start a server, validate its handshake and schemas, and lint its tool descriptions for poisoning")
+  .description("Start a server, validate its handshake and schemas, and lint every model-facing text it publishes for poisoning")
   .option("--stdio <command>", "stdio server command, e.g. \"npx -y @modelcontextprotocol/server-everything\"")
   .option("--url <url>", "Streamable HTTP server URL (experimental), e.g. http://127.0.0.1:3000/mcp")
   .option("--era <era>", ERA_HELP, "auto")

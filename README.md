@@ -9,7 +9,7 @@
 
 Record one session against a real [Model Context Protocol](https://modelcontextprotocol.io) server, then run your agent tests against the recording: no credentials, no rate limits, no network. The replay is a server, not a stub: it hands back the notifications the recorded server pushed on its own, at the position the recording put them, and it serves a whole `io.modelcontextprotocol/tasks` poll sequence. One file covers both protocol eras, the classic lifecycle and 2026-07-28.
 
-The same binary gates your tool contract against breaking changes, lints every text a server publishes to the model for poisoning, and lints what a recorded server handed *back*, which is where indirect prompt injection actually arrives.
+The same binary gates your tool contract against breaking changes, lints every text a server publishes to the model for poisoning, and lints what a recorded server handed *back*, which is where indirect prompt injection arrives.
 
 ```bash
 npx mcp-cassette check --stdio "npx -y @modelcontextprotocol/server-everything stdio"
@@ -69,7 +69,7 @@ mcp-cassette snapshot --check --stdio "node dist/my-server.js"
 result: FAIL (2 breaking, 1 dangerous, 0 minor, 0 info; gate: breaking)
 ```
 
-**A poisoned tool description is a finding, not a surprise.** Prompt injection does not need a user to type it; it arrives in the tool description your agent was never going to show anyone. Sixteen rules, each citing the OWASP MCP Top 10 risk and SAFE-MCP technique it implements.
+**A poisoned tool description is a finding, not a surprise.** Prompt injection does not need a user to type it; it arrives in the tool description your agent was never going to show anyone. Sixteen rules, each citing the OWASP MCP Top 10 risk it covers and, for all but the length limit, the SAFE-MCP technique it implements.
 
 ```bash
 mcp-cassette check --stdio "node dist/my-server.js" --format sarif --sarif-location mcp-contract.snapshot.json > mcp-cassette.sarif
@@ -491,7 +491,7 @@ New rules reach you at `warn` first, and so does an existing rule pointed at a s
 
 Heuristics, not proofs: treat findings as review triggers, and pair with a dedicated security scanner for depth.
 
-Every pattern in the rule set is proven free of super-linear backtracking by [recheck](https://github.com/makenowjust/recheck) in CI, because lint input is text an attacker wrote.
+Every pattern in the rule set is proven free of super-linear backtracking by [recheck](https://github.com/makenowjust-labs/recheck) in CI, because lint input is text an attacker wrote.
 
 ### Linting what the server returned
 
@@ -802,9 +802,9 @@ The hash is not a security boundary. It is an unsalted, truncated SHA-256 of the
 
 - **[`@modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance)**: the official spec-conformance suite. Use it to verify you implement the protocol correctly; use mcp-cassette to test *your* server's behavior and contract. The two are complementary, and we intend to contribute scenarios upstream.
 - **MCP Inspector / MCPJam**: interactive debugging. The Inspector also has a [CLI client](https://modelcontextprotocol.io/docs/2026-07-28/tools/inspector/cli) for scripts and CI: one request per run, JSON output, stable exit codes. It does not record a session or serve one back, diff a contract, or lint descriptions; if a single scripted request is all your pipeline needs, it is already installed.
-- **[`@kryptosai/mcp-observatory`](https://github.com/KryptosAI/mcp-observatory)**: a security and trust platform, and the nearest neighbour this project has. It covers much more ground: it reads the MCP configs of ten clients and audits every server it finds, it has audit profiles, attack simulation, cross-server toxic-flow analysis, static source review and package-name checks, it enforces at runtime through signed trust receipts and a wrapping proxy, and it scores, badges and tracks a fleet over time. If what you want is a security posture for the servers you run, start there. Where it overlaps this tool on contract drift, it is also the better choice, and [Where this stops](#where-this-stops) says so with the measurement behind it.
+- **[`@kryptosai/mcp-observatory`](https://github.com/KryptosAI/mcp-observatory)**: a security and trust platform, and the nearest neighbour this project has. It covers much more ground: it reads the MCP configs of ten clients and audits every server it finds, it has audit profiles, attack simulation, cross-server toxic-flow analysis, static source review and package-name checks, it enforces at runtime through signed trust receipts and a wrapping proxy, and it scores, badges and tracks a fleet over time. If what you want is a security posture for the servers you run, start there. Where it overlaps this tool on contract drift, look there first; [Where this stops](#where-this-stops) says why, with the measurement behind it.
 
-  It has `record` and `replay` commands too, and they are a different thing. Both are marked hidden, and its replay runs observatory's own checks offline instead of serving the cassette to a client, so a test suite cannot point its MCP client at one. Neither its `dist` nor the MCP SDK it installs holds the string `2026-07-28`, so the dual-era handling here has no counterpart there; that is a source reading, not a run against a modern-only server. Read off 1.49.0 on 2026-10-08.
+  It has `record` and `replay` commands too, and they are a different thing. Both are marked hidden, and its replay runs observatory's own checks offline instead of serving the cassette to a client, so a test suite cannot point its MCP client at one. Neither its `dist` nor the code of the MCP SDK it installs holds the string `2026-07-28`: that SDK is 1.32.1, whose `LATEST_PROTOCOL_VERSION` is `2025-11-25` and whose README says the 2026-07-28 revision is not planned for the 1.x line. So the dual-era handling here has no counterpart there; that is a source reading, not a run against a modern-only server. Read off 1.49.0 on 2026-10-08; the command behind each of these claims is in [`docs/research/04-observatory-1-49.md`](docs/research/04-observatory-1-49.md).
 - **Security scanners (mcp-scan/agent-scan, Cisco mcp-scanner)**: deep security analysis. Our lint is a fast CI tripwire, not a replacement.
 
 None of this is a bake-off. What was measured is what each tool covers, not whose findings are better.
@@ -820,7 +820,7 @@ What is left, now that the Action, declared volatility, configurable redaction, 
 
 Issues and PRs welcome.
 
-`Last-Event-ID` resumability was on this list and is gone from it. Protocol revision 2026-07-28 removed the standalone `GET` stream it resumed, replacing it with `subscriptions/listen`, which replay serves. There is nothing left to resume.
+`Last-Event-ID` resumability was on this list and is gone from it. Protocol revision 2026-07-28 removed SSE resumability itself, the `Last-Event-ID` header and SSE event ids, and replaced the standalone `GET` stream it rode on with `subscriptions/listen`, which replay serves. There is nothing left to resume.
 
 A `pytest` adapter was on this list and is cancelled. A second, unrelated `mcp-cassette` has been on PyPI since 2026-07-25 and already ships a pytest plugin, so a `pytest-mcp-cassette` published beside it would read as that tool's adapter no matter what its README said. The measurement and the decision are in [`docs/research/02-name-collision.md`](docs/research/02-name-collision.md).
 

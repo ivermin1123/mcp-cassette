@@ -1038,7 +1038,7 @@ server. Nobody should meet those by way of `^0.2.0` resolving on its own.
   Lint input is text an attacker wrote, so a pattern with catastrophic
   backtracking would be a denial of service against the job inspecting the
   attacker. Every rule publishes its pattern and
-  [recheck](https://github.com/makenowjust/recheck) analyses it; the gate also
+  [recheck](https://github.com/makenowjust-labs/recheck) analyses it; the gate also
   fails when a rule matches by regex without publishing one.
 
 ### Changed
