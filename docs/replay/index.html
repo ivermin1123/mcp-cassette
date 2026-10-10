@@ -238,7 +238,7 @@ footer {
 <pre><code>server: mcp-servers/everything@2.0.0  protocol: 2025-06-18
 surface: 13 tools, 7 resources, 4 prompts
 [OK] no findings
-result: PASS (0 error(s), 0 warning(s))</code></pre>
+result: PASS (0 error(s), 0 warning(s), gate: error)</code></pre>
 
 <p>Those four lines are the output twice: once with the real server running, once with nothing but a file. Now the part a fake in your own test suite cannot do, using the official Python SDK, which has never heard of this project:</p>
 
@@ -364,9 +364,11 @@ npx -y mcp-cassette@0.8.0 check --stdio "npx -y mcp-cassette@0.8.0 replay everyt
 
 npx -y mcp-cassette@0.8.0 lint everything.cassette.jsonl</code></pre>
 
-<p>The first drives the recording proxy with the health check, so the check is the client and you need none of your own. The second runs the identical check with no server and no network. The third reads the finished file against its own header:</p>
+<p>The first drives the recording proxy with the health check, so the check is the client and you need none of your own. The second runs the identical check with no server and no network. The third reads the finished file: its header against its own frames, and what the recorded server returned, because a tool result reaches the model with the same authority a tool description does and the cassette is the only place that text still exists. On a clean recording it says so and stops:</p>
 
 <pre><code>everything.cassette.jsonl: header and frames agree</code></pre>
+
+<p>On one carrying an injection it names the frame by request id and method and the JSON path of the string that matched, so you open the file at the exchange rather than search it. Those findings are <code>warn</code>: reported, never gated. Only a header that contradicts its own frames exits non-zero.</p>
 
 <p>Every version here is pinned, and not only because the specification is moving. An unpinned <code>npx</code> will reuse a copy already in the local cache instead of resolving the registry: on the machine these commands were run, bare <code>npx mcp-cassette</code> ran 0.1.1 while <code>latest</code> was 0.4.0, silently, with different output. Pin, or install once and call the binary.</p>
 
