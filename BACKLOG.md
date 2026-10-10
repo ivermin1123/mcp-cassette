@@ -521,6 +521,122 @@ at the default gate. That is the outcome the measurement is here to prevent.
 
 ---
 
+## The six shape rules that cannot read output as they stand
+
+**Raised** 2026-10-10, out of the release that pointed the lint at what a
+recorded server returned. **Status: measured, one acted on, rest undecided.**
+The release itself is safe: six rules run on output, the findings are `warn`
+whatever their rule's level, and `lint` still exits on the header-versus-frames
+contradictions alone, so no cassette changes its exit code. CAS-L006 was
+narrowed on the output side after the re-measurement below; the other five
+exclusions stand as they were. The decision this item owes is whether
+any of the six excluded rules comes back, and in what form.
+
+**Measured** 2026-10-10, over twenty pieces of text a real MCP server plausibly
+returns in a tool result, a `resources/read` body or a `prompts/get` message: a
+weather answer, a directory listing, a dotfile config body, an ssh config body,
+a git log, a latency report, an inline image data URI, fetched HTML, a long
+document, pretty-printed JSON, a source file, API documentation prose, Chinese,
+Arabic and Greek prose, a stack trace, an emoji status line, a SQL result
+table, a checksum listing and a bearer token field. None of it is an attack.
+Six of the twelve `shape` rules fired:
+
+| Rule | Fired on | Why that is ordinary |
+|---|---|---|
+| CAS-L002 | fetched HTML | the pattern's `<!--` branch matches every HTML comment; the `<system>` branch did not fire |
+| CAS-L004 | API documentation prose | "send the manifest to https://registry.example.com/v1/publish" is a sentence docs are made of |
+| CAS-L005 | directory listing, dotfile config body, ssh config body | naming a dotfile is what a filesystem server returns |
+| CAS-L007 | inline image data URI, bearer token field | both are opaque by construction |
+| CAS-L008 | long document | a length limit written about a description's context cost |
+| CAS-L015 | latency report | "842 microseconds" spelled with the Greek mu, inside a Latin word |
+
+The other six stayed quiet on that corpus and are the set that runs: CAS-L001,
+L003, L006, L009, L010, L013. They have something in common worth naming,
+because it is the shape of the eventual rule rather than an accident of this
+corpus: each is either an instruction aimed at the reader or content concealed
+from them. Nothing in the set reads text as evidence about a file, a URL or a
+length, which is where every one of the six exclusions went wrong.
+
+**Re-measured 2026-10-10 on real data, which moved one of the six.** Twenty
+hand-written texts are a premise, not a corpus, and they contained no emoji
+sequence, no byte-order mark and no web-editor artefact. Over 1196 GitHub issue
+and pull-request bodies and 800 comment bodies from `microsoft/vscode`,
+`facebook/react`, `modelcontextprotocol/modelcontextprotocol` and
+`home-assistant/core`, plus 5549 documentation and source files under
+`node_modules`:
+
+| Rule | Issue bodies (1196) | Files (5549) | What fired |
+|---|---|---|---|
+| CAS-L001 | 1 | 0 | an issue quoting "Ignore previous instructions" while discussing prompt injection, which is a true finding |
+| CAS-L003 | 0 | 0 | |
+| **CAS-L006** | **37 (3.1%)** | **10 (0.18%)** | **every hit a lone code point: U+200B in 36 bodies, a U+FEFF byte-order mark in 1, and U+200D, U+200B or U+200C in the files. No run, no Tags-block character.** |
+| CAS-L009 | 0 | 0 | |
+| CAS-L010 | 0 | 0 | |
+| CAS-L013 | 0 | 0 | |
+
+The exclusions were confirmed many times over on the same data: CAS-L008 fires
+on 69.5 percent of issue bodies, CAS-L002 on 48.4 percent because an issue
+template is HTML comments, CAS-L007 on 1.4, CAS-L004 on 0.7 and CAS-L005 on 0.4.
+
+**So CAS-L006 was narrowed on the output side rather than excluded.** A web
+editor leaves a lone U+200B in three percent of issue bodies, a file authored on
+Windows and read through `resources/read` opens with a byte-order mark, and
+every ZWJ emoji is a U+200D by construction. None of those is steganography.
+Both encodings the rule exists for, zero-width binary and the Unicode Tags
+block, need more than one code point to say anything, so the output-side rule
+requires a run of two or more invisible code points or any Tags-block code
+point. Measured after the change: every one of the 37 issue hits and 8 of the 10
+file hits go quiet, the two that remain are genuine runs, and the fixture
+payload, the test payload and a single Tags-block character are all still
+caught. The declaration-side rule is unchanged, because nothing honest puts a
+zero-width character in a tool description.
+
+Excluding it instead would have been the seventh exclusion, and it would have
+cost the "document carrying zero-width characters" case that is the whole reason
+this surface is scanned.
+
+**Three phrasings to watch when a documentation-server cassette turns up.**
+None of them was found in any real corpus, and all three fire on text a product
+could legitimately return: CAS-L013 on "If you are an admin, open Settings" and
+"you are now in developer mode"; CAS-L003 on "Do not show this message to the
+user again", which is an ordinary internationalization string; CAS-L009 on a
+truncated snippet that leaves an embedding unclosed. If one of them starts
+appearing, it is the next candidate for the same treatment CAS-L006 got.
+
+**Two of the exclusions are patterns, not rules.** CAS-L002 is the clearest:
+its `<system>`, `<important>` and `<hidden>` branches are exactly the markers
+an injected document carries, and only the `<!--` branch is noisy. CAS-L005 is
+the same shape as the resource-name problem already recorded above, where a
+rule written for a sentence is handed an identifier. Both would survive a
+narrowed variant.
+
+**Three directions, in increasing cost.**
+
+*Leave it.* Six rules catch the published attack shapes, and the gap is stated
+in the README. A poisoned document that carries no instruction and no
+concealment is missed, which is a real gap and a narrow one.
+
+*Add an output-only variant of CAS-L002.* The `<!--` branch comes off, the
+marker branches stay, and it ships under its own id rather than changing what
+`CAS-L002` means to anyone already triaging it. This is the highest value per
+line of the three.
+
+*Split the catalogue by surface.* Every rule gains a declaration of which
+surfaces it may run on, and the per-surface lists stop being maintained by
+hand here and in `lintCassetteOutput`. It is the honest end state once a third
+surface exists, and it is a larger change than either of the above deserves on
+its own. The entry above, on names and prompt descriptions, wants the same
+thing from the other direction; whichever of the two is built first should be
+built for both.
+
+**What the measurement does not cover.** A base64 `blob` is carried and never
+decoded, so a poisoned blob is outside the lint by decision. Whether that
+should change is not an open question today: decoding attacker-supplied base64
+means bounding an expansion, and a lint that silently decodes is a lint nobody
+can predict.
+
+---
+
 ## Which rules belong in a rug pull, and at what tier
 
 **Raised** 2026-10-10, out of the review of the release that added

@@ -270,6 +270,12 @@ So a recording made under a config carries a hash of that config:
 
 The rules this carries, and what it costs:
 
+- `mcp-cassette lint <cassette>` checks the shape, not the value: a
+  `configHash` that is not 64 lowercase hex characters is not a digest `redact`
+  ever wrote, so it can only ever mismatch, and saying so at lint time is
+  cheaper than finding out at replay time. The finding is a `warn` and does not
+  change `lint`'s exit code. Whether the hash is the *right* one is a question
+  only the config itself can answer, which is why replay still asks it.
 - Only the hash is stored. A regex describes the secrets it catches and an
   allowed value is a value, and neither belongs in a file meant to be committed.
   The hash does not contain them, but it is not a secret either: an unsalted
@@ -362,6 +368,14 @@ The rules worth stating, because they are what the field costs:
   on stderr. The same names stay declarable on a method that does not match on
   them (`prompts/get:/name`, `tasks/update:/taskId`), and so does a field of the
   same name further down a pointer (`tools/call:/arguments/name`).
+- `mcp-cassette lint <cassette>` checks the list without replaying anything: it
+  must be a list of strings, and each one goes through the parser above, so a
+  declaration malformed by hand is named in a file you can open instead of
+  failing inside whatever process a replay was spawned in. The finding is a
+  `warn` and does not change `lint`'s exit code. A `null` is read as an absent
+  field and reported as nothing, because that is what replay does with it; the
+  lint reports what replay would refuse, and a finding on a cassette that
+  replays cleanly is a finding nobody can act on.
 - A reader that predates the field ignores it, because an unknown header field
   has always been ignorable. Such a reader matches on the declared fields
   again, so a request whose timestamp moved misses there.
