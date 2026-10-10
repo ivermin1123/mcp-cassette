@@ -364,8 +364,8 @@ with `ClientOptions.listChanged` opens that listen on its own, without the
 caller asking for it, which is what makes this easy to hit.
 
 **Pre-existing:** the same holds for any request a server never answers, and did
-before server frames were replayed. The fix is a timeout or a method list that
-passthrough refuses to forward; both are a behaviour decision.
+before server frames were replayed. The fix was a timeout or a method list that
+passthrough refuses to forward; the method list was chosen, holding one method.
 
 ### `record` keeps only the last connection when a client probes on a throwaway one
 

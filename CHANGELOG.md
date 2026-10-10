@@ -18,6 +18,16 @@ below.
   The action runs on whatever Node the job set up; the README's example
   already uses `22.x`.
 
+### Changed
+
+- **The test suite runs on vitest 5** (from 2), which clears the critical and
+  high advisories `npm audit` reported against the development tree. None of
+  that tree ships in the package. The vitest adapter's peer range stays
+  `>=2`: it uses only `beforeAll`, `afterEach` and `afterAll`. Its test now
+  reads the fixture run's JSON report from `--outputFile`, because vitest 5
+  writes a bare `--reporter=json` to `.vitest/json/output.json` instead of
+  printing it.
+
 ### Fixed
 
 - **`replay --on-miss passthrough` no longer forwards an unrecorded
@@ -28,16 +38,6 @@ below.
   sessions that did nothing wrong. The listen now gets the miss error at once,
   with a line on stderr, on stdio and HTTP, and the session exits 0. A listen
   the cassette holds is still served.
-
-### Changed
-
-- **The test suite runs on vitest 5** (from 2), which clears the critical and
-  high advisories `npm audit` reported against the development tree. None of
-  that tree ships in the package. The vitest adapter's peer range stays
-  `>=2`: it uses only `beforeAll`, `afterEach` and `afterAll`. Its test now
-  reads the fixture run's JSON report from `--outputFile`, because vitest 5
-  writes a bare `--reporter=json` to `.vitest/json/output.json` instead of
-  printing it.
 
 ## [0.9.1] - 2026-10-10
 
