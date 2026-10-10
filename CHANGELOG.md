@@ -18,8 +18,54 @@ below.
   The action runs on whatever Node the job set up; the README's example
   already uses `22.x`.
 
+- **`LintFinding` gains a required `surface` field.** A finding now says which
+  population of text matched, because that is what decided which rules read
+  it: `"tool"`, `"prompt"`, `"resource"`, `"name"` or `"output"`. The scanner
+  needs it to apply a rule's declared reach, and a caller reading findings
+  needs it to tell a resource's name from its description.
+
+  *What you see:* a TypeScript caller who builds a `LintFinding` by hand,
+  rather than taking the ones `lintTool`, `lintPrompt` and `lintResource`
+  return, fails to compile with `surface` missing. Nothing changes for a caller
+  who only reads findings, and neither `check --json` nor the SARIF output
+  carries the field.
+
+  *What to do:* take the findings from the lint functions, which are the only
+  supported way to produce one, or name the surface the text came from. A rule
+  of your own is unaffected: `LintRule.surfaces` is optional, and a rule that
+  omits it runs on every surface a server declares, exactly as every rule in
+  the catalogue did before this release.
+
 ### Changed
 
+- **Every lint rule declares the surfaces it runs on, and four of them stop
+  reading a resource name.** CAS-L005, CAS-L007, CAS-L008 and CAS-L012 read
+  their subject as a sentence, which is wrong for a `name`: measured over 63
+  listing entries they report `.env`, `.env.example`, `.ssh/config`,
+  `credentials.json`, `shell`, `exec.ts` and a long generated identifier as
+  findings, all of them a server naming its own files. They keep running on
+  the `title` and the `description` of the same resource or resource template,
+  and on every other surface. The other twelve rules still read a name: the
+  nine that look for something concealed, because what hides in display text
+  reaches a reader exactly as it would from a description, and the three
+  `intent` rules, whose patterns need a sentence a name does not have. Nothing
+  else changes level or wording: this release only removes those findings. If
+  you matched on them, they were telling you a filesystem server lists
+  dotfiles.
+- **The two lists of which rules run where are derived from the catalogue.**
+  `LintRule` carries a `surfaces` declaration, and both the rules applied to a
+  resource name and the six that read recorded output (`OUTPUT_RULE_IDS`, same
+  six ids in the same order) now come out of it instead of being kept by hand
+  beside it. The declaration is optional, and a rule that omits it runs on
+  every surface a server declares, which is where every rule ran before.
+  CAS-L013 on a prompt (its title, description and argument text) additionally
+  declares a permanent `warn` ceiling: a persona is the product anywhere in a
+  prompt template, so that one pairing does not graduate with the prompt and
+  resource surfaces in the later minor, which is no earlier than 2026-11-06.
+  A programmatic caller of `lintPrompt` therefore reads `severity: "warn"`
+  there where it read `error`; the level `check` reports was already `warn`. No
+  finding gets a higher level in this release, the default gate is unchanged,
+  and the SARIF fingerprint of every finding that still fires is unchanged.
 - **The test suite runs on vitest 5** (from 2), which clears the critical and
   high advisories `npm audit` reported against the development tree. None of
   that tree ships in the package. The vitest adapter's peer range stays
