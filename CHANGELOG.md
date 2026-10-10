@@ -28,6 +28,17 @@ below.
   writes a bare `--reporter=json` to `.vitest/json/output.json` instead of
   printing it.
 
+### Fixed
+
+- **`replay --on-miss passthrough` no longer forwards an unrecorded
+  `subscriptions/listen`.** A live server answers a listen only when the
+  subscription ends, so the forward waited out the 15-second relay timeout,
+  answered `-32603`, and failed the session with exit 1. An SDK client with
+  `ClientOptions.listChanged` opens that listen on its own, so this hit
+  sessions that did nothing wrong. The listen now gets the miss error at once,
+  with a line on stderr, on stdio and HTTP, and the session exits 0. A listen
+  the cassette holds is still served.
+
 ## [0.9.1] - 2026-10-10
 
 The action could not be listed on GitHub Marketplace. Marketplace refuses an

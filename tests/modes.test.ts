@@ -314,6 +314,27 @@ process.stdin.on("data", (d) => {
     expect(readCassette(cassettePath).entries.length).toBe(entriesBefore);
   }, 30_000);
 
+  it("passthrough answers an unrecorded subscriptions/listen with the miss error instead of forwarding it", async () => {
+    // A live server answers a listen only when the subscription ends, so a
+    // forward would wait out the relay timeout and then fail. The server
+    // command here cannot even start: any forward attempted fails the session.
+    const cassettePath = path.join(tmpDir, "spy-listen.cassette.jsonl");
+    await recordEchoSession(cassettePath);
+    const before = fs.readFileSync(cassettePath, "utf8");
+    const listen: JsonRpcFrame = { jsonrpc: "2.0", id: 8, method: "subscriptions/listen", params: {} };
+
+    const { code, out, stderr } = await replaySession(
+      [cassettePath, "--on-miss", "passthrough", "--", "no-such-binary-xyz"],
+      [initFrame, initializedNote, listen]
+    );
+    const answer = out.find((f) => "id" in f && f.id === 8) as JsonRpcResponse;
+    expect(answer.error?.code).toBe(-32601);
+    expect(stderr).toContain('passthrough does not forward "subscriptions/listen"');
+    expect(stderr).not.toContain("FAILED");
+    expect(code).toBe(0);
+    expect(fs.readFileSync(cassettePath, "utf8")).toBe(before);
+  }, 30_000);
+
   it("passthrough keeps a redacted cassette redacted when appending live interactions", async () => {
     /** Shaped like GitHub PATs, valid nowhere. */
     const TOKEN_RECORDED = "ghp_NOTAREALTOKENUSEDINTESTSONLY000000";

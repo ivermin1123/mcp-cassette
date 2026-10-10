@@ -217,6 +217,34 @@ describe("forwarding a miss to the live server", () => {
     expect(fs.readFileSync(file, "utf8")).toBe(before);
   });
 
+  it("answers an unrecorded subscriptions/listen with the miss error instead of forwarding it", async () => {
+    // A live server answers a listen only when the subscription ends, and
+    // nothing listens at this URL either: any forward attempted is a failure.
+    const file = cassette("listen", { era: "legacy" }, RECORDED);
+    const before = fs.readFileSync(file, "utf8");
+    const server = await startHttpReplay(file, {
+      listen: "127.0.0.1:0",
+      onMiss: "passthrough",
+      serverCommand: ["http://127.0.0.1:1/mcp"],
+    });
+    const lines: string[] = [];
+    const write = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => (lines.push(String(chunk)), true)) as typeof process.stderr.write;
+    let body: { error: { code: number } };
+    try {
+      body = (await (await post(server.url, ask(2, "subscriptions/listen"))).json()) as { error: { code: number } };
+    } finally {
+      process.stderr.write = write;
+    }
+    await server.close();
+
+    expect(body.error.code).toBe(-32601);
+    expect(lines.join("")).toContain('passthrough does not forward "subscriptions/listen"');
+    expect(server.forwardFailures()).toBe(0);
+    expect(server.appended()).toBe(0);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+
   it("refuses passthrough with no server to pass through to", async () => {
     const file = cassette("nocommand", { era: "legacy" }, RECORDED);
     await expect(startHttpReplay(file, { listen: "127.0.0.1:0", onMiss: "passthrough" })).rejects.toThrow(
