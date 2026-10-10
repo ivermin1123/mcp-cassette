@@ -118,7 +118,7 @@ moving its own floats is invisible to itself; a maintainer moving one is not.
 So the cost today is one red run in the Actions history per manual float cut.
 Noise, not risk.
 
-**Directions, none chosen:**
+**Directions considered:**
 
 - **Narrow the pattern** to full versions (`v[0-9]+.[0-9]+.[0-9]+*`). Removes the
   noise, and also removes the version gate's protection from anything the
@@ -126,7 +126,7 @@ Noise, not risk.
   instead of failing loudly.
 - **Accept the noise** and document it, treating the red run as proof the
   version gate works. Costs nothing but leaves a permanent "is the release
-  broken?" question for anyone reading Actions.
+  broken?" question for anyone reading Actions. **Chosen.**
 - **Keep the trigger and exit early** on a tag that is not a full version, so
   the run goes green-and-skipped rather than red.
 
@@ -674,12 +674,14 @@ at its default gate, and on CAS-L015.
 A consumer who wants a rug pull red already has `--fail-on dangerous`. Reopen
 on a real rug pull that a consumer on the default gate missed; graduate the
 `shape` rules only, then, and no sooner than 2026-11-07. The measurement that
-led here follows. The release itself was safe: the id ships at `dangerous`, which is reported always and
-gates only under `--fail-on dangerous`, so a consumer on the default gate sees
-the row and stays green. The decision this item owes is the graduation to
-`breaking`, which the README and the CHANGELOG both say may come in a later
-minor. At `breaking` the id gates by default, and the set it is built from has
-not been argued for.
+led here follows.
+
+The release that added the id was safe: it shipped at `dangerous`, which is
+reported always and gates only under `--fail-on dangerous`, so a consumer on
+the default gate saw the row and stayed green. The decision this item owed was
+the graduation to `breaking`, which the 0.9.0 README and CHANGELOG said may
+come in a later minor. At `breaking` the id would gate by default, on a rule
+set nobody had argued for.
 
 **What the id compares today.** Every `CAS-L` rule that names a SAFE-MCP
 technique, run over the stored description and over the live one. The one
@@ -718,7 +720,7 @@ rug pull. CAS-L015 is the other shape: it fires on "μs", where the mu is Greek
 inside a Latin word, which is the known noise of a unit symbol in a tool
 description rather than homoglyph obfuscation.
 
-**Three directions to decide between before this graduates.**
+**Three directions were on the table.**
 
 *Graduate only the `shape`-class rules.* It matches the lint's own discipline,
 where only a `shape` rule is ever allowed to gate, and it leaves the `intent`
@@ -733,14 +735,15 @@ rules.
 *Leave it at `dangerous` permanently.* The least work and the honest default if
 neither of the above wins: the id is a report that a `--fail-on dangerous`
 consumer opts into, and the promise in the README becomes a decision taken
-rather than a graduation deferred. The README and CHANGELOG wording would need
-to change with it.
+rather than a graduation deferred. The README and CHANGELOG wording change with
+it. **Chosen.**
 
-Whichever wins, the calendar floor is worth a decision too. CONTRIBUTING gives
-every new `CAS-L` rule a later minor **and** four weeks before it may gate,
-because minors here ship days apart. Drift rule ids are not under that section
-by its letter, and the same reasoning applies to an id that would start
-failing builds.
+Had either graduation won, the calendar floor would have needed a decision too.
+CONTRIBUTING gives every new `CAS-L` rule a later minor **and** four weeks
+before it may gate, because minors here ship days apart. Drift rule ids are not
+under that section by its letter, and the same reasoning applies to an id that
+would start failing builds. That is where the 2026-11-07 floor above comes
+from.
 
 ---
 
@@ -750,10 +753,12 @@ failing builds.
 fix, documented in the README under
 [the one reword that is not prose](README.md#the-one-reword-that-is-not-prose).
 Comparing schema-level text would change the snapshot format for something
-nobody has asked for, and every existing snapshot would report one `info` line
-after the upgrade; the structural rules already report the same text wherever
-`check` runs. Reopen on a report of a rug pull through a parameter description
+nobody has asked for, and every existing snapshot would report an `info` line
+per tool after the upgrade. The same text one level down is already reported:
+by the structural drift rules at `info`, and by the safety lint on every
+`check` run. Reopen on a report of a rug pull through a parameter description
 on a server `check` was not run against.
+
 `tool-description-poisoned` compares the tool's top-level `description` and
 nothing else. The same injection placed one level down is reported exactly as
 it was before the id existed: in a parameter description or the schema's own
@@ -833,8 +838,9 @@ same analysis over a user's own patterns and accepts nothing.
 ## The client does not retry a rejected `tools/call` after re-listing: DECIDED
 
 **Raised** 2026-10-10, implementing the 2026-07-28 header mirror. **Decided**
-2026-10-10: no hidden retry. The reasons and what would reopen it are the last
-three paragraphs of this section.
+2026-10-10: no hidden retry. The reasons are under **Why it was left out**
+and **What it would cost** below, and **What would reopen it** says when to
+revisit.
 
 The spec gives a client one recovery path when a server answers a `tools/call`
 with `400` and `-32020` because the `Mcp-Param-*` headers are missing or stale:
