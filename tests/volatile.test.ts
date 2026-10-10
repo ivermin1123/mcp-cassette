@@ -260,6 +260,14 @@ describe("a declaration on a field replay matches a rule on", () => {
     expect(build("tasks/update:/inputResponses")).toThrow(/on every method/);
   });
 
+  it("refuses /requestState, which a retry carrying no inputResponses is matched on", () => {
+    // `mrtrPart` reads both fields, so a request carrying only `requestState`
+    // is still a retry. Dropping it would leave that request keyed on nothing a
+    // retry is keyed on, and it would land in the pool of the call it retried.
+    expect(build("/requestState")).toThrow(/answer a retry carrying no \/inputResponses/);
+    expect(build("tools/call:/requestState")).toThrow(/on every method/);
+  });
+
   it("refuses /name on tools/call, which would answer one tool with another's recording", () => {
     expect(build("tools/call:/name")).toThrow(/answer a call with another tool's recording/);
     expect(build("/name")).toThrow(/answer a call with another tool's recording/);
@@ -268,6 +276,7 @@ describe("a declaration on a field replay matches a rule on", () => {
   it("leaves the same names declarable on a method that does not match on them", () => {
     expect(build("prompts/get:/name")).not.toThrow();
     expect(build("tasks/update:/taskId")).not.toThrow();
+    expect(build("/arguments/requestState")).not.toThrow();
     // Only the first segment is the rule's; an argument of the same name is fine.
     expect(build("tools/call:/arguments/name")).not.toThrow();
   });

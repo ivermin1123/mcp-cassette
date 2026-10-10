@@ -39,7 +39,7 @@ version and new, optional fields. No field of v1 is renamed or removed.
   "startedAt": "2026-08-15T09:00:00Z",
   "transport": "stdio",
   "command": ["npx", "-y", "some-server"],
-  "redaction": { "applied": true },
+  "redaction": { "applied": true, "configHash": "9f86d081..." },
 
   // NEW: which lifecycle the recorded session spoke.
   //   "legacy": classic initialize handshake (every v1 cassette is this)
@@ -249,6 +249,63 @@ position rule above like any other, tagged with the subscription id the client's
 own listen request carried. Replay does not interpret the subscription filter;
 it matches the listen request's params as recorded.
 
+### `redaction.configHash`: which rules wrote this file
+
+Redaction is configurable (`--redact-config <file>`), and a custom rule changes
+what a recorded string says. It also changes what a fingerprint means, because
+replay redacts an incoming request before matching it: a rule that ran at record
+time and not at replay time leaves the recorded side hashed over a placeholder
+and the live side over the secret itself, and every request misses for a reason
+the near-miss diff cannot explain, since it names a field whose recorded value
+is a placeholder and whose live value is the value.
+
+So a recording made under a config carries a hash of that config:
+
+```jsonc
+{
+  "type": "header",
+  "redaction": { "applied": true, "configHash": "<sha256 of the canonical config>" }
+}
+```
+
+The rules this carries, and what it costs:
+
+- Only the hash is stored. A regex describes the secrets it catches and an
+  allowed value is a value, and neither belongs in a file meant to be committed.
+  The hash does not contain them, but it is not a secret either: an unsalted
+  sha256 of a small JSON document is a verification oracle, so anyone with a
+  candidate config can confirm it offline. Put only values that are already
+  public in `allow`.
+- The canonical form is what the config *does*, not how it was written, because
+  tidying the file must not turn every cassette recorded under it into a
+  different config. `keys` are lowercased, which is how matching compares them,
+  then deduplicated and sorted; `allow` is deduplicated and sorted but never
+  lowercased, because it is compared exactly; a pattern's flags are sorted,
+  because `RegExp` does not care in which order they were written; and
+  `patterns` keep their order, because order decides which rule claims an
+  overlapping match. So reformatting, reordering `keys` or `allow`, changing the
+  case of a key or writing `iu` as `ui` all leave the hash alone, while
+  reordering the patterns changes it. The regex source is taken as written: two
+  spellings of one language (`\d` and `[0-9]`) hash differently, which is the
+  one place this is stricter than behaviour.
+- A config that declares nothing produces no hash, so an empty config file is
+  the same as no config file.
+- Replay refuses a mismatch and says which side is short one: a cassette
+  recorded with a config and replayed without it, replayed with one it was not
+  recorded with, or replayed with a different one.
+- A `--no-redact` recording carries no hash, because it ran under no rules at
+  all, and the CLI refuses the two flags together rather than letting one
+  silently win.
+- `redact` refuses to rewrite a cassette that already names a config under any
+  other config, including none. The frames would otherwise correspond to no
+  single config while the header claimed one, which is the exact file replay
+  would accept and then miss on.
+- An older mcp-cassette ignores the field and replays with the built-in rules,
+  so a custom-redacted request misses there with a diff naming the placeholder
+  against the live value.
+- Absent on every cassette recorded on the built-in rules alone, which is every
+  cassette written before the field existed.
+
 ### Declared volatility
 
 Replay matches exactly, which is what makes a cassette a test double rather
@@ -297,8 +354,9 @@ The rules worth stating, because they are what the field costs:
   computes it.
 - Which is why a declaration naming a field replay matches a rule on is refused
   rather than honoured: `/name` and `/inputResponses` on a `tools/call`,
-  `/taskId` on a `tasks/get`, and `/inputResponses` on any method, since that is
-  the field telling a retry from the call it retried wherever it appears.
+  `/taskId` on a `tasks/get`, and `/inputResponses` and `/requestState` on any
+  method, since those are the fields telling a retry from the call it retried
+  wherever they appear.
   Erasing one of them changes which rule runs, and the request is then answered
   with another tool's, another retry's or another task's recording with nothing
   on stderr. The same names stay declarable on a method that does not match on

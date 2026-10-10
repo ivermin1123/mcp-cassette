@@ -518,3 +518,46 @@ and never graduates past `warn` there.
 Doing neither and graduating as the rules stand turns a filesystem-style server
 that lists dotfiles, or a prompt server whose descriptions carry a persona, red
 at the default gate. That is the outcome the measurement is here to prevent.
+
+---
+
+## Two built-in redaction rules are polynomial, and accepted: DECIDED
+
+**Raised** 2026-10-09, when `scripts/recheck-rules.mjs` was extended to the
+redaction rules alongside the safety lint's. **Decided** the same day: both stay
+as they are, named in `REDACT_ACCEPTED` with the measurement that settled them.
+Kept here because the next person to read a `polynomial` verdict deserves the
+argument rather than a bare exemption.
+
+`recheck` calls `urlcreds` and `jwt` polynomial, and it is right about the
+shape. Both offer one candidate start every few characters (`-` is a word
+boundary as well as a class member) and each start rescans what follows, which
+is the quadratic the comments beside them in `src/redact.ts` already describe.
+
+**What the caps did.** Those comments also record the fix: both patterns cap
+their segment lengths, which bounds the rescan to a constant instead of removing
+the second factor. `recheck` analyses the shape, so it still reports polynomial;
+the cost does not behave that way. Measured on this machine over recheck's own
+attack strings, against the capped patterns:
+
+- `urlcreds`: 0.5ms at 8KB, 3.0ms at 64KB, 25.1ms at 512KB
+- `jwt`: 11.2ms at 16KB, 90.1ms at 128KB, 691.1ms at 1MB
+
+Eight times the input costs about eight times the time in both, which is the
+claim the caps were added to make. The `jwt` comment records the uncapped number
+for comparison: 6s on 128KB, against 90ms now.
+
+**Why not "fix" them.** Removing the second factor means changing what the
+patterns match, and these two decide whether a credential in a recording is
+redacted. A rewrite is a change to redaction behaviour, which is exactly the
+thing a release has no safe way to be wrong about, and it would buy a constant
+factor on an input size no recording reaches.
+
+**What would reopen it.** A redaction rule that is not in `REDACT_ACCEPTED` and
+comes back anything but `safe` fails CI, by design; so does an entry in that map
+whose rule no longer exists. If a future rule needs to join them it needs a
+measurement in the same shape, not a line in the map.
+
+**Related:** `scripts/recheck-rules.mjs` (`REDACT_ACCEPTED`), `src/redact.ts`
+(the `urlcreds` and `jwt` comments), `redact --check-config`, which runs the
+same analysis over a user's own patterns and accepts nothing.

@@ -20,7 +20,7 @@ import { Readable } from "node:stream";
 import { CassetteWriter, type Era, type StreamChunk } from "./cassette.js";
 import { isRequest, isResponse, parseFrame, type JsonRpcFrame, type JsonRpcId } from "./jsonrpc.js";
 import { ensureWritable, type RecordMode } from "./record.js";
-import { redactFrame, redactString } from "./redact.js";
+import { redactFrame, redactString, BUILTIN_REDACTION, type CompiledRedactConfig } from "./redact.js";
 import { SseParser } from "./sse.js";
 
 export const DEFAULT_LISTEN = "127.0.0.1:6402";
@@ -55,6 +55,8 @@ export interface HttpRecordOptions {
   listen?: string;
   redact?: boolean;
   mode?: RecordMode;
+  /** The user's own redaction rules, compiled. Built-ins only when absent. */
+  redactConfig?: CompiledRedactConfig;
 }
 
 export function parseListen(listen: string): { host: string; port: number } {
@@ -121,17 +123,25 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
   const { host, port } = parseListen(opts.listen ?? DEFAULT_LISTEN);
   ensureWritable(opts.out, opts.mode ?? "once");
   const redact = opts.redact !== false;
-  const writer = new CassetteWriter(opts.out, undefined, { applied: redact }, {
-    transport: "http",
-    url: redact ? redactString(opts.url) : opts.url,
-    deferHeader: true,
-  });
+  const cfg = opts.redactConfig ?? BUILTIN_REDACTION;
+  // The hash goes in only when redaction actually ran: a --no-redact recording
+  // was written under no rules at all, whatever file was passed.
+  const writer = new CassetteWriter(
+    opts.out,
+    undefined,
+    { applied: redact, ...(redact && cfg.hash ? { configHash: cfg.hash } : {}) },
+    {
+      transport: "http",
+      url: redact ? redactString(opts.url, cfg) : opts.url,
+      deferHeader: true,
+    }
+  );
 
   let eraDecided = false;
   /** Streams still open. The session may end before they do; then they are flushed as-is (§2.5). */
   const live = new Set<{ flush(): void; close(): void }>();
   const capture = (dir: "c2s" | "s2c", frame: JsonRpcFrame, status?: number) => {
-    writer.frame(dir, redact ? (redactFrame(frame) as JsonRpcFrame) : frame, status ? { status } : undefined);
+    writer.frame(dir, redact ? (redactFrame(frame, cfg) as JsonRpcFrame) : frame, status ? { status } : undefined);
   };
   /**
    * §4.1: the first *successful* exchange decides, never a probe; success is
@@ -242,7 +252,7 @@ export async function startHttpRecord(opts: HttpRecordOptions): Promise<Recordin
       const absorb = (events: { data: string }[]) => {
         for (const event of events) {
           const frame = parseFrame(event.data);
-          if (frame) seen.push({ t: writer.elapsed(), frame: redact ? (redactFrame(frame) as JsonRpcFrame) : frame });
+          if (frame) seen.push({ t: writer.elapsed(), frame: redact ? (redactFrame(frame, cfg) as JsonRpcFrame) : frame });
         }
       };
       let flushed = false;

@@ -57,6 +57,7 @@ import {
   type RecordedTaskPolls,
 } from "./replay.js";
 import { MiniClient, type Target } from "./client.js";
+import { readRedactConfig } from "./redact.js";
 
 /** "none" (default) emits chunks back to back; "recorded" honors the offsets the recorder stamped. */
 export type Timing = "none" | "recorded";
@@ -69,6 +70,8 @@ export interface HttpReplayOptions {
   timing?: Timing;
   /** The real server to forward misses to, for `--on-miss passthrough`. */
   serverCommand?: string[];
+  /** Path to a `--redact-config` file; must be the one the recording used. */
+  redactConfig?: string;
   /**
    * Request fields that change every run, as JSON Pointers into the request
    * `params`, each optionally scoped to one method. Added to whatever the
@@ -238,7 +241,10 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
     );
   }
   const era: Era = cassetteEra(cassette.header);
-  const index = buildReplayIndex(cassette, { volatile: opts.volatile });
+  const index = buildReplayIndex(cassette, {
+    volatile: opts.volatile,
+    ...(opts.redactConfig ? { redactConfig: readRedactConfig(opts.redactConfig) } : {}),
+  });
   const statuses = recordedStatuses(cassette);
   // The stream pools are keyed by the same fingerprint the engine uses, so they
   // take the declarations the index resolved rather than resolving them again.
@@ -281,7 +287,10 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
   let forwardFailures = 0;
   // The spy machinery is v1's, unchanged: append synchronously to the file that
   // already exists, re-key each live pair to its own `live-N`.
-  const spy = onMiss === "passthrough" ? new LiveAppender(cassettePath, cassette, index.redactRequests) : null;
+  const spy =
+    onMiss === "passthrough"
+      ? new LiveAppender(cassettePath, cassette, index.redactRequests, index.redactConfig)
+      : null;
   // Connecting is memoized including failure, so a broken command fails every
   // later miss fast instead of spawning one orphan process per miss.
   let livePromise: Promise<MiniClient> | null = null;

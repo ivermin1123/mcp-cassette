@@ -41,8 +41,18 @@ export interface CassetteHeader {
   era?: Era;
   /** Legacy-era HTTP only: the recorded server minted an Mcp-Session-Id. The value itself is never stored. */
   sessioned?: boolean;
-  /** Absent on cassettes written before redaction existed; treat as not applied. */
-  redaction?: { applied: boolean };
+  /**
+   * Absent on cassettes written before redaction existed; treat as not applied.
+   *
+   * `configHash` is the sha256 of the `--redact-config` the recording ran
+   * under, and is absent when it ran on the built-in rules alone. Only the hash
+   * is stored: a regex describes the secrets it catches and an allowed value is
+   * a value, so neither belongs in a file meant to be committed. Replay
+   * compares it with the config it was given and refuses a mismatch, because
+   * redaction happens before fingerprinting and two different rule sets hash
+   * different text.
+   */
+  redaction?: { applied: boolean; configHash?: string };
   /**
    * Request fields that change every run, as JSON Pointers into the request
    * `params` (`/arguments/requestedAt`), each optionally scoped to one method
@@ -130,7 +140,7 @@ export class CassetteWriter {
   constructor(
     path: string,
     command?: string[],
-    redaction: { applied: boolean } = { applied: false },
+    redaction: { applied: boolean; configHash?: string } = { applied: false },
     options: CassetteWriterOptions = {}
   ) {
     this.stream = fs.createWriteStream(path, { flags: "w" });
