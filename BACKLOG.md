@@ -383,7 +383,19 @@ caller asking for it, which is what makes this easy to hit.
 before server frames were replayed. The fix was a timeout or a method list that
 passthrough refuses to forward; the method list was chosen, holding one method.
 
-### `record` keeps only the last connection when a client probes on a throwaway one
+### `record` keeps only the last connection when a client probes on a throwaway one: DECIDED
+
+**Raised** 2026-10-08. **Decided** 2026-10-10: the owner chose the append
+direction, a third value for `--mode`, over a per-connection suffix. A suffix
+leaves replay with the same problem it started with, because both connections
+replay against one path and neither knows which connection it is; appending
+gives each replay process one file to build its index from, and the probe pair
+and the session's exchanges each come out of their own pool. The header is the
+part that needed deciding: an appending session never rewrites it, and is
+refused outright when it would contradict it, so `lint` still accepts the
+result. Shipped in the Unreleased section of [CHANGELOG.md](CHANGELOG.md), with
+the mode and its one caveat, that an append is not scoped to a run, documented
+on [the README](README.md#recording-a-client-that-opens-more-than-one-connection).
 
 The official SDK in `versionNegotiation: { mode: { pin } }` opens one connection
 for the `server/discover` probe and a second for the session. Each connection
@@ -398,9 +410,25 @@ back in by hand made the replay work. Under the default `--mode once` the second
 spawn instead refuses to start, which fails the session with a clearer message
 but is no more usable.
 
-**Related:** `ensureWritable` and `CassetteWriter` in `src/record.ts`. An append
-mode, or a per-connection suffix, would fix it; both change what a cassette path
-means.
+**What shipped:** `record --mode append` adds the session to the cassette
+already at that path, and creates it with a header when there is none. The
+header is written once: another transport, another server command, another
+`--redact-config`, redaction switched on or off, or a handshake under a header
+that declares the modern era each refuse the session with a non-zero exit and
+leave the file exactly as it was. Appended entries carry their offset from the
+header's own `startedAt`, so one file stays one timeline, and their request ids
+are minted into the same `live-N` sequence `replay --on-miss passthrough` uses,
+so two connections that both start at id 1 keep their own answers. The mode is
+stdio only, because `record --http` is one proxy process for every connection a
+run opens and already captures them all.
+
+**Proof:** the probe connection and the session connection of a modern pinned
+flow recorded into one cassette, which `lint` accepts and which replays both
+connections offline, each with its own answers and its own subscription id
+(`tests/record-append.test.ts`).
+
+**Related:** `ensureWritable` and `CassetteAppender` in `src/record.ts`,
+`highestLiveId` in `src/replay.ts`.
 
 ### A frame recorded with two requests in flight is attributed to the wrong one
 

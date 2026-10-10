@@ -121,6 +121,16 @@ export interface RecordingProxy {
 // as a rejection like every other failure here, not as a throw at call time.
 export async function startHttpRecord(opts: HttpRecordOptions): Promise<RecordingProxy> {
   const { host, port } = parseListen(opts.listen ?? DEFAULT_LISTEN);
+  // `--mode append` exists because a stdio client spawns one recorder per
+  // connection, so the second one used to truncate the first. This proxy is a
+  // single process for every connection a client opens, so one run already
+  // captures them all and appending would only grow the previous run's file.
+  if (opts.mode === "append") {
+    throw new Error(
+      "record --mode append is for stdio recordings: the HTTP proxy already records every connection of a run " +
+        "into one cassette. Use --mode once or --mode all with --http"
+    );
+  }
   ensureWritable(opts.out, opts.mode ?? "once");
   const redact = opts.redact !== false;
   const cfg = opts.redactConfig ?? BUILTIN_REDACTION;

@@ -36,6 +36,29 @@ below.
   omits it runs on every surface a server declares, exactly as every rule in
   the catalogue did before this release.
 
+### Added
+
+- **`record --mode append`**, for a client that opens more than one connection
+  to the same server. A client in the 2026-07-28 pinned negotiation mode probes
+  on a throwaway connection and runs the session on a second one; over stdio
+  each connection spawns its own `record` against the same path. `--mode once`
+  made the second one refuse to start and `--mode all` made it truncate the
+  first, and either way the probe exchange that replay needs to pass the
+  client's negotiation was gone. `append` adds the session to the cassette
+  already there, creating it with a header when there is none, and replay
+  serves either connection out of the one file. The header is never rewritten:
+  a session that would contradict it, by another transport, another server
+  command, another `--redact-config`, redaction switched on or off, or a
+  handshake under a header that declares the modern era, is refused with a
+  non-zero exit and the file untouched, so a cassette that passed `lint` keeps
+  passing it. Appended entries carry their offset from the header's own
+  `startedAt`, and their request ids are minted into the same `live-N` sequence
+  `replay --on-miss passthrough` uses, so two connections that both start at id
+  1 stay paired with their own answers. `once` stays the default and `all` is
+  unchanged. The mode is stdio only: `record --http` is one proxy process for
+  every connection of a run, so it already captures them all and refuses the
+  mode.
+
 ### Changed
 
 - **Every lint rule declares the surfaces it runs on, and four of them stop
