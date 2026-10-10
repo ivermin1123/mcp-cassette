@@ -6,7 +6,22 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
-## [Unreleased]
+## [0.10.0] - 2026-10-10
+
+Two paths that failed sessions nobody had done wrong now work, and the safety
+lint stops reading a resource's name as a sentence. `record --mode append`
+records a client that probes on one connection and runs its session on a
+second into a single cassette, which the 2026-07-28 pinned negotiation needs,
+and `replay --on-miss passthrough` answers an unrecorded
+`subscriptions/listen` at once instead of waiting out a timeout and failing
+the session. Each lint rule now declares the surfaces it runs on, which drops
+four rules' findings on resource names and keeps CAS-L013 at `warn` on prompts
+for good, and `tool-description-poisoned` stays at `dangerous`.
+
+The BREAKING items reach the runtime and library callers, not the default
+gate: the CLI now requires Node.js 22, and a TypeScript caller who builds a
+`LintFinding` by hand has to name its `surface`. A workflow still on Node 20
+runs, with an npm engine warning, but nothing tests that combination any more.
 
 ### BREAKING
 
@@ -100,9 +115,9 @@ below.
 - **`tool-description-poisoned` stays at `dangerous`.** 0.9.0 said it may
   graduate to `breaking` in a later minor; it will not. At `breaking` it would
   gate by default on the `intent` rules, which are always `warn` and never
-  fail `check` at its default gate, and
-  `--fail-on dangerous` already makes a rug pull fail the build for anyone who
-  wants that. Nothing changes in this release; the README says the same.
+  fail `check` at its default gate, and `--fail-on dangerous` already makes a
+  rug pull fail the build for anyone who wants that. Nothing changes in this
+  release; the README says the same.
 
 ### Fixed
 
@@ -1279,6 +1294,7 @@ Packaging fixes for the first release.
 First public release: stdio record/replay, contract snapshots, safety checks,
 secrets redaction, and the `verify` command.
 
+[0.10.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.10.0
 [0.9.1]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.9.1
 [0.9.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.9.0
 [0.8.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.8.0
