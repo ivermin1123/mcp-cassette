@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [Unreleased]
+
+### BREAKING
+
+- **Node.js 22 or later.** `engines` moves from `>=20` to `>=22`, and CI tests
+  Node 22 and 24 instead of 20 and 22. Node 20 reached end of life on
+  2026-04-30, and vitest 5, which the suite now runs on, does not support it.
+  No code in the CLI changed for this, and npm only warns about the engine on
+  Node 20 unless `engine-strict` is set, but nothing tests Node 20 any more.
+  The action runs on whatever Node the job set up; the README's example
+  already uses `22.x`.
+
+### Changed
+
+- **The test suite runs on vitest 5** (from 2), which clears the critical and
+  high advisories `npm audit` reported against the development tree. None of
+  that tree ships in the package. The vitest adapter's peer range stays
+  `>=2`: it uses only `beforeAll`, `afterEach` and `afterAll`. Its test now
+  reads the fixture run's JSON report from `--outputFile`, because vitest 5
+  writes a bare `--reporter=json` to `.vitest/json/output.json` instead of
+  printing it.
+
 ## [0.9.1] - 2026-10-10
 
 The action could not be listed on GitHub Marketplace. Marketplace refuses an

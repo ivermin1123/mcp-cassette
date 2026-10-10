@@ -14,6 +14,9 @@
 
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { useCassette } from "../src/vitest/index.js";
 
@@ -29,23 +32,37 @@ interface VitestJson {
   }>;
 }
 
-/** Run the fixture project once and parse its report; a non-zero exit is expected. */
+/**
+ * Run the fixture project once and parse its report; a non-zero exit is expected.
+ *
+ * The report goes to a named file, not stdout: vitest 5 writes a bare
+ * `--reporter=json` to `.vitest/json/output.json` and prints only where it
+ * went, while earlier majors printed the report itself. `--outputFile` means
+ * the same thing to every major the adapter's peer range admits.
+ */
 function runFixtureProject(): VitestJson {
-  let stdout: string;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-cassette-vitest-adapter-"));
+  const outputFile = path.join(dir, "report.json");
+  let output = "";
   try {
-    stdout = execFileSync("npx", ["vitest", "run", "--root", root, "--reporter=json"], {
+    execFileSync("npx", ["vitest", "run", "--root", root, "--reporter=json", `--outputFile=${outputFile}`], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 120_000,
     });
   } catch (err) {
     // Two of the fixture's tests fail on purpose, so vitest exits 1 and
-    // execFileSync throws. The report is still on stdout.
-    stdout = (err as { stdout?: string }).stdout ?? "";
+    // execFileSync throws. The report is still written. What vitest printed is
+    // kept only to explain a run that crashed before writing it.
+    const { message, stdout, stderr } = err as { message?: string; stdout?: string; stderr?: string };
+    output = [message, stdout, stderr].filter(Boolean).join("\n");
   }
-  const start = stdout.indexOf("{");
-  if (start === -1) throw new Error(`fixture project produced no JSON report:\n${stdout}`);
-  return JSON.parse(stdout.slice(start)) as VitestJson;
+  try {
+    if (!fs.existsSync(outputFile)) throw new Error(`fixture project produced no JSON report:\n${output}`);
+    return JSON.parse(fs.readFileSync(outputFile, "utf8")) as VitestJson;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 describe("the adapter inside a real vitest run", () => {
