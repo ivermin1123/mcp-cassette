@@ -78,11 +78,22 @@ export function ensureWritable(out: string, mode: RecordMode): void {
  */
 function appendTarget(out: string, session: CassetteHeader, quiet = false): Cassette | null {
   if (!cassetteExists(out)) return null;
-  const cassette = readCassette(out, quiet ? () => undefined : undefined);
-  const header = cassette.header;
-  const refuse = (why: string): never => {
+  // Annotated, not inferred: a call to it ends the control flow only when the
+  // compiler can see `never` on the declaration, which the read below needs.
+  const refuse: (why: string) => never = (why) => {
     throw new Error(`record --mode append: ${out} ${why}`);
   };
+
+  // A run killed mid-write leaves a truncated last line, and the parse error on
+  // its own names neither the file nor what happened to it. Nothing is written
+  // before this point, so say that too: the repair is the user's to make.
+  let cassette: Cassette;
+  try {
+    cassette = readCassette(out, quiet ? () => undefined : undefined);
+  } catch (err) {
+    refuse(`could not be read as a cassette (${(err as Error).message}); it was left untouched`);
+  }
+  const header = cassette.header;
 
   if (header.transport !== session.transport) {
     refuse(
@@ -184,6 +195,8 @@ export class CassetteAppender {
   private start = Date.now();
   private header: CassetteHeader;
   private block: (FrameEntry | RawEntry)[] = [];
+  /** Abandoned by `discard()`: the close that still follows writes nothing. */
+  private discarded = false;
 
   constructor(
     private path: string,
@@ -215,10 +228,15 @@ export class CassetteAppender {
   /** Abandon the session: a server that never started leaves the file as it was. */
   discard(): Promise<void> {
     this.block = [];
+    this.discarded = true;
     return Promise.resolve();
   }
 
   async close(): Promise<void> {
+    // An abandoned session is not written, not even its header: the caller
+    // discards and the child's `close` event still arrives, and a header on a
+    // path that held no file is the leftover `discard()` exists to prevent.
+    if (this.discarded) return;
     // Twice at most: another recorder may create the cassette between the look
     // and the write, and then this block belongs under that header.
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -354,11 +372,13 @@ export function runRecord(opts: RecordOptions): Promise<number> {
 
     child.on("error", (err) => {
       // A server that never started must not leave a cassette behind for the
-      // next `--mode once` run to trip over. The stdio writer puts its header on
-      // disk immediately, so discarding the buffer is not enough: the file that
-      // this run created, and already truncated, goes with it. `--mode append`
-      // wrote nothing, and the file it would have been added to belongs to the
-      // runs before this one.
+      // next `--mode once` run to trip over. Node emits the child's `close`
+      // after a failed spawn, so the discard has to outlive this handler: the
+      // appender marks the session abandoned and its close writes nothing,
+      // leaving an existing file to the runs before this one. The stdio writer
+      // puts its header on disk immediately, so discarding the buffer is not
+      // enough there: the file this run created, and already truncated, goes
+      // with it.
       void writer.discard().then(() => {
         if (mode !== "append") fs.rmSync(opts.out, { force: true });
         reject(new Error(`record: failed to start server command: ${err.message}`));

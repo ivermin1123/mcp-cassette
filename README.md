@@ -382,12 +382,13 @@ mcp-cassette record -o session.cassette.jsonl --mode append -- npx -y my-server
 
 Replay then serves either connection out of that file: the probe connection gets its `server/discover` answer and the session connection gets its own exchanges, because a request is matched on its method and arguments and not on which connection recorded it.
 
-Three things the mode does, and one caveat:
+Three things the mode does, and two caveats:
 
 - **The header is written once and never rewritten.** A session that would contradict the header it cannot rewrite is refused before it writes anything, with a non-zero exit and the file exactly as it was: another transport, another server command, another `--redact-config`, redaction switched on or off, or a handshake recorded into a cassette whose header declares the modern era. So a cassette that passed `lint` still passes it afterwards.
 - **One file, one timeline.** Every appended entry carries its offset from the header's own `startedAt`, so the connections stay in the order they happened.
 - **Request ids are minted, not copied.** Both connections start at id 1, and a reader pairs a response with its request by id, so the appended session's ids are re-keyed to `live-1`, `live-2` and so on: the same sequence `replay --on-miss passthrough` mints from, seeded past whatever the file already holds. The subscription id a 2026-07-28 frame carries is one of those ids, and is re-keyed with them.
 - **Caveat: it appends across runs too.** Nothing scopes an append to one run, so recording into a cassette from last week grows that file instead of replacing it. Use `--mode all` when you want a fresh recording.
+- **Caveat: the session is held in memory until it ends.** The header cannot be rewritten, so nothing reaches the file before the last frame is in hand and the whole session goes out in one append at the end; `--mode once` and `--mode all` stream theirs as it happens. `SIGTERM` and `SIGINT` flush the block, a `SIGKILL` loses that session and leaves the file exactly as it was rather than half a line into it, and a long session's frames are held for as long as it runs. The official client SDK gives a probe connection's process one second after `SIGTERM` before it sends `SIGKILL`, so a server that takes longer than that to exit loses the probe pair.
 
 The mode is for stdio recordings. `record --http` is a single proxy process that every connection of a run goes through, so one run already captures them all; it refuses `--mode append` rather than pretending to need it.
 

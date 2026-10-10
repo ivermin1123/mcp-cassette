@@ -55,9 +55,10 @@ below.
   `startedAt`, and their request ids are minted into the same `live-N` sequence
   `replay --on-miss passthrough` uses, so two connections that both start at id
   1 stay paired with their own answers. `once` stays the default and `all` is
-  unchanged. The mode is stdio only: `record --http` is one proxy process for
-  every connection of a run, so it already captures them all and refuses the
-  mode.
+  unchanged, and the exported `RecordMode` type gains `"append"`, so a library
+  caller switching exhaustively over it sees the new member at compile time.
+  The mode is stdio only: `record --http` is one proxy process for every
+  connection of a run, so it already captures them all and refuses the mode.
 
 ### Changed
 

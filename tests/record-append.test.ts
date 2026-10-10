@@ -15,6 +15,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { readCassette, type CassetteEntry } from "../src/cassette.js";
 import { parseFrame, type JsonRpcFrame, type JsonRpcRequest, type JsonRpcResponse } from "../src/jsonrpc.js";
+import { runRecord, type RecordMode } from "../src/record.js";
 
 const ROOT = path.resolve(__dirname, "..");
 const CLI = path.join(ROOT, "dist/cli.js");
@@ -255,6 +256,24 @@ describe("record --mode append", () => {
     expect(failed.stderr).toContain("failed to start server command");
     expect(fs.readFileSync(file, "utf8")).toBe(before);
   }, 30_000);
+
+  it("creates no cassette when the server command never starts and the path held no file", async () => {
+    // Driven through `runRecord` rather than the CLI: the CLI exits on the
+    // rejection, and the rejection lands before the child's `close` event,
+    // which is where a leftover header would be written.
+    for (const mode of ["once", "all", "append"] as RecordMode[]) {
+      const file = path.join(tmpDir, `never-started-${mode}.cassette.jsonl`);
+      await expect(runRecord({ out: file, command: ["no-such-binary-xyz"], mode })).rejects.toThrow(
+        "failed to start server command"
+      );
+
+      // The rejection is a microtask after the spawn error and the `close` is a
+      // turn of the loop later, so the file gets that turn to appear before the
+      // path is read. A leftover here is one the next run has to delete by hand.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(fs.existsSync(file)).toBe(false);
+    }
+  }, 30_000);
 });
 
 describe("record --mode append refuses a header it would contradict", () => {
@@ -315,6 +334,25 @@ describe("record --mode append refuses a header it would contradict", () => {
     expect(fs.readFileSync(file, "utf8")).toBe(before);
     expect(lint(file).status).toBe(0);
   }, 30_000);
+
+  it("refuses a cassette whose last line was truncated, and says the file is as it was", () => {
+    const file = handWritten(
+      "truncated-tail",
+      { transport: "stdio", command: ["node", TINY], redaction: { applied: true } },
+      [{ type: "frame", t: 0, dir: "c2s", frame: ask(1, "ping") } as CassetteEntry]
+    );
+    // What a run killed mid-write leaves: a header that still parses and a last
+    // line that does not.
+    const whole = fs.readFileSync(file, "utf8");
+    fs.writeFileSync(file, whole.slice(0, whole.length - 12));
+    const before = fs.readFileSync(file, "utf8");
+
+    const out = refusal(file);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain(`record --mode append: ${file} could not be read as a cassette`);
+    expect(out.stderr).toContain("it was left untouched");
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
 
   it("refuses the mode on an HTTP recording, where one run already captures every connection", () => {
     const file = path.join(tmpDir, "http-append.cassette.jsonl");
