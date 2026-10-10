@@ -41,7 +41,7 @@ Every finding carries a stable rule id in parentheses. Match on the id, not the 
 
 ## In CI
 
-- GitHub Action, `ivermin1123/mcp-cassette@v0.8`: a composite action that runs `check` and `snapshot --check` against a committed snapshot and leaves one pull-request comment with the classified diff, updated in place on every push rather than appended. `lint-fail-on: error|warn|never` moves the gate for the `CAS-L` safety lint alone; `sarif-file: <path>` writes the findings, `CAS-C` and `CAS-L` alike, as SARIF for a later `upload-sarif` step, and the same path comes back as the `sarif-file` output, empty when the input was unset.
+- GitHub Action, `ivermin1123/mcp-cassette@v0.9`: a composite action that runs `check` and `snapshot --check` against a committed snapshot and leaves one pull-request comment with the classified diff, updated in place on every push rather than appended. `lint-fail-on: error|warn|never` moves the gate for the `CAS-L` safety lint alone; `sarif-file: <path>` writes the findings, `CAS-C` and `CAS-L` alike, as SARIF for a later `upload-sarif` step, and the same path comes back as the `sarif-file` output, empty when the input was unset.
 - Test adapters, `mcp-cassette/vitest` and `mcp-cassette/jest`: one `useCassette()` call wraps a `describe` block with a replay server, over stdio or HTTP. A fingerprint miss fails the test that caused it rather than arriving as a JSON-RPC error the assertion never looks at. Same call, same options, same two error classes on either runner. Both runners are optional peer dependencies, so neither reaches anyone not using its adapter.
 
 ## Docs
