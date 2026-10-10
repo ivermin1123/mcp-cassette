@@ -43,7 +43,7 @@ interface VitestJson {
 function runFixtureProject(): VitestJson {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-cassette-vitest-adapter-"));
   const outputFile = path.join(dir, "report.json");
-  let stdout = "";
+  let output = "";
   try {
     execFileSync("npx", ["vitest", "run", "--root", root, "--reporter=json", `--outputFile=${outputFile}`], {
       encoding: "utf8",
@@ -52,11 +52,13 @@ function runFixtureProject(): VitestJson {
     });
   } catch (err) {
     // Two of the fixture's tests fail on purpose, so vitest exits 1 and
-    // execFileSync throws. The report is still written.
-    stdout = (err as { stdout?: string }).stdout ?? "";
+    // execFileSync throws. The report is still written. What vitest printed is
+    // kept only to explain a run that crashed before writing it.
+    const { message, stdout, stderr } = err as { message?: string; stdout?: string; stderr?: string };
+    output = [message, stdout, stderr].filter(Boolean).join("\n");
   }
   try {
-    if (!fs.existsSync(outputFile)) throw new Error(`fixture project produced no JSON report:\n${stdout}`);
+    if (!fs.existsSync(outputFile)) throw new Error(`fixture project produced no JSON report:\n${output}`);
     return JSON.parse(fs.readFileSync(outputFile, "utf8")) as VitestJson;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

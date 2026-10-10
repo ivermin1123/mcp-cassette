@@ -78,9 +78,10 @@ function runFixtureProject(): JestJson {
  * The condition is deliberately narrow: the host must be the one release the
  * bug is known for, not one test may have run, and every suite must have died
  * of that one error, so a genuine adapter failure can never take this exit.
- * The version is part of the condition on purpose: CI runs 20.x and 22.x,
- * where the bug never existed, so the same message there is a real regression
- * and has to fail rather than skip seven tests into a green log.
+ * The version is part of the condition on purpose: CI runs 22.x, where the bug
+ * never existed, and 24.x, which setup-node resolves to the newest 24 release,
+ * long past 24.6. The same message there is a real regression and has to fail
+ * rather than skip seven tests into a green log.
  */
 function isHostLinkFailure(report: JestJson): boolean {
   return (
