@@ -23,7 +23,7 @@ import { isRequest, isResponse, type JsonRpcFrame, type JsonRpcId, type JsonRpcR
 import { validateVolatile } from "./replay.js";
 import { placeholderSpans } from "./redact.js";
 
-import { LINT_RULES, type LintRule, type LintSeverity } from "./lint-rules.js";
+import { INVISIBLE_RUN_RULE, LINT_RULES, type LintRule, type LintSeverity } from "./lint-rules.js";
 
 export { LINT_RULES } from "./lint-rules.js";
 export type { LintEvidence, LintRule, LintSeverity } from "./lint-rules.js";
@@ -310,7 +310,11 @@ function lintHeaderFields(
   header: Cassette["header"],
   warn: (rule: string, message: string) => void
 ): void {
-  if (header.volatile !== undefined) {
+  // `null` is treated as absent, not as a malformed list, because replay reads
+  // it that way (`header.volatile ?? []`) and runs. This lint reports what
+  // replay would refuse; a finding on a cassette that replays cleanly is a
+  // finding nobody can act on.
+  if (header.volatile !== undefined && header.volatile !== null) {
     if (!Array.isArray(header.volatile)) {
       warn("volatile-type", 'header `volatile` is not a list; it must be a list of declaration strings');
     } else {
@@ -394,7 +398,12 @@ export const OUTPUT_RULE_IDS: readonly string[] = Object.freeze([
  * resolves is a catalogue change this list has not been told about, which is
  * what `tests/lint-cassette.test.ts` pins.
  */
-const OUTPUT_RULES: LintRule[] = LINT_RULES.filter((rule) => OUTPUT_RULE_IDS.includes(rule.id));
+const OUTPUT_RULES: LintRule[] = LINT_RULES.filter((rule) => OUTPUT_RULE_IDS.includes(rule.id)).map(
+  // CAS-L006 is the one rule whose threshold differs by surface: a lone
+  // invisible code point is suspicious in a declaration and ordinary in
+  // returned data. See `INVISIBLE_RUN_RULE` for the measurement.
+  (rule) => (rule.id === INVISIBLE_RUN_RULE.id ? INVISIBLE_RUN_RULE : rule)
+);
 
 /** One finding about text a recorded server returned. */
 export interface OutputFinding {
@@ -425,18 +434,27 @@ export interface OutputFinding {
  * and an `initialize` answer is protocol. These three are the surfaces where a
  * third party's text arrives as data.
  */
-const OUTPUT_METHODS = new Set(["tools/call", "resources/read", "prompts/get"]);
+const OUTPUT_METHODS = new Set([
+  "tools/call",
+  // A task-augmented call answers with a handle and delivers the tool's real
+  // output later, so the text this lint exists to read arrives here instead.
+  "tasks/get",
+  "tasks/result",
+  "resources/read",
+  "prompts/get",
+]);
 
 /**
  * Keys whose values are never scanned.
  *
- * `blob` is base64 by specification. It is not decoded and not scanned, by
- * decision rather than oversight: decoding it would mean running an attacker's
- * bytes through an expansion this tool would then have to bound, and a lint
- * that silently decodes is a lint nobody can predict. A cassette carrying a
- * poisoned blob is outside what this reports, and the README says so.
+ * `blob` on a resource and `data` on an image or audio block are both base64 by
+ * specification. Neither is decoded and neither is scanned, by decision rather
+ * than oversight: decoding would mean running an attacker's bytes through an
+ * expansion this tool would then have to bound, and a lint that silently
+ * decodes is a lint nobody can predict. A cassette carrying a poisoned blob is
+ * outside what this reports, and the README says so.
  */
-const UNSCANNED_KEYS = new Set(["blob"]);
+const UNSCANNED_KEYS = new Set(["blob", "data"]);
 
 /**
  * The text with its redaction placeholders blanked out.
@@ -459,7 +477,13 @@ function withoutPlaceholders(text: string): string {
   return out + text.slice(at);
 }
 
-/** Every string inside a payload, with the JSON path that reaches it. */
+/**
+ * Every string inside a payload, with the JSON path that reaches it.
+ *
+ * Twelve levels deep and no further, the bound `collectSchemaText` already uses
+ * for schemas. A tool result nested deeper than that is not something this
+ * reports, which is a stated limit rather than a silent one.
+ */
 function eachString(node: unknown, path: string, out: Array<[string, string]>, depth = 0): void {
   if (depth > 12) return;
   if (typeof node === "string") {
@@ -477,15 +501,14 @@ function eachString(node: unknown, path: string, out: Array<[string, string]>, d
   }
 }
 
-/** Which method each request id asked for, so an answer can name the question. */
-function methodsByRequestId(cassette: Cassette): Map<string, string> {
-  const methods = new Map<string, string>();
-  for (const entry of cassette.entries) {
-    if (entry.type !== "frame" || entry.dir !== "c2s") continue;
-    const frame = entry.frame;
-    if (isRequest(frame)) methods.set(String(frame.id), frame.method);
-  }
-  return methods;
+/**
+ * A request id, keyed so that a numeric `1` and a string `"1"` stay apart.
+ *
+ * JSON-RPC allows either, and two clients on one recording may well pick
+ * different spellings of the same number.
+ */
+function idKey(id: JsonRpcId): string {
+  return `${typeof id}:${String(id)}`;
 }
 
 /**
@@ -497,13 +520,22 @@ function methodsByRequestId(cassette: Cassette): Map<string, string> {
  * header-versus-frames contradictions decide its exit code.
  */
 export function lintCassetteOutput(cassette: Cassette): OutputFinding[] {
-  const methods = methodsByRequestId(cassette);
+  // An id identifies a request only until it is answered. Clients restart ids
+  // per connection, and one HTTP recording holds every client that spoke to the
+  // proxy, so a file can carry several requests with the same id. Reading the
+  // whole file into one map first would let the last of them name every answer,
+  // which silently attributes a tools/call answer to a tools/list and the other
+  // way round. Pairing each answer with the most recent request still waiting
+  // for one is what the wire itself means.
+  const pending = new Map<string, string>();
   const findings: OutputFinding[] = [];
 
   const scanResponse = (frame: JsonRpcFrame): void => {
-    if (!isResponse(frame) || frame.result === undefined) return;
-    const method = methods.get(String(frame.id));
-    if (method === undefined || !OUTPUT_METHODS.has(method)) return;
+    if (!isResponse(frame)) return;
+    const key = idKey(frame.id);
+    const method = pending.get(key);
+    pending.delete(key);
+    if (frame.result === undefined || method === undefined || !OUTPUT_METHODS.has(method)) return;
 
     const strings: Array<[string, string]> = [];
     eachString(frame.result, "/result", strings);
@@ -529,6 +561,9 @@ export function lintCassetteOutput(cassette: Cassette): OutputFinding[] {
   };
 
   for (const entry of cassette.entries) {
+    if (entry.type === "frame" && entry.dir === "c2s" && isRequest(entry.frame)) {
+      pending.set(idKey(entry.frame.id), entry.frame.method);
+    }
     if (entry.type === "frame" && entry.dir === "s2c") scanResponse(entry.frame);
     // A streamed answer is the same answer, delivered in pieces.
     if (entry.type === "chunks") for (const chunk of entry.chunks) scanResponse(chunk.frame);

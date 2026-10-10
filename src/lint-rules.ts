@@ -342,6 +342,48 @@ const TAIL_RULES: LintRule[] = [
   },
 ];
 
+/**
+ * CAS-L006, narrowed for text a server *returned* rather than declared.
+ *
+ * The catalogue rule matches a single invisible code point, which is right for
+ * a description: nothing honest puts one there. Returned data is a different
+ * population. A web editor leaves a lone U+200B in about three percent of real
+ * GitHub issue bodies, a file authored on Windows and read back through
+ * `resources/read` opens with a U+FEFF byte-order mark, and every ZWJ emoji
+ * sequence is a U+200D by construction. Reporting those teaches a reader to
+ * ignore the rule, which costs more than the rule catches.
+ *
+ * Both encodings the rule exists for survive the narrowing, because neither can
+ * express anything in one code point: zero-width binary needs one per bit, and
+ * the Tags block never appears in ordinary text at all, so a single Tags code
+ * point still counts. Measured over 1196 issue bodies and 5549 files, this
+ * removes every ordinary-data hit and keeps every payload.
+ *
+ * Exported as its own rule rather than replacing the catalogue entry: a lone
+ * zero-width character in a tool description stays suspicious, and the two
+ * surfaces are allowed to disagree about the same id.
+ */
+const INVISIBLE_RUN = /(?:[\u200B-\u200F\u2060\uFEFF]|[\u{E0000}-\u{E007F}]){2,}|[\u{E0000}-\u{E007F}]/u;
+
+export const INVISIBLE_RUN_RULE: LintRule = {
+  id: "CAS-L006",
+  evidence: "shape",
+  severity: "error",
+  describe: "invisible/steganographic Unicode in description",
+  owasp: ["MCP03:2025"],
+  safeMcp: ["SAFE-T1402"],
+  pattern: INVISIBLE_RUN,
+  find: (text) => {
+    const m = INVISIBLE_RUN.exec(text);
+    if (!m) return null;
+    const run = [...m[0]];
+    return (
+      `contains U+${run[0]!.codePointAt(0)!.toString(16).toUpperCase()}` +
+      ` (${run.length} invisible code point${run.length === 1 ? "" : "s"} in a row)`
+    );
+  },
+};
+
 export const LINT_RULES: LintRule[] = [
   regexRule({
     id: "CAS-L001",

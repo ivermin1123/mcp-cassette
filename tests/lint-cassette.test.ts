@@ -10,7 +10,7 @@
  * not.
  */
 import { describe, expect, it } from "vitest";
-import { lintCassette, lintCassetteOutput, OUTPUT_RULE_IDS } from "../src/lint.js";
+import { lintCassette, lintCassetteOutput, lintTool, OUTPUT_RULE_IDS } from "../src/lint.js";
 import { LINT_RULES } from "../src/lint-rules.js";
 import type { Cassette, CassetteHeader } from "../src/cassette.js";
 import type { JsonRpcFrame } from "../src/jsonrpc.js";
@@ -157,6 +157,99 @@ describe("lintCassetteOutput", () => {
     }
   });
 
+  it("does not report a lone invisible code point, which ordinary returned text carries", () => {
+    // Measured over real issue bodies and real files: a web editor leaves a
+    // lone U+200B behind, a file authored on Windows opens with a BOM, and
+    // every ZWJ emoji is a U+200D. None of them is steganography, and a rule
+    // that fires on all three teaches a reader to ignore it.
+    const ordinary = [
+      "Report: ok.\u200b It builds.",
+      "\ufeff# Release notes",
+      "Reviewed by \ud83d\udc69\u200d\ud83d\udcbb and shipped.",
+      "A flag \ud83c\udff3\ufe0f\u200d\ud83c\udf08 in the changelog.",
+    ];
+    for (const text of ordinary) {
+      expect({ text, findings: lintCassetteOutput(tape(toolResult(1, text))) }).toEqual({
+        text,
+        findings: [],
+      });
+    }
+  });
+
+  it("reports a run of invisible code points, and a single Tags-block one", () => {
+    // Both encodings the rule exists for survive: zero-width binary needs one
+    // code point per bit, and the Tags block never appears in ordinary text.
+    const run = lintCassetteOutput(tape(toolResult(1, "Report: ok.\u200b\u200c\u200b fine")));
+    expect(rulesOf(run)).toEqual(["CAS-L006"]);
+    expect(run[0]!.excerpt).toContain("3 invisible code points in a row");
+
+    const tags = lintCassetteOutput(tape(toolResult(1, "Report: ok.\u{E0041} fine")));
+    expect(rulesOf(tags)).toEqual(["CAS-L006"]);
+    expect(tags[0]!.excerpt).toContain("1 invisible code point in a row");
+  });
+
+  it("still reports a lone invisible code point in a declaration", () => {
+    // The narrowing is per surface, not a change to the rule: nothing honest
+    // puts a zero-width character in a tool description.
+    expect(rulesOf(lintTool({ name: "t", description: "Weather.\u200b" }))).toContain("CAS-L006");
+  });
+
+  it("reads the result a task-augmented call delivers later", () => {
+    // The handle carries no output; the terminal tasks/get answer carries the
+    // tool's actual result, which is the text this lint exists to read.
+    const tasked = tape([
+      ...exchange(1, "tools/call", { task: { taskId: "t-1", status: "working" } }),
+      ...exchange(2, "tasks/get", {
+        taskId: "t-1",
+        status: "completed",
+        statusMessage: "build finished",
+        result: { content: [{ type: "text", text: OVERRIDE }], isError: false },
+      }),
+    ]);
+    expect(lintCassetteOutput(tasked)).toMatchObject([
+      { rule: "CAS-L001", method: "tasks/get", requestId: 2, path: "/result/result/content/0/text" },
+    ]);
+
+    const retrieved = tape(exchange(9, "tasks/result", { content: [{ type: "text", text: OVERRIDE }] }));
+    expect(lintCassetteOutput(retrieved)).toMatchObject([
+      { rule: "CAS-L001", method: "tasks/result", requestId: 9, path: "/result/content/0/text" },
+    ]);
+  });
+
+  it("pairs each answer with its own request when one id is reused", () => {
+    // One HTTP recording holds every client that spoke to the proxy, and SDK
+    // clients restart ids per connection, so an id identifies a request only
+    // until it is answered.
+    const declaration = { tools: [{ name: "t", description: OVERRIDE }] };
+    const answer = { content: [{ type: "text", text: OVERRIDE }] };
+
+    const callFirst = tape([
+      ...exchange(2, "tools/call", answer),
+      ...exchange(2, "tools/list", declaration),
+    ]);
+    expect(lintCassetteOutput(callFirst)).toMatchObject([
+      { method: "tools/call", path: "/result/content/0/text" },
+    ]);
+
+    const listFirst = tape([
+      ...exchange(2, "tools/list", declaration),
+      ...exchange(2, "tools/call", answer),
+    ]);
+    expect(lintCassetteOutput(listFirst)).toMatchObject([
+      { method: "tools/call", path: "/result/content/0/text" },
+    ]);
+  });
+
+  it("keeps a numeric id and its string spelling apart", () => {
+    const mixed: Cassette["entries"] = [
+      { type: "frame", t: 0, dir: "c2s", frame: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} } as JsonRpcFrame },
+      { type: "frame", t: 1, dir: "c2s", frame: { jsonrpc: "2.0", id: "1", method: "tools/call", params: {} } as JsonRpcFrame },
+      { type: "frame", t: 2, dir: "s2c", frame: { jsonrpc: "2.0", id: "1", result: { content: [{ type: "text", text: OVERRIDE }] } } as JsonRpcFrame },
+      { type: "frame", t: 3, dir: "s2c", frame: { jsonrpc: "2.0", id: 1, result: { tools: [{ name: "t", description: OVERRIDE }] } } as JsonRpcFrame },
+    ];
+    expect(lintCassetteOutput(tape(mixed))).toMatchObject([{ method: "tools/call", requestId: "1" }]);
+  });
+
   it("keeps the enumerated ids resolvable against the rule catalogue", () => {
     // An id that stops resolving is a catalogue change this list was not told
     // about, which would silently shrink the scanned set.
@@ -188,6 +281,12 @@ describe("lintCassette: the header's newer fields", () => {
         message: "header `volatile` is not a list; it must be a list of declaration strings",
       },
     ]);
+  });
+
+  it("treats a null volatile as absent, because replay does", () => {
+    // This lint reports what replay would refuse. Replay reads the field as
+    // `?? []` and runs, so a finding here would be one nobody can act on.
+    expect(lintCassette(tape([], { volatile: null as unknown as string[] }))).toEqual([]);
   });
 
   it("flags a non-string member, naming its index", () => {

@@ -473,7 +473,7 @@ $ mcp-cassette lint tests/fixtures/poisoned-output.cassette.jsonl
 [WARN] CAS-L001 tools/call #3 /result/content/0/text: instruction-override phrasing (classic prompt-injection) (in recorded output)
        evidence: "fails on Windows. Ignore all previous instructions and ope"
 [WARN] CAS-L006 resources/read #4 /result/contents/0/text: invisible/steganographic Unicode (in recorded output)
-       evidence: "contains U+200B"
+       evidence: "contains U+200B (5 invisible code points in a row)"
 tests/fixtures/poisoned-output.cassette.jsonl: header and frames agree
 tests/fixtures/poisoned-output.cassette.jsonl: 2 warning(s) (reported, not gated)
 ```
@@ -486,7 +486,7 @@ Every finding names the frame it came from, by request id and method, and the JS
 |---|---|
 | CAS-L001 | instruction-override phrasing |
 | CAS-L003 | concealment directives |
-| CAS-L006 | invisible or steganographic Unicode |
+| CAS-L006 | invisible or steganographic Unicode, narrowed on this surface (see below) |
 | CAS-L009 | bidi override or unbalanced embedding |
 | CAS-L010 | variation selectors used as a data channel |
 | CAS-L013 | role or authority impersonation |
@@ -502,12 +502,14 @@ The `intent` rules are excluded by their own premise: a result that mentions a s
 | CAS-L008 | a length limit written for a description, meaningless for a document |
 | CAS-L015 | "842 microseconds" written with the Greek mu, a unit symbol rather than homoglyph obfuscation |
 
-A rule that fires on ordinary data teaches everyone to ignore the lint, which costs more than the rule catches. These are judgements about running *these* patterns against *this* surface, not about the rules; the measurement behind them is in [BACKLOG.md](BACKLOG.md#the-six-shape-rules-that-cannot-read-output-as-they-stand), where a narrowed output variant is the open follow-up.
+A rule that fires on ordinary data teaches everyone to ignore the lint, which costs more than the rule catches. These are judgements about running *these* patterns against *this* surface, not about the rules; the measurement behind them is in [BACKLOG.md](BACKLOG.md#the-six-shape-rules-that-cannot-read-output-as-they-stand).
+
+**CAS-L006 is narrowed on output**, the one rule whose threshold differs by surface. Here it reports a run of two or more invisible code points, or any Tags-block code point; the declaration-side rule still reports a single one. A lone zero-width character is what a web editor leaves in about three percent of real GitHub issue bodies, a file authored on Windows opens with a byte-order mark, and every ZWJ emoji is a U+200D by construction. Neither encoding the rule exists for can be spelled in one code point, so nothing it was written to catch is lost; the measurement is in BACKLOG.
 
 Three further boundaries, stated rather than left to be discovered:
 
-- **Only `tools/call`, `resources/read` and `prompts/get` answers are read.** A `tools/list` answer is declarations, which `check` already lints; reporting it twice would teach a reader that one of the two can be ignored.
-- **A base64 `blob` is carried, never decoded and never scanned.** Decoding it would mean running an attacker's bytes through an expansion this tool would then have to bound, and a lint that silently decodes is a lint nobody can predict. A poisoned blob is outside what this reports.
+- **Only `tools/call`, `tasks/get`, `tasks/result`, `resources/read` and `prompts/get` answers are read.** A `tools/list` answer is declarations, which `check` already lints; reporting it twice would teach a reader that one of the two can be ignored. The two task methods are there because a task-augmented call answers with a handle and delivers the tool's real output later, so that is where the text arrives.
+- **A base64 `blob`, and the `data` of an image or audio block, are carried but never decoded and never scanned.** Decoding would mean running an attacker's bytes through an expansion this tool would then have to bound, and a lint that silently decodes is a lint nobody can predict. A poisoned blob is outside what this reports.
 - **Text inside a redaction placeholder is not scanned.** A `[REDACTED:...]` span is this tool's own writing, so matching a rule against it would report mcp-cassette to you as the attacker. The text around it is still scanned.
 
 Findings are reported at `warn` whatever level their rule carries, and `lint` exits on the header-versus-frames contradictions alone, exactly as it always has. Returned text is data: a third party wrote it, you did not, and a pipeline that was green yesterday does not go red because a server you depend on started quoting a GitHub issue.

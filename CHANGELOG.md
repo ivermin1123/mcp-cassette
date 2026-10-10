@@ -105,10 +105,14 @@ below.
   issue whose body says "ignore all previous instructions", a document carrying
   zero-width characters, a page with a bidi override: none of it is visible to
   a lint that inspects a live server's listings, and all of it is in the
-  cassette. Six rules run on the answers to `tools/call`, `resources/read` and
-  `prompts/get`: CAS-L001, L003, L006, L009, L010 and L013. Each finding names
-  the frame it came from, by request id and method, and the JSON path of the
-  string that matched.
+  cassette. Six rules run on the answers to `tools/call`, `tasks/get`,
+  `tasks/result`, `resources/read` and `prompts/get`: CAS-L001, L003, L006,
+  L009, L010 and L013. The two task methods are read because a task-augmented
+  call answers with a handle and delivers the tool's real output later. Each
+  finding names the frame it came from, by request id and method, and the JSON
+  path of the string that matched. `lintCassetteOutput`, `OutputFinding` and
+  `OUTPUT_RULE_IDS` are exported from the package entry beside `lintCassette`,
+  so a library consumer can build the same report the CLI prints.
 
   The set is listed in the code and in the README rather than derived, and it
   was narrowed by measurement. The `intent` rules are excluded by their own
@@ -116,9 +120,16 @@ below.
   server returns every day: CAS-L002 on every HTML comment, CAS-L004 on
   ordinary API documentation, CAS-L005 on any directory listing, CAS-L007 on an
   inline `data:` URI, CAS-L008 on any long document, and CAS-L015 on a latency
-  written in microseconds. The measurement and the open follow-up are in
-  BACKLOG. A base64 `blob` is carried, never decoded and never scanned, and
-  text inside a `[REDACTED:...]` placeholder is not scanned either.
+  written in microseconds. CAS-L006 is kept but narrowed on this surface, to a
+  run of two or more invisible code points or any Tags-block code point: a lone
+  zero-width character is what a web editor leaves in about three percent of
+  real GitHub issue bodies, a Windows-authored file opens with a byte-order
+  mark, and every ZWJ emoji is a U+200D, while neither encoding the rule exists
+  for can be spelled in one code point. The declaration-side rule is unchanged.
+  The measurements and the open follow-ups are in BACKLOG. A base64 `blob`, and
+  the `data` of an image or audio block, are carried but never decoded and
+  never scanned, and text inside a `[REDACTED:...]` placeholder is not scanned
+  either.
 
   Findings are reported at `warn` and never change the exit code: returned text
   is data a third party wrote, and a pipeline that was green yesterday does not

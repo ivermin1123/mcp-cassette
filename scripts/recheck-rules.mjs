@@ -24,6 +24,9 @@
 
 import { check } from "recheck";
 import { LINT_RULES } from "../dist/lint.js";
+// The output-side CAS-L006 is a rule the lint runs and the catalogue does not
+// hold, so iterating LINT_RULES alone would leave its pattern unanalysed.
+import { INVISIBLE_RUN_RULE } from "../dist/lint-rules.js";
 import { REDACT_RULES } from "../dist/redact.js";
 
 /** Rules that legitimately match without a regex. Each needs a reason. */
@@ -81,7 +84,7 @@ async function analyse(id, pattern, accepted) {
   rows.push([id, "FAIL", detail]);
 }
 
-for (const rule of LINT_RULES) {
+for (const rule of [...LINT_RULES, INVISIBLE_RUN_RULE]) {
   if (!rule.pattern) {
     const reason = EXEMPT.get(rule.id);
     if (reason) {
