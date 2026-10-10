@@ -19,6 +19,13 @@
  * always and gated on demand (`--fail-on dangerous`), so the default exit-code
  * contract is unchanged.
  *
+ * One description change is not prose. A tool that was approved with an honest
+ * description and later serves one carrying an injection is the rug pull
+ * (SAFE-T1201, OWASP MCP03:2025), and the snapshot is the only place it can be
+ * caught, because the poisoned text is new relative to a file somebody read.
+ * So a reword whose new text trips a safety-lint rule the old text did not is
+ * `dangerous` rather than `info`; see `diffDescription`.
+ *
  * Every change also carries a stable `rule` ID (oasdiff-style, e.g.
  * `tool-removed`, `input-enum-value-added`). Rule IDs are part of the public
  * contract: they are what a downstream policy (a CI allowlist, a PR bot, a
@@ -32,6 +39,7 @@
 import fs from "node:fs";
 import { EraOption, MiniClient, Target, Tool } from "./client.js";
 import { stableStringify } from "./jsonrpc.js";
+import { lintTool } from "./lint.js";
 
 export interface ContractSnapshot {
   mcpCassetteContract: 1;
@@ -68,6 +76,7 @@ export const CONTRACT_RULES = Object.freeze({
   toolRemoved: "tool-removed",
   toolAdded: "tool-added",
   toolDescriptionChanged: "tool-description-changed",
+  toolDescriptionPoisoned: "tool-description-poisoned",
   toolAnnotationsChanged: "tool-annotations-changed",
   inputSchemaReplaced: "input-schema-replaced",
   inputSchemaTypeChanged: "input-schema-type-changed",
@@ -177,14 +186,7 @@ export function diffContracts(oldSnap: ContractSnapshot, newSnap: ContractSnapsh
   for (const [name, oldTool] of oldTools) {
     const newTool = newTools.get(name);
     if (!newTool) continue;
-    if ((oldTool.description ?? "") !== (newTool.description ?? "")) {
-      changes.push({
-        kind: "info",
-        rule: CONTRACT_RULES.toolDescriptionChanged,
-        subject: name,
-        message: "description changed",
-      });
-    }
+    diffDescription(name, oldTool.description, newTool.description, changes);
     if (stableStringify(oldTool.annotations ?? {}) !== stableStringify(newTool.annotations ?? {})) {
       changes.push({
         kind: "info",
@@ -196,6 +198,71 @@ export function diffContracts(oldSnap: ContractSnapshot, newSnap: ContractSnapsh
     diffSchema(name, oldTool.inputSchema, newTool.inputSchema, changes);
   }
   return changes;
+}
+
+/**
+ * Safety-lint rule ids one description trips, and nothing else.
+ *
+ * `lintTool` over a tool carrying only this one field runs the published rule
+ * set through the scanner the safety lint itself uses, so the two surfaces
+ * cannot drift apart: a rule added to the catalogue is a rule this escalation
+ * knows about on the same day, with no second copy of the patterns to keep in
+ * step. Only `description` is handed over, because only `description` is what
+ * is being compared here; `title`, the schema and the annotations are other
+ * fields with other rules.
+ */
+function lintedRules(name: string, description: string | undefined): Set<string> {
+  if (!description) return new Set();
+  return new Set(lintTool({ name, description }).map((finding) => finding.rule));
+}
+
+/**
+ * A reworded description, classified by what the new wording does rather than
+ * by the fact that it changed.
+ *
+ * Prose is `info` because rewording cannot break a caller. The exception is the
+ * rug pull: a server publishes an honest tool, waits for it to be approved and
+ * committed to a snapshot, then serves a description carrying the injection.
+ * The text is new only in relation to a file somebody already read, which is
+ * precisely what this diff holds and what a lint run against the live server
+ * alone cannot know.
+ *
+ * So the comparison is between the rules the old text tripped and the rules the
+ * new text trips, not between the two texts. Rules the old text already tripped
+ * are the snapshot's problem, not this diff's: the safety lint reports them on
+ * every run, and a description that was poisoned when it was approved and is
+ * still poisoned after a reword has not pulled anything out from under anyone.
+ * It stays one `info` line, as it was before.
+ */
+function diffDescription(
+  tool: string,
+  oldDescription: string | undefined,
+  newDescription: string | undefined,
+  changes: ContractChange[]
+): void {
+  if ((oldDescription ?? "") === (newDescription ?? "")) return;
+
+  const before = lintedRules(tool, oldDescription);
+  const introduced = [...lintedRules(tool, newDescription)].filter((id) => !before.has(id)).sort();
+
+  if (introduced.length === 0) {
+    changes.push({
+      kind: "info",
+      rule: CONTRACT_RULES.toolDescriptionChanged,
+      subject: tool,
+      message: "description changed",
+    });
+    return;
+  }
+
+  changes.push({
+    kind: "dangerous",
+    rule: CONTRACT_RULES.toolDescriptionPoisoned,
+    subject: tool,
+    message:
+      `description changed and the new wording trips ${introduced.join(", ")}, which the ` +
+      "approved wording did not (rug pull: SAFE-T1201, OWASP MCP03:2025)",
+  });
 }
 
 function asObj(v: unknown): Record<string, unknown> | null {

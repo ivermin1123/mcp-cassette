@@ -6,6 +6,43 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [Unreleased]
+
+### BREAKING
+
+- **`snapshot --check` escalates a reworded description that is now an attack.**
+  A description change used to be `info` whatever the new text said. A tool
+  approved with honest prose and later serving a description carrying an
+  injection is the rug pull (SAFE-T1201, OWASP MCP03:2025), and the snapshot is
+  the only place it can be caught: what makes the text an attack is that it is
+  new relative to a file somebody read and approved, which a lint run against
+  the live server cannot know. `snapshot --check` now runs the same `CAS-L`
+  rules over the stored description and over the live one. A reword whose new
+  wording trips a rule the approved wording did not is reported as
+  `tool-description-poisoned` at `dangerous` instead of `tool-description-changed`
+  at `info`.
+
+  *What you see:* a job running `snapshot --check --fail-on dangerous` goes red
+  on a server whose description was reworded into something a safety-lint rule
+  matches. At the default gate nothing changes: `dangerous` is reported and not
+  gated, so `snapshot --check` alone still exits 0. A reword that trips no new
+  rule is still one `info` line, and a description that was already poisoned
+  when it was committed and is reworded but still poisoned stays `info` too,
+  because the lint already reports it on every run and escalating it here would
+  say the same thing twice. The escalation replaces the `info` line rather than
+  joining it, so one changed description is still one finding, and a policy
+  matching `tool-description-changed` will no longer see the poisoned case.
+
+  *What to do:* read the finding before re-recording the snapshot. It names the
+  rules the approved wording did not trip, so `CAS-L001, CAS-L003` on a tool you
+  did not change is the rug pull itself, not a false positive to silence. When
+  the new wording is yours and the match is a wording accident, run `snapshot
+  --update` to approve it; the next run compares against what you approved.
+  Every existing rule id is unchanged.
+
+  `tool-description-poisoned` sits at `dangerous` in this release. It may
+  graduate to `breaking` in a later minor, which would gate it by default.
+
 ## [0.8.0] - 2026-10-10
 
 Replay can be told which request fields change on every run: `--volatile`

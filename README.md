@@ -345,11 +345,35 @@ TypeScript specs need a transform on top, which is a choice about your toolchain
 | Tier | Rule IDs | Why here |
 |---|---|---|
 | **breaking** | `tool-removed`, `input-property-removed`, `input-property-became-required`, `input-property-added-required`, `input-property-type-changed`, `input-schema-type-changed`, `input-enum-value-removed`, `input-schema-replaced`, `input-schema-changed-unclassified` | A call that used to work now fails. |
-| **dangerous** | `input-enum-value-added`, `input-property-default-changed`, `input-property-added-optional` | Everything still validates. An agent that switch-cases over the enum meets a value it has no branch for; a caller that relied on a default silently gets a different one; a newly-added optional parameter is a surface nothing was tested against. |
+| **dangerous** | `input-enum-value-added`, `input-property-default-changed`, `input-property-added-optional`, `tool-description-poisoned` | Everything still validates. An agent that switch-cases over the enum meets a value it has no branch for; a caller that relied on a default silently gets a different one; a newly-added optional parameter is a surface nothing was tested against; a reworded description now carries an injection the approved one did not. |
 | **minor** | `tool-added`, `input-property-became-optional` | Strictly additive or strictly relaxing. |
-| **info** | `tool-description-changed`, `tool-annotations-changed`, `input-annotation-changed` | Prose and hints. Worth reading, because a description is [attack surface](#safety-lint-rules), but never a gate. Rewording a parameter's `description` is a typo fix, not a contract change. |
+| **info** | `tool-description-changed`, `tool-annotations-changed`, `input-annotation-changed` | Prose and hints. Worth reading, because a description is [attack surface](#safety-lint-rules), but never a gate. Rewording a parameter's `description` is a typo fix, not a contract change. The one reword that is not is `tool-description-poisoned`, below. |
 
 `dangerous` is reported always and gated only with `--fail-on dangerous`, so upgrading does not turn anyone's CI red on its own.
+
+#### The one reword that is not prose
+
+A tool that is approved with an honest description and later serves one carrying an injection is the rug pull: [SAFE-T1201](https://github.com/fkautz/safe-mcp), OWASP [MCP03:2025](https://owasp.org/www-project-mcp-top-10/). The snapshot is the only place it can be caught, because what makes the text an attack is that it is new relative to a file somebody read and approved. A [safety lint](#safety-lint-rules) run against the live server reports a poisoned description, but it cannot tell you the description was clean when you signed off on it.
+
+So `snapshot --check` runs the same `CAS-L` rules over the stored description and over the live one, and compares the two sets of rule ids rather than the two texts:
+
+| Stored description | Live description | Reported as |
+|---|---|---|
+| trips nothing | trips nothing | `tool-description-changed` (info) |
+| trips nothing | trips `CAS-L001` | `tool-description-poisoned` (dangerous) |
+| trips `CAS-L003` | trips `CAS-L003` | `tool-description-changed` (info) |
+| trips `CAS-L003` | trips `CAS-L003` and `CAS-L001` | `tool-description-poisoned` (dangerous) |
+| trips `CAS-L001` | trips nothing | `tool-description-changed` (info) |
+
+A description that was already poisoned when it was committed has not pulled anything out from under anyone, and the lint reports it on every run; escalating it here would say the same thing twice. Only a rule the approved wording did not trip escalates, and the message names which ones:
+
+```
+[DANGEROUS] echo: description changed and the new wording trips CAS-L001, CAS-L003,
+which the approved wording did not (rug pull: SAFE-T1201, OWASP MCP03:2025)
+(tool-description-poisoned)
+```
+
+The escalation replaces the `info` line rather than joining it, so one changed description is still one finding. `tool-description-poisoned` sits at `dangerous` in this release, which means it is reported always and gates only under `--fail-on dangerous`. It may graduate to `breaking` in a later minor.
 
 Two rules exist to say "I do not know", and both count as breaking, because an unknown change to a contract is not evidence of safety:
 
