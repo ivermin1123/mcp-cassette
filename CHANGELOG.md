@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [0.9.1] - 2026-10-10
+
+The action could not be listed on GitHub Marketplace. Marketplace refuses an
+action whose `description` is 125 characters or longer, and the one in
+`action.yml` was 136. This release shortens it and changes nothing else: the
+npm package is the 0.9.0 code under a new number.
+
+### Fixed
+
+- **The action's description fits Marketplace, and names the safety lint.**
+  It now reads "Health-check an MCP server, lint what it tells the model for
+  poisoning, and gate schema drift against a contract snapshot." (122
+  characters). The old text predated the lint. A test fails the build if the
+  description reaches the limit again or the action loses its name or
+  branding, the other fields Marketplace reads.
+
 ## [0.9.0] - 2026-10-10
 
 The safety lint reaches the two places a server can change what a model reads
@@ -1154,6 +1170,7 @@ Packaging fixes for the first release.
 First public release: stdio record/replay, contract snapshots, safety checks,
 secrets redaction, and the `verify` command.
 
+[0.9.1]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.9.1
 [0.9.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.9.0
 [0.8.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.8.0
 [0.7.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.7.0
