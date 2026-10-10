@@ -244,7 +244,7 @@ result: PASS (0 error(s), 0 warning(s))</code></pre>
 
 <pre><code>SERVER = StdioServerParameters(
     command="npx",
-    args=["-y", "mcp-cassette@0.7.0", "replay", "everything.cassette.jsonl"],
+    args=["-y", "mcp-cassette@0.8.0", "replay", "everything.cassette.jsonl"],
 )
 
 async with stdio_client(SERVER) as (read, write):
@@ -358,11 +358,11 @@ Re-record until the task reaches completed, failed or cancelled</code></pre>
 
 <p>Node 20 or later, and network access for the first one only.</p>
 
-<pre><code>npx -y mcp-cassette@0.7.0 check --stdio "npx -y mcp-cassette@0.7.0 record -o everything.cassette.jsonl -- npx -y @modelcontextprotocol/server-everything@2026.7.4 stdio"
+<pre><code>npx -y mcp-cassette@0.8.0 check --stdio "npx -y mcp-cassette@0.8.0 record -o everything.cassette.jsonl -- npx -y @modelcontextprotocol/server-everything@2026.7.4 stdio"
 
-npx -y mcp-cassette@0.7.0 check --stdio "npx -y mcp-cassette@0.7.0 replay everything.cassette.jsonl"
+npx -y mcp-cassette@0.8.0 check --stdio "npx -y mcp-cassette@0.8.0 replay everything.cassette.jsonl"
 
-npx -y mcp-cassette@0.7.0 lint everything.cassette.jsonl</code></pre>
+npx -y mcp-cassette@0.8.0 lint everything.cassette.jsonl</code></pre>
 
 <p>The first drives the recording proxy with the health check, so the check is the client and you need none of your own. The second runs the identical check with no server and no network. The third reads the finished file against its own header:</p>
 
