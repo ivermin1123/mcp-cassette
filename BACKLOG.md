@@ -516,15 +516,18 @@ it. The other twelve rules stay on a name: the nine that look for something
 concealed, because what hides in display text reaches a reader exactly as it
 would from a description, and the three `intent` rules, which the measurement
 never caught on a name and whose patterns need a sentence a name does not have.
-CAS-L013 stays on
-a prompt description and declares a permanent `warn` ceiling there: a persona
-in a prompt description is the product, and the ceiling is part of the rule so
-the graduation cannot lift it by accident. Nothing graduates in that change; it
-only removes findings and adds the declaration, which is why it is a `Changed`
-bullet and not a breaking one. **The follow-up is the graduation minor
-itself,** where the prompt and resource surfaces take their rules' own levels
-under the discipline in CONTRIBUTING, no earlier than 2026-11-06, four weeks
-after 0.7.0, with its own `### BREAKING` bullet naming that release.
+CAS-L013 stays on a prompt (its title, description and argument text) and
+declares a permanent `warn` ceiling over that whole surface: a persona is the
+product anywhere in a prompt template, and the ceiling is part of the rule so
+the graduation cannot lift it by accident. Nothing graduates in that change: it
+removes findings and adds the declaration, which is logged under `Changed`. The
+`surface` field it makes required on `LintFinding` has its own `### BREAKING`
+bullet, because a caller who builds a finding by hand no longer compiles;
+`LintRule.surfaces` is optional, so a rule a consumer added to the catalogue
+runs exactly where it ran. **The follow-up is the graduation minor itself,**
+where the prompt and resource surfaces take their rules' own levels under the
+discipline in CONTRIBUTING, no earlier than 2026-11-06, four weeks after 0.7.0,
+with its own `### BREAKING` bullet naming that release.
 
 **Measured** 2026-10-09, over 63 hand-typed subjects: the resource, prompt and
 template listings of the everything, fetch, sqlite, sentry, postgres and
@@ -541,26 +544,30 @@ The 29 findings concentrate in four shapes:
 | documentation about markup | CAS-L002 | "HTML page template with `<!-- comment -->` placeholders", "Explains the `<system>` and `<user>` message tags" |
 
 A resource `name` is not prose, and the rules that fire on it read it as if it
-were a sentence. A persona in a prompt description is the product, not the
-attack.
+were a sentence. A persona in a prompt is the product, not the attack.
 
-**The two directions that were open, both taken.**
+**The two directions that were open, and the way each was taken.**
 
-*Restrict name scanning to the rules that detect hidden content.* CAS-L001,
-L002, L003, L004, L006, L009, L010, L013 and L015 look for something concealed
-in text and belong on a name as much as on a description. CAS-L005, L007, L008
-and L012 read a name as a sentence and would be left to `title` and
-`description`. The cost is a split rule set, which the catalogue does not have
-today and which makes "the same rules run over everything" stop being true.
+*Name scanning was restricted to the rules that detect hidden content.*
+CAS-L001, L002, L003, L004, L006, L009, L010, L013 and L015 look for something
+concealed in text and belong on a name as much as on a description, so they
+stayed there. CAS-L005, L007, L008 and L012 were left to `title` and
+`description`, where the text really is prose. The cost was a split rule set,
+and the catalogue carries that split now as `LintRule.surfaces`: "the same
+rules run over everything" stopped being true, and in exchange each rule's
+reach is written down beside it instead of in two lists kept by hand.
 
-*Decide whether CAS-L013 runs on a prompt description at all.* It catches role
-and authority impersonation aimed at the model, which is exactly what a prompt
-template legitimately contains. Either it comes off that surface, or it stays
-and never graduates past `warn` there.
+*CAS-L013 stays on a prompt and never graduates past `warn` there.* It catches
+role and authority impersonation aimed at the model, which is exactly what a
+prompt template legitimately contains, and the user picked the template. Taking
+the rule off the surface was the other option and was not chosen: a persona in
+a template is still worth reporting to whoever reads the output, so the finding
+stays and the ceiling is what keeps it from ever gating a build.
 
-Doing neither and graduating as the rules stand turns a filesystem-style server
-that lists dotfiles, or a prompt server whose descriptions carry a persona, red
-at the default gate. That is the outcome the measurement is here to prevent.
+Graduating with the rules as they stood would have turned a filesystem-style
+server that lists dotfiles, or a prompt server whose descriptions carry a
+persona, red at the default gate. That is the outcome the measurement was here
+to prevent.
 
 ---
 

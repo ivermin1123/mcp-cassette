@@ -18,6 +18,24 @@ below.
   The action runs on whatever Node the job set up; the README's example
   already uses `22.x`.
 
+- **`LintFinding` gains a required `surface` field.** A finding now says which
+  population of text matched, because that is what decided which rules read
+  it: `"tool"`, `"prompt"`, `"resource"`, `"name"` or `"output"`. The scanner
+  needs it to apply a rule's declared reach, and a caller reading findings
+  needs it to tell a resource's name from its description.
+
+  *What you see:* a TypeScript caller who builds a `LintFinding` by hand,
+  rather than taking the ones `lintTool`, `lintPrompt` and `lintResource`
+  return, fails to compile with `surface` missing. Nothing changes for a caller
+  who only reads findings, and neither `check --json` nor the SARIF output
+  carries the field.
+
+  *What to do:* take the findings from the lint functions, which are the only
+  supported way to produce one, or name the surface the text came from. A rule
+  of your own is unaffected: `LintRule.surfaces` is optional, and a rule that
+  omits it runs on every surface a server declares, exactly as every rule in
+  the catalogue did before this release.
+
 ### Changed
 
 - **Every lint rule declares the surfaces it runs on, and four of them stop
@@ -38,12 +56,16 @@ below.
   `LintRule` carries a `surfaces` declaration, and both the rules applied to a
   resource name and the six that read recorded output (`OUTPUT_RULE_IDS`, same
   six ids in the same order) now come out of it instead of being kept by hand
-  beside it. CAS-L013 over a prompt description additionally declares a
-  permanent `warn` ceiling: a persona in a prompt description is the product,
-  so that one pairing does not graduate with the prompt and resource surfaces
-  in the later minor, which is no earlier than 2026-11-06. No finding gets a
-  higher level in this release, the default gate is unchanged, and the SARIF
-  fingerprint of every finding that still fires is unchanged.
+  beside it. The declaration is optional, and a rule that omits it runs on
+  every surface a server declares, which is where every rule ran before.
+  CAS-L013 on a prompt (its title, description and argument text) additionally
+  declares a permanent `warn` ceiling: a persona is the product anywhere in a
+  prompt template, so that one pairing does not graduate with the prompt and
+  resource surfaces in the later minor, which is no earlier than 2026-11-06.
+  A programmatic caller of `lintPrompt` therefore reads `severity: "warn"`
+  there where it read `error`; the level `check` reports was already `warn`. No
+  finding gets a higher level in this release, the default gate is unchanged,
+  and the SARIF fingerprint of every finding that still fires is unchanged.
 - **The test suite runs on vitest 5** (from 2), which clears the critical and
   high advisories `npm audit` reported against the development tree. None of
   that tree ships in the package. The vitest adapter's peer range stays

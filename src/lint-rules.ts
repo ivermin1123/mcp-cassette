@@ -70,10 +70,16 @@ export interface LintRule {
    *
    * Both lists that used to be kept by hand are derived from it: the rules
    * that read a recorded answer (`OUTPUT_RULE_IDS` in lint.ts) and the rules
-   * that read a resource name. A rule added without a surface does not run
-   * anywhere, which is a compile error rather than a silent gap.
+   * that read a resource name. Every rule in this catalogue declares its own,
+   * because a reach nobody wrote down is a reach nobody checked.
+   *
+   * Optional, and omitting it means every surface a server declares (`"tool"`,
+   * `"prompt"`, `"resource"` and `"name"`) but not recorded output, with no
+   * ceiling. That is what every rule here ran on before the declaration
+   * existed, so a rule a consumer pushes into `LINT_RULES` without one keeps
+   * behaving exactly as it did.
    */
-  surfaces: readonly LintSurface[];
+  surfaces?: readonly LintSurface[];
   /**
    * The highest level this rule may ever report on a surface, where that is
    * lower than its own severity.
@@ -335,12 +341,12 @@ const NEW_RULES: LintRule[] = [
     id: "CAS-L013",
     evidence: "shape",
     surfaces: DECLARED_AND_OUTPUT,
-    // A persona in a prompt description is the product. "Act as a system
-    // administrator and diagnose the issue" is what a prompt template is for,
-    // and a server that ships one is not impersonating anybody to the model:
-    // the user picked the template. The rule stays on the surface, because the
-    // same sentence in a resource description is still worth reading, and it
-    // never gates there.
+    // A persona is the product anywhere in a prompt, its title and argument
+    // text included. "Act as a system administrator and diagnose the issue" is
+    // what a prompt template is for, and a server that ships one is not
+    // impersonating anybody to the model: the user picked the template. The
+    // rule stays on the surface, because the same sentence in a resource
+    // description is still worth reading, and it never gates there.
     cap: { prompt: "warn" },
     severity: "error",
     describe: "role or authority impersonation aimed at the model",
@@ -488,7 +494,9 @@ export const INVISIBLE_RUN_RULE: LintRule = {
  * and everything that needs to know asks here.
  */
 export function rulesForSurface(surface: LintSurface): LintRule[] {
-  return LINT_RULES.filter((rule) => rule.surfaces.includes(surface)).map((rule) =>
+  // A rule that declares nothing runs on every declared surface, which is what
+  // the whole catalogue ran on before `surfaces` existed. See `LintRule`.
+  return LINT_RULES.filter((rule) => (rule.surfaces ?? DECLARED).includes(surface)).map((rule) =>
     // CAS-L006 is the one id whose threshold differs by surface: a lone
     // invisible code point is suspicious in a declaration and ordinary in
     // returned data. See `INVISIBLE_RUN_RULE` for the measurement.

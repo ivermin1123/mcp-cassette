@@ -144,7 +144,7 @@ function fails(finding: CheckFinding, failOn: CheckFailOn, lintFailOn: LintFailO
  * not removed with it: `severityOn` has already applied them, so
  * `finding.severity` arrives at its permanent level and a pairing the
  * catalogue holds at `warn` for good cannot be graduated from here. See
- * `LintRule.cap`, which CAS-L013 over a prompt description carries.
+ * `LintRule.cap`, which CAS-L013 carries over the whole prompt surface.
  */
 function asFinding(finding: LintFinding): CheckFinding {
   const isTool = finding.kind === "tool";

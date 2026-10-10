@@ -1,7 +1,7 @@
 /**
  * Which rules run where, now that each one declares it.
  *
- * Two halves, and they fail for different reasons on purpose.
+ * Three parts, and they fail for different reasons on purpose.
  *
  * The first is the behaviour change: a resource `name` is display text that is
  * usually an identifier, and the four rules that read their subject as a
@@ -15,9 +15,14 @@
  * catalogue. Those assertions spell out what the hand-kept lists said, so a
  * declaration edited by accident fails here rather than silently shrinking or
  * widening what runs.
+ *
+ * The third is the compatibility floor: the declaration is optional, and a rule
+ * that omits it runs where the whole catalogue ran before any of them had one.
+ * A consumer who pushed a rule of their own into `LINT_RULES` is entitled to
+ * that, and those assertions are what keep it true.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   lintPrompt,
   lintResource,
@@ -218,9 +223,64 @@ describe("the derived sets say what the hand-kept lists said", () => {
     expect(byId("CAS-L006").find(lone)).not.toBeNull();
   });
 
-  it("gives every rule at least one surface, so none runs nowhere", () => {
+  it("has every rule here declare its own surfaces rather than take the default", () => {
+    // The default exists for a rule a consumer adds, not for this catalogue:
+    // a reach nobody wrote down is a reach nobody checked.
     for (const rule of LINT_RULES) {
-      expect(rule.surfaces.length, `${rule.id} runs on no surface`).toBeGreaterThan(0);
+      expect(rule.surfaces, `${rule.id} declares no surfaces`).toBeDefined();
+      expect(rule.surfaces!.length, `${rule.id} runs on no surface`).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("a rule that declares no surfaces at all", () => {
+  /**
+   * A rule of a consumer's own, pushed into the mutable `LINT_RULES` export the
+   * way a JavaScript caller extends the catalogue. It declares no surfaces, so
+   * every assertion here is about what such a rule did before the declaration
+   * existed, which is what it must keep doing.
+   */
+  const ADDED: LintRule = {
+    id: "ORG-X001",
+    severity: "warn",
+    describe: "tool names the internal staging host",
+    evidence: "shape",
+    owasp: [],
+    safeMcp: [],
+    find: (text) => (text.includes("staging-internal") ? "staging-internal" : null),
+  };
+
+  const TEXT = "Sends the report to staging-internal before anywhere else.";
+
+  beforeEach(() => {
+    LINT_RULES.push(ADDED);
+  });
+
+  afterEach(() => {
+    LINT_RULES.splice(LINT_RULES.indexOf(ADDED), 1);
+  });
+
+  it("runs on every surface a server declares, a name among them", () => {
+    expect(lintTool({ name: "t", description: TEXT }).map((f) => f.rule)).toContain(ADDED.id);
+    expect(lintPrompt({ name: "p", description: TEXT }).map((f) => f.rule)).toContain(ADDED.id);
+    expect(lintResource({ uri: "file:///x", description: TEXT }).map((f) => f.rule)).toContain(
+      ADDED.id
+    );
+    expect(onName("staging-internal")).toContain(ADDED.id);
+  });
+
+  it("stays off recorded output, which a consumer rule never reached", () => {
+    // The output set was a hand-kept list of ids; nothing a caller pushed in
+    // could join it, and the default keeps that true.
+    expect(idsOn("output")).not.toContain(ADDED.id);
+  });
+
+  it("reports at its own severity, having declared no ceiling", () => {
+    const [finding] = lintTool({ name: "t", description: TEXT });
+    expect(finding!.rule).toBe(ADDED.id);
+    expect(finding!.severity).toBe("warn");
+    for (const surface of ["tool", "prompt", "resource", "name"] as LintSurface[]) {
+      expect(severityOn(ADDED, surface)).toBe("warn");
     }
   });
 });

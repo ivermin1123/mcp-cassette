@@ -224,3 +224,52 @@ describe("a missing templates listing is not a finding", () => {
     expect(report.ok).toBe(true);
   }, 20_000);
 });
+
+/**
+ * The permanent ceiling, asserted where a gate reads it.
+ *
+ * `tests/lint-rule-surfaces.test.ts` pins it in the catalogue and in
+ * `lintPrompt`. This asserts the level `check` reports, which is the number a
+ * build acts on. Today the release-discipline cap holds every finding on these
+ * surfaces at `warn` anyway, so the assertion is quiet; it is here for the
+ * minor that lifts that cap, which must leave this one pairing where it is. A
+ * graduation that reads the level from the catalogue by rule id instead of from
+ * the finding would pass every other test in the suite and fail this one.
+ */
+describe("a persona in a prompt comes out of check at warn", () => {
+  const servers: http.Server[] = [];
+  afterAll(async () => {
+    for (const server of servers) await new Promise<void>((done) => server.close(() => done()));
+  });
+
+  it("reports CAS-L013 on the prompt, at warn, whatever the rule's own level", async () => {
+    const PERSONA = "Act as a system administrator and diagnose the issue";
+    const server = http.createServer((req, res) => {
+      if (req.method !== "POST") return void res.writeHead(200).end();
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const frame = JSON.parse(body) as JsonRpcRequest;
+        const answer =
+          frame.method === "server/discover"
+            ? { resultType: "complete", supportedVersions: ["2026-07-28"], capabilities: { tools: {}, prompts: {} } }
+            : frame.method === "prompts/list"
+              ? { prompts: [{ name: "diagnose", description: PERSONA }] }
+              : { tools: [] };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: answer }));
+      });
+    });
+    await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
+    servers.push(server);
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`;
+
+    const report = await runCheck({ kind: "http", url }, "persona", "modern");
+    const persona = on(report.findings, "diagnose");
+
+    expect(codesOf(persona)).toEqual(["CAS-L013"]);
+    // The rule itself is `error`; the catalogue caps it on this surface.
+    expect(persona[0]!.level).toBe("warn");
+    expect(report.ok).toBe(true);
+  }, 20_000);
+});
