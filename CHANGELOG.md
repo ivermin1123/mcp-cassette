@@ -18,6 +18,17 @@ below.
   The action runs on whatever Node the job set up; the README's example
   already uses `22.x`.
 
+### Fixed
+
+- **`replay --on-miss passthrough` no longer forwards an unrecorded
+  `subscriptions/listen`.** A live server answers a listen only when the
+  subscription ends, so the forward waited out the 15-second relay timeout,
+  answered `-32603`, and failed the session with exit 1. An SDK client with
+  `ClientOptions.listChanged` opens that listen on its own, so this hit
+  sessions that did nothing wrong. The listen now gets the miss error at once,
+  with a line on stderr, on stdio and HTTP, and the session exits 0. A listen
+  the cassette holds is still served.
+
 ### Changed
 
 - **The test suite runs on vitest 5** (from 2), which clears the critical and

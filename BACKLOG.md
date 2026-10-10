@@ -341,12 +341,21 @@ fixture that cancels. The reason to wait is that a recording whose client
 cancelled would also hold whatever the server did next, and it is not yet clear
 whether replay should stop at the cancellation or follow the recording past it.
 
-### `--on-miss passthrough` on an unrecorded listen stalls the whole session
+### `--on-miss passthrough` on an unrecorded listen stalls the whole session: DECIDED
+
+**Decided** 2026-10-10: passthrough refuses to forward `subscriptions/listen`,
+the one method the spec answers only at the end. An unrecorded listen gets the
+miss error at once and a stderr line, is not counted as a failed forward, and
+the session exits 0. A listen the cassette holds is still served. Reopen if
+passthrough ever learns a subscription, by keeping the relay's stream open.
 
 A `subscriptions/listen` the cassette does not hold is an ordinary miss, and
 under `passthrough` a miss is forwarded through `MiniClient.relay`, which waits
 for a JSON-RPC response. A real server answers a listen only when it ends the
-subscription gracefully, so the forward does not return.
+subscription gracefully, so the forward does not return before the relay's
+15-second timeout (`DEFAULT_TIMEOUT_MS` in `src/client.ts`), after which the
+listen gets `-32603` and the session exits 1 for a failure the user did not
+cause.
 
 **Measured:** the stdio front-end serialises every frame behind the in-flight
 forward (the `queue` chain in `runReplay`), so the stall is not confined to the

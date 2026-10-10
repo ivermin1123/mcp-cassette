@@ -76,6 +76,17 @@ export const ACKNOWLEDGED_METHOD = "notifications/subscriptions/acknowledged";
 export const SUBSCRIPTION_ID_KEY = "io.modelcontextprotocol/subscriptionId";
 
 /**
+ * Why passthrough answers an unrecorded listen with the miss error rather than
+ * forwarding it. A live server answers a listen only when the subscription
+ * ends, so the forward would hold the session until the relay times out and
+ * then count a failure the client did not cause. A listen the recording holds
+ * is still served; only the one passthrough could not learn is refused.
+ */
+export const LISTEN_NOT_FORWARDED =
+  `passthrough does not forward "${LISTEN_METHOD}": a live server answers it only when the subscription ends, ` +
+  "so the client gets the miss error instead";
+
+/**
  * The `io.modelcontextprotocol/tasks` extension, and the one rule replay needs
  * from it.
  *
@@ -1486,7 +1497,7 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
     misses++;
     const diagnosis = diagnoseMiss(index, request);
     process.stderr.write(`mcp-cassette replay: fingerprint miss for "${request.method}": ${diagnosis}\n`);
-    if (onMiss === "passthrough") {
+    if (onMiss === "passthrough" && request.method !== LISTEN_METHOD) {
       const out = await forwardMiss(request).catch((err: Error): JsonRpcResponse => {
         forwardFailures++;
         return {
@@ -1498,6 +1509,7 @@ export async function runReplay(cassettePath: string, opts: ReplayOptions = {}):
       process.stdout.write(serializeFrame(out));
       return;
     }
+    if (onMiss === "passthrough") process.stderr.write(`mcp-cassette replay: ${LISTEN_NOT_FORWARDED}\n`);
     process.stdout.write(serializeFrame(missError(request, diagnosis)));
   };
 

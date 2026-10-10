@@ -41,6 +41,7 @@ import {
   formatMiss,
   acknowledgmentFor,
   LISTEN_METHOD,
+  LISTEN_NOT_FORWARDED,
   LiveAppender,
   matchFallback,
   matchListen,
@@ -604,10 +605,11 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
     missLog.push({ method: frame.method, request: frame, reason });
     const diagnosis = formatMiss(reason);
     warn(`fingerprint miss for "${frame.method}": ${diagnosis}`);
-    if (spy) {
+    if (spy && frame.method !== LISTEN_METHOD) {
       void forwardMiss(res, frame);
       return;
     }
+    if (spy) warn(LISTEN_NOT_FORWARDED);
     // 200: the transport worked. The *protocol* answer is the error.
     send(res, 200, missError(frame, diagnosis));
   };
