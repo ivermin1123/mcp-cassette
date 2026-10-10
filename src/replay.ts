@@ -1297,6 +1297,30 @@ export function handleFrame(index: ReplayIndex, frame: JsonRpcFrame, onMiss: OnM
   return exchange(index, frame, onMiss).answer;
 }
 
+/** The id a minted pair carries: `live-1`, `live-2`, and so on. */
+export function liveId(n: number): string {
+  return `live-${n}`;
+}
+
+/**
+ * The highest minted id these entries already carry, 0 when they carry none.
+ *
+ * Two writers mint from this one sequence: the passthrough spy below, and
+ * `record --mode append`. Seeding past what the file holds is what keeps them
+ * from reusing each other's ids, or an id the original recording used.
+ */
+export function highestLiveId(entries: Cassette["entries"]): number {
+  let highest = 0;
+  for (const entry of entries) {
+    const ids = entry.type === "chunks" ? [entry.id] : entry.type === "frame" ? [(entry.frame as { id?: unknown }).id] : [];
+    for (const id of ids) {
+      const found = typeof id === "string" ? /^live-(\d+)$/.exec(id) : null;
+      if (found) highest = Math.max(highest, Number(found[1]));
+    }
+  }
+  return highest;
+}
+
 /**
  * The spy-append machinery, shared by both front-ends: v1 invented it for stdio
  * and HTTP passthrough needs exactly the same thing, so it is lifted out rather
@@ -1320,19 +1344,13 @@ export class LiveAppender {
     /** The rules it was redacted under, so an appended frame is redacted like the rest. */
     private cfg: CompiledRedactConfig = BUILTIN_REDACTION
   ) {
-    // Seed past any ids an earlier passthrough session left behind.
-    for (const entry of cassette.entries) {
-      const ids = entry.type === "chunks" ? [entry.id] : entry.type === "frame" ? [(entry.frame as { id?: unknown }).id] : [];
-      for (const id of ids) {
-        const found = typeof id === "string" ? /^live-(\d+)$/.exec(id) : null;
-        if (found) this.seq = Math.max(this.seq, Number(found[1]));
-      }
-    }
+    // Seed past any ids an earlier appending session left behind.
+    this.seq = highestLiveId(cassette.entries);
   }
 
   /** The id the next appended pair will carry. */
   nextId(): string {
-    return `live-${++this.seq}`;
+    return liveId(++this.seq);
   }
 
   private write(entry: FrameEntry | ChunksEntry): void {

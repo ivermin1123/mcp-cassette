@@ -171,7 +171,11 @@ program
   .requiredOption("-o, --out <file>", "cassette output path, e.g. session.cassette.jsonl")
   .option("--no-redact", "record secrets verbatim instead of redacting them")
   .option("--redact-config <file>", "JSON file of extra redaction rules: { patterns: [{ name, regex }], keys: [...], allow: [...] }. The same file must be given to replay, because redaction runs before matching")
-  .option("--mode <mode>", "once: refuse to overwrite an existing cassette; all: always re-record", "once")
+  .option(
+    "--mode <mode>",
+    "once: refuse to overwrite an existing cassette; all: always re-record; append: add this session's frames to the cassette already there, for a client that opens more than one connection (stdio only)",
+    "once"
+  )
   .option("--http <url>", "record a Streamable HTTP server, e.g. http://127.0.0.1:3000/mcp")
   .option("--listen <host:port>", "address the HTTP recording proxy binds, e.g. 127.0.0.1:6402", DEFAULT_LISTEN)
   .argument("[command...]", "server command (prefix with -- ); omit when using --http")
@@ -186,8 +190,8 @@ program
       opts: { out: string; redact: boolean; mode: string; http?: string; listen: string; redactConfig?: string }
     ) => {
       try {
-        if (opts.mode !== "once" && opts.mode !== "all") {
-          throw new Error(`record: unknown --mode "${opts.mode}" (expected once or all)`);
+        if (opts.mode !== "once" && opts.mode !== "all" && opts.mode !== "append") {
+          throw new Error(`record: unknown --mode "${opts.mode}" (expected once, all or append)`);
         }
         const mode = opts.mode as RecordMode;
         if (opts.redactConfig && !opts.redact) {

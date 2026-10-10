@@ -84,6 +84,17 @@ Two optional fields join them:
 }
 ```
 
+A request id of the form `live-N` is minted rather than recorded. Two writers
+add to a cassette that already carries a header, `replay --on-miss passthrough`
+and `record --mode append`, and both mint from the one sequence, seeded past
+what the file holds, so that neither reuses an id the other, or the original
+recording, already used. `origin:"live"` is narrower than that: it marks a
+frame that was forwarded to a live server during a replay, so the frames an
+appending recording contributes carry minted ids without it. Those entries keep
+the file's own time origin too: `t` is the offset from the header's
+`startedAt`, never from the appending session's start, so one file stays one
+timeline.
+
 ### `chunks[]`: streamed results
 
 When a response arrives as a stream, the single `frame` field cannot hold it
