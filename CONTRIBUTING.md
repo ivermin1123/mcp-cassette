@@ -124,7 +124,7 @@ and had to be cancelled a day later:
 
 ## Dev setup
 
-Requires Node.js >= 20.
+Requires Node.js >= 22.
 
 ```bash
 git clone https://github.com/ivermin1123/mcp-cassette.git
@@ -307,7 +307,7 @@ with `Fixes #123`. If it changes the cassette format or a command's output,
 call that out explicitly, because those are the changes most likely to break
 someone.
 
-CI runs the test matrix (Node 20 and 22) and the smoke test on every PR. Both
+CI runs the test matrix (Node 22 and 24) and the smoke test on every PR. Both
 must be green before merge.
 
 ## Project layout

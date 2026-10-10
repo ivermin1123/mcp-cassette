@@ -25,7 +25,7 @@ eras, the classic lifecycle and 2026-07-28.
 npm install -g mcp-cassette
 ```
 
-Or run without installing: `npx mcp-cassette <command>`. Node.js >= 20.
+Or run without installing: `npx mcp-cassette <command>`. Node.js >= 22.
 
 ## Commands
 
