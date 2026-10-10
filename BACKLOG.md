@@ -499,14 +499,32 @@ inventing fixtures again.
 
 ---
 
-## Which rules belong on a name, and on a prompt description
+## Which rules belong on a name, and on a prompt description: DECIDED
 
 **Raised** 2026-10-09, out of the release that pointed the `CAS-L` rules at
-prompts, resources and resource templates. **Status: measured, undecided.** The
-release itself is safe: every finding on those surfaces is reported at `warn`
-whatever its rule's level, so the default gate is unchanged. The decision this
-item owes is the graduation minor, where those findings would take their rule's
-own level and three of the rules below are `error`.
+prompts, resources and resource templates. **Decided** 2026-10-10: both
+directions below, carried by one mechanism, and shipped in the Unreleased
+section of [CHANGELOG.md](CHANGELOG.md). Kept here for the measurement and for
+the graduation step it leaves open.
+
+**The decision.** Each `LintRule` declares the surfaces it runs on, and the two
+lists kept by hand beside the catalogue, the rules applied to a resource `name`
+and `OUTPUT_RULE_IDS`, are derived from those declarations. CAS-L005, L007,
+L008 and L012 come off a `name` and keep every other surface, so a
+filesystem-style server that lists its own dotfiles is no longer reported for
+it. The other twelve rules stay on a name: the nine that look for something
+concealed, because what hides in display text reaches a reader exactly as it
+would from a description, and the three `intent` rules, which the measurement
+never caught on a name and whose patterns need a sentence a name does not have.
+CAS-L013 stays on
+a prompt description and declares a permanent `warn` ceiling there: a persona
+in a prompt description is the product, and the ceiling is part of the rule so
+the graduation cannot lift it by accident. Nothing graduates in that change; it
+only removes findings and adds the declaration, which is why it is a `Changed`
+bullet and not a breaking one. **The follow-up is the graduation minor
+itself,** where the prompt and resource surfaces take their rules' own levels
+under the discipline in CONTRIBUTING, no earlier than 2026-11-06, four weeks
+after 0.7.0, with its own `### BREAKING` bullet naming that release.
 
 **Measured** 2026-10-09, over 63 hand-typed subjects: the resource, prompt and
 template listings of the everything, fetch, sqlite, sentry, postgres and
@@ -526,7 +544,7 @@ A resource `name` is not prose, and the rules that fire on it read it as if it
 were a sentence. A persona in a prompt description is the product, not the
 attack.
 
-**Two directions to decide between before any of this graduates.**
+**The two directions that were open, both taken.**
 
 *Restrict name scanning to the rules that detect hidden content.* CAS-L001,
 L002, L003, L004, L006, L009, L010, L013 and L015 look for something concealed

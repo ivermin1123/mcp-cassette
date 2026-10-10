@@ -20,6 +20,30 @@ below.
 
 ### Changed
 
+- **Every lint rule declares the surfaces it runs on, and four of them stop
+  reading a resource name.** CAS-L005, CAS-L007, CAS-L008 and CAS-L012 read
+  their subject as a sentence, which is wrong for a `name`: measured over 63
+  listing entries they report `.env`, `.env.example`, `.ssh/config`,
+  `credentials.json`, `shell`, `exec.ts` and a long generated identifier as
+  findings, all of them a server naming its own files. They keep running on
+  the `title` and the `description` of the same resource or resource template,
+  and on every other surface. The other twelve rules still read a name: the
+  nine that look for something concealed, because what hides in display text
+  reaches a reader exactly as it would from a description, and the three
+  `intent` rules, whose patterns need a sentence a name does not have. Nothing
+  else changes level or wording: this release only removes those findings. If
+  you matched on them, they were telling you a filesystem server lists
+  dotfiles.
+- **The two lists of which rules run where are derived from the catalogue.**
+  `LintRule` carries a `surfaces` declaration, and both the rules applied to a
+  resource name and the six that read recorded output (`OUTPUT_RULE_IDS`, same
+  six ids in the same order) now come out of it instead of being kept by hand
+  beside it. CAS-L013 over a prompt description additionally declares a
+  permanent `warn` ceiling: a persona in a prompt description is the product,
+  so that one pairing does not graduate with the prompt and resource surfaces
+  in the later minor, which is no earlier than 2026-11-06. No finding gets a
+  higher level in this release, the default gate is unchanged, and the SARIF
+  fingerprint of every finding that still fires is unchanged.
 - **The test suite runs on vitest 5** (from 2), which clears the critical and
   high advisories `npm audit` reported against the development tree. None of
   that tree ships in the package. The vitest adapter's peer range stays

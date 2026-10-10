@@ -11,7 +11,14 @@
  * resource listing reach it the same way and are written by the same hand. So
  * the rules are applied by one scanner over three kinds of subject, and what
  * differs between `lintTool`, `lintPrompt` and `lintResource` is only which
- * fields each hands over as text.
+ * fields each hands over as text, and which surface each field is.
+ *
+ * The surface is not decoration: it decides which rules read the field. The
+ * catalogue declares a rule's reach (`LintRule.surfaces`), the scanner asks it
+ * (`rulesForSurface`), and neither this file nor check.ts keeps a list of its
+ * own. A resource `name` is the case that forced it: it is display text a
+ * reader sees, so what hides in it must still be caught, but it is usually an
+ * identifier, and the rules that read a sentence report `exec.ts` as an attack.
  */
 
 import type { Tool } from "./client.js";
@@ -23,10 +30,16 @@ import { isRequest, isResponse, type JsonRpcFrame, type JsonRpcId, type JsonRpcR
 import { validateVolatile } from "./replay.js";
 import { placeholderSpans } from "./redact.js";
 
-import { INVISIBLE_RUN_RULE, LINT_RULES, type LintRule, type LintSeverity } from "./lint-rules.js";
+import {
+  rulesForSurface,
+  severityOn,
+  type LintRule,
+  type LintSeverity,
+  type LintSurface,
+} from "./lint-rules.js";
 
-export { LINT_RULES } from "./lint-rules.js";
-export type { LintEvidence, LintRule, LintSeverity } from "./lint-rules.js";
+export { LINT_RULES, rulesForSurface, severityOn } from "./lint-rules.js";
+export type { LintEvidence, LintRule, LintSeverity, LintSurface } from "./lint-rules.js";
 
 
 
@@ -42,11 +55,20 @@ export type SubjectKind = "tool" | "prompt" | "resource" | "resource-template";
 
 export interface LintFinding {
   rule: string;
+  /**
+   * The rule's severity on the surface this was found on, which is its own
+   * unless the catalogue declares a lower ceiling for the pairing. The
+   * release-discipline cap that holds the newer surfaces at `warn` is applied
+   * later, by `check`, because it is a property of the release and not of the
+   * finding.
+   */
   severity: LintSeverity;
   /** What `subject` names. */
   kind: SubjectKind;
   /** The tool, prompt or resource whose text matched. */
   subject: string;
+  /** Which population of text matched, which is what decided the rule set. */
+  surface: LintSurface;
   message: string;
   excerpt?: string;
 }
@@ -88,9 +110,15 @@ export interface Resource {
   [key: string]: unknown;
 }
 
+/**
+ * One piece of model-facing text: the field it came from, what it says, and
+ * which surface it belongs to.
+ */
+type SurfaceText = [where: string, text: string, surface: LintSurface];
+
 /** Collect a field only when it holds text; a number carries no instructions. */
-function pushText(out: Array<[string, string]>, where: string, value: unknown): void {
-  if (typeof value === "string") out.push([where, value]);
+function pushText(out: SurfaceText[], where: string, value: unknown, surface: LintSurface): void {
+  if (typeof value === "string") out.push([where, value, surface]);
 }
 
 /** A subject a reader can act on, even from a server that sent no identifier. */
@@ -105,10 +133,10 @@ function subjectOf(value: unknown, kind: SubjectKind): string {
  * on a prompt description for the same reason, so there is one loop and the
  * callers differ only in what they collect.
  */
-function scan(kind: SubjectKind, subject: string, surfaces: Array<[string, string]>): LintFinding[] {
+function scan(kind: SubjectKind, subject: string, texts: SurfaceText[]): LintFinding[] {
   const findings: LintFinding[] = [];
-  for (const [where, text] of surfaces) {
-    for (const rule of LINT_RULES) {
+  for (const [where, text, surface] of texts) {
+    for (const rule of rulesForSurface(surface)) {
       const evidence = rule.find(text);
       if (evidence !== null) {
         // Several rules describe themselves as what a *tool* declares, which
@@ -119,9 +147,10 @@ function scan(kind: SubjectKind, subject: string, surfaces: Array<[string, strin
         const describe = kind === "tool" ? rule.describe : rule.describe.replace(/^tool\b/, kind);
         findings.push({
           rule: rule.id,
-          severity: rule.severity,
+          severity: severityOn(rule, surface),
           kind,
           subject,
+          surface,
           message: `${describe} (in ${kind === "tool" ? where : `${kind} ${where}`})`,
           excerpt: evidence,
         });
@@ -132,16 +161,16 @@ function scan(kind: SubjectKind, subject: string, surfaces: Array<[string, strin
 }
 
 export function lintTool(tool: Tool): LintFinding[] {
-  const surfaces: Array<[string, string]> = [];
-  pushText(surfaces, "description", tool.description);
-  pushText(surfaces, "title", tool.title);
+  const texts: SurfaceText[] = [];
+  pushText(texts, "description", tool.description, "tool");
+  pushText(texts, "title", tool.title, "tool");
   // Attackers also hide instructions inside the schema, and not only in its
   // descriptions. SAFE-T1501 calls it full-schema poisoning.
-  collectSchemaText(tool.inputSchema, "inputSchema", surfaces);
+  collectSchemaText(tool.inputSchema, "inputSchema", texts);
   // Annotations are rendered to the user and read by the model just the same,
   // so they are part of the schema an attacker gets to write.
-  collectSchemaText(tool.annotations, "annotations", surfaces);
-  return scan("tool", tool.name, surfaces);
+  collectSchemaText(tool.annotations, "annotations", texts);
+  return scan("tool", tool.name, texts);
 }
 
 /**
@@ -156,17 +185,17 @@ export function lintPrompt(prompt: Prompt): LintFinding[] {
   // is what `check` did before it linted these surfaces, and the alternative
   // is a throw its caller reports as the listing having failed.
   if (!prompt || typeof prompt !== "object") return [];
-  const surfaces: Array<[string, string]> = [];
-  pushText(surfaces, "description", prompt.description);
-  pushText(surfaces, "title", prompt.title);
+  const texts: SurfaceText[] = [];
+  pushText(texts, "description", prompt.description, "prompt");
+  pushText(texts, "title", prompt.title, "prompt");
   if (Array.isArray(prompt.arguments)) {
     prompt.arguments.forEach((argument, i) => {
       if (!argument || typeof argument !== "object") return;
-      pushText(surfaces, `arguments[${i}].description`, argument.description);
-      pushText(surfaces, `arguments[${i}].title`, argument.title);
+      pushText(texts, `arguments[${i}].description`, argument.description, "prompt");
+      pushText(texts, `arguments[${i}].title`, argument.title, "prompt");
     });
   }
-  return scan("prompt", subjectOf(prompt.name, "prompt"), surfaces);
+  return scan("prompt", subjectOf(prompt.name, "prompt"), texts);
 }
 
 /**
@@ -177,17 +206,22 @@ export function lintPrompt(prompt: Prompt): LintFinding[] {
  * `uri`, so the name is never what a client calls with. That `uri` (the
  * `uriTemplate`, for a template) is the identifier, and it is what the finding
  * names.
+ *
+ * It is read by its own surface, though, and not by every rule. A name is
+ * display text that is usually still an identifier, so the rules looking for
+ * something concealed in it run, and the rules that read their subject as a
+ * sentence stay on the `title` and the `description`. See `LintSurface`.
  */
 export function lintResource(resource: Resource): LintFinding[] {
   // See `lintPrompt`: a listing entry that is not an object is skipped.
   if (!resource || typeof resource !== "object") return [];
-  const surfaces: Array<[string, string]> = [];
-  pushText(surfaces, "name", resource.name);
-  pushText(surfaces, "title", resource.title);
-  pushText(surfaces, "description", resource.description);
+  const texts: SurfaceText[] = [];
+  pushText(texts, "name", resource.name, "name");
+  pushText(texts, "title", resource.title, "resource");
+  pushText(texts, "description", resource.description, "resource");
   const isTemplate = typeof resource.uriTemplate === "string";
   const kind: SubjectKind = isTemplate ? "resource-template" : "resource";
-  return scan(kind, subjectOf(isTemplate ? resource.uriTemplate : resource.uri ?? resource.name, kind), surfaces);
+  return scan(kind, subjectOf(isTemplate ? resource.uriTemplate : resource.uri ?? resource.name, kind), texts);
 }
 
 /**
@@ -203,20 +237,22 @@ const TEXT_LIST_KEYS = ["enum", "examples"] as const;
 
 const CHILD_KEYS = ["properties", "items", "anyOf", "oneOf", "allOf", "$defs", "definitions"];
 
-function collectSchemaText(node: unknown, path: string, out: Array<[string, string]>, depth = 0): void {
+function collectSchemaText(node: unknown, path: string, out: SurfaceText[], depth = 0): void {
   if (!node || typeof node !== "object" || depth > 6) return;
   const obj = node as Record<string, unknown>;
 
   for (const key of TEXT_KEYS) {
     const value = obj[key];
     // Only strings: a numeric `default` carries no instructions.
-    if (typeof value === "string") out.push([`${path}.${key}`, value]);
+    // Schema text is the tool surface: the same hand wrote it, for the same
+    // reader, and every rule that reads a description reads this too.
+    if (typeof value === "string") out.push([`${path}.${key}`, value, "tool"]);
   }
   for (const key of TEXT_LIST_KEYS) {
     const value = obj[key];
     if (!Array.isArray(value)) continue;
     value.forEach((member, i) => {
-      if (typeof member === "string") out.push([`${path}.${key}[${i}]`, member]);
+      if (typeof member === "string") out.push([`${path}.${key}[${i}]`, member, "tool"]);
     });
   }
 
@@ -378,32 +414,27 @@ const CONFIG_HASH = /^[0-9a-f]{64}$/;
  *   CAS-L015  "842 μs" is a unit symbol, not homoglyph obfuscation
  *
  * A rule that fires on ordinary data teaches everyone to ignore the lint, which
- * costs more than the rule catches. What survives is listed below, and the six
- * exclusions are not permanent judgements about the rules: they are judgements
- * about running *these* patterns against *this* surface, recorded in BACKLOG so
- * a narrowed output variant can be argued for with the measurement in hand.
+ * costs more than the rule catches. What survives is what the catalogue
+ * declares an `"output"` rule, and the six exclusions are not permanent
+ * judgements about the rules: they are judgements about running *these*
+ * patterns against *this* surface, recorded in BACKLOG so a narrowed output
+ * variant can be argued for with the measurement in hand.
+ *
+ * The rules themselves come from the catalogue too, so a rule's severity and
+ * wording stay in one place, and CAS-L006 arrives already narrowed for this
+ * surface. `tests/lint-cassette.test.ts` pins the set.
  */
-export const OUTPUT_RULE_IDS: readonly string[] = Object.freeze([
-  "CAS-L001", // instruction-override phrasing
-  "CAS-L003", // concealment directive
-  "CAS-L006", // invisible or steganographic Unicode
-  "CAS-L009", // bidirectional override
-  "CAS-L010", // variation selectors as a data channel
-  "CAS-L013", // role or authority impersonation
-]);
+const OUTPUT_RULES: LintRule[] = rulesForSurface("output");
 
 /**
- * The rules themselves, resolved from the catalogue rather than copied out of
- * it, so a rule's severity and wording stay in one place. An id that no longer
- * resolves is a catalogue change this list has not been told about, which is
- * what `tests/lint-cassette.test.ts` pins.
+ * The ids of those rules, in catalogue order.
+ *
+ * Published because a consumer reading `--json` needs to know which rules
+ * could have fired. Derived rather than written out: a hand-kept copy is a
+ * second place to tell, and it was the thing that could silently disagree with
+ * what actually ran.
  */
-const OUTPUT_RULES: LintRule[] = LINT_RULES.filter((rule) => OUTPUT_RULE_IDS.includes(rule.id)).map(
-  // CAS-L006 is the one rule whose threshold differs by surface: a lone
-  // invisible code point is suspicious in a declaration and ordinary in
-  // returned data. See `INVISIBLE_RUN_RULE` for the measurement.
-  (rule) => (rule.id === INVISIBLE_RUN_RULE.id ? INVISIBLE_RUN_RULE : rule)
-);
+export const OUTPUT_RULE_IDS: readonly string[] = Object.freeze(OUTPUT_RULES.map((rule) => rule.id));
 
 /** One finding about text a recorded server returned. */
 export interface OutputFinding {

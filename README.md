@@ -470,18 +470,21 @@ The **evidence** column is the one to read first. It says whether text alone can
 
 They scan the tool's `description` and `title`, its `annotations`, and, because an attacker writes the whole schema rather than just its prose ([SAFE-T1501](https://github.com/fkautz/safe-mcp), full-schema poisoning), every `description`, `title`, `default`, `const`, `enum` and `examples` string at any depth of the input schema.
 
-A tool description is not the only text a server writes for a model, so the same rules run over the rest of what it publishes:
+A tool description is not the only text a server writes for a model, so the rules run over the rest of what it publishes:
 
-| Subject | What is scanned | How a finding names it |
-|---|---|---|
-| tool | `description`, `title`, `annotations`, the whole input schema | the tool name |
-| prompt | `description`, `title`, and each argument's `description` and `title` | the prompt name |
-| resource | `name`, `title`, `description` | the resource URI |
-| resource template | the same, from `resources/templates/list` | the URI template |
+| Subject | What is scanned | Which rules | How a finding names it |
+|---|---|---|---|
+| tool | `description`, `title`, `annotations`, the whole input schema | all of them | the tool name |
+| prompt | `description`, `title`, and each argument's `description` and `title` | all of them | the prompt name |
+| resource | `title`, `description` | all of them | the resource URI |
+| resource | `name` | all but CAS-L005, L007, L008 and L012 | the resource URI |
+| resource template | the same two surfaces, from `resources/templates/list` | the same | the URI template |
 
 A resource's `name` is read because it is display text: the specification has it stand in for `title` when none is given, and `resources/read` is keyed by `uri`, so the name is never what a client calls with. A prompt's `name` is not read, because it is what `prompts/get` is called with, and linting identifiers would report a server's own naming as an attack. A server that advertises `resources` and then fails `resources/templates/list` in any way, method-not-found included, is not reported either: having no templates is not a fault.
 
-Findings on the prompt and resource surfaces are reported at `warn` in this release whatever level their rule carries, and graduate to the rule's own level no earlier than the next minor. See the paragraph below: a rule pointed at a surface it did not scan before is held to the same discipline as a new rule. Which of them graduate is an open decision with measurements behind it, in [BACKLOG.md](BACKLOG.md#which-rules-belong-on-a-name-and-on-a-prompt-description): a resource name is not a sentence, and the rules that read it as one are the ones to reconsider first.
+**Four rules skip a `name`,** because they read their subject as a sentence and a name is usually an identifier: CAS-L005 (sensitive local material) reports `.env` and `credentials.json`, CAS-L012 (command execution) reports `shell` and `exec.ts`, CAS-L007 reports a long generated identifier as an opaque blob, and CAS-L008 applies a length written for a description. All four keep running on the `title` and the `description` of the same resource, and on every other surface. Every other rule still reads a name. Nine of them look for something concealed (CAS-L001 through L004, L006, L009, L010, L013, L015), because what hides in display text reaches a reader exactly as it would from a description; the other three are `intent` rules (CAS-L011, L014, L016) whose patterns need a sentence that a name does not have. The measurement behind the split, over 63 listing entries from reference servers, is in [BACKLOG.md](BACKLOG.md#which-rules-belong-on-a-name-and-on-a-prompt-description-decided). Each rule declares its own surfaces in `src/lint-rules.ts`, and the rules applied to a name and the [output](#linting-what-the-server-returned) set are both derived from those declarations rather than listed separately.
+
+Findings on the prompt and resource surfaces are reported at `warn` whatever level their rule carries, and graduate to the rule's own level in a later minor, no earlier than 2026-11-06: four weeks after 0.7.0, the release that pointed the rules at them. See the paragraph below: a rule pointed at a surface it did not scan before is held to the same discipline as a new rule. One pairing is capped at `warn` for good and does not graduate with the rest: **CAS-L013 on a prompt description**. It catches role and authority impersonation aimed at the model, and "Act as a system administrator and diagnose the issue" is what a prompt template is for. The cap is part of the rule's declaration, so the graduation cannot lift it by accident.
 
 `check` fails on error-level findings only. `check --fail-on warn` opts into the stricter gate, the same way `snapshot --fail-on` works.
 
@@ -511,7 +514,7 @@ tests/fixtures/poisoned-output.cassette.jsonl: 2 warning(s) (reported, not gated
 
 Every finding names the frame it came from, by request id and method, and the JSON path of the string that matched, so you can open the file at the exchange rather than search it. `--json` emits the same findings machine-readably. There is no `--format sarif` here: SARIF would have to invent a server, a tool count and a gate the run was decided against, and a cassette has none of those.
 
-**Six rules run on output, and they are listed rather than derived:**
+**Six rules run on output.** Each one declares that surface in the catalogue, so this table and the set that runs are the same thing:
 
 | Rule | Catches |
 |---|---|

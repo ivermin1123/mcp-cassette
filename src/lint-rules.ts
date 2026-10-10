@@ -8,6 +8,12 @@
  *
  * Every rule that matches with a regex publishes it, so scripts/recheck-rules.mjs
  * can prove it free of super-linear backtracking. See LintRule.pattern.
+ *
+ * Every rule also declares the surfaces it runs on. A rule is not a detector
+ * looking for everything everywhere: a pattern written for a sentence reads a
+ * resource name wrong, and one written for a declaration reads a returned
+ * document wrong. See LintRule.surfaces, and `rulesForSurface`, which is what
+ * the scanners ask instead of carrying lists of their own.
  */
 
 
@@ -30,12 +36,56 @@ export type LintSeverity = "error" | "warn";
  */
 export type LintEvidence = "shape" | "intent";
 
+/**
+ * A surface a rule can run on: one population of text, not one field.
+ *
+ * The split is by what the text *is*, because that is what decides whether a
+ * rule reads it correctly. A tool description and a schema `default` are the
+ * same population, written by the same hand for the same reader, so they are
+ * one surface. A resource `name` is a different one: it is display text that
+ * is usually an identifier, and a rule that reads a sentence sees `.env` and
+ * reports a server for naming its own file.
+ *
+ * `"tool"`      the tool's `description`, `title`, `annotations` and every
+ *               text field of its input schema.
+ * `"prompt"`    a prompt's `description` and `title`, and each argument's.
+ * `"resource"`  the `title` and `description` of a resource or a resource
+ *               template. Both kinds, because nothing a rule reads differs
+ *               between them.
+ * `"name"`      the `name` of a resource or a resource template, which the
+ *               specification has stand in for `title` when none is given.
+ * `"output"`    text a recorded server returned. Narrower by measurement: see
+ *               `OUTPUT_RULE_IDS` in lint.ts.
+ */
+export type LintSurface = "tool" | "prompt" | "resource" | "name" | "output";
+
 export interface LintRule {
   id: string;
   severity: LintSeverity;
   describe: string;
   /** Whether text alone can tell an attack from a legitimate tool. */
   evidence: LintEvidence;
+  /**
+   * The surfaces this rule runs on, and the only place that is written down.
+   *
+   * Both lists that used to be kept by hand are derived from it: the rules
+   * that read a recorded answer (`OUTPUT_RULE_IDS` in lint.ts) and the rules
+   * that read a resource name. A rule added without a surface does not run
+   * anywhere, which is a compile error rather than a silent gap.
+   */
+  surfaces: readonly LintSurface[];
+  /**
+   * The highest level this rule may ever report on a surface, where that is
+   * lower than its own severity.
+   *
+   * This is not the release-discipline cap. That one holds every finding on a
+   * surface new to a release at `warn` for a minor and is then lifted, and it
+   * lives in check.ts because it is a property of the release rather than of
+   * the rule. A ceiling here says the pairing itself is wrong at a higher
+   * level and always will be, so the minor that lifts the other cap cannot
+   * lift this one: it would have to delete a declaration to do it.
+   */
+  cap?: Readonly<Partial<Record<LintSurface, LintSeverity>>>;
   /**
    * OWASP MCP Top 10 risk IDs this rule speaks to.
    * https://owasp.org/www-project-mcp-top-10/
@@ -55,6 +105,30 @@ export interface LintRule {
   pattern?: RegExp;
   find: (text: string) => string | null; // returns evidence excerpt or null
 }
+
+/**
+ * Every surface a server declares, a name among them.
+ *
+ * The rules that carry this look for something *concealed* in text, and a name
+ * conceals as well as a sentence does: the markers, the invisible code points,
+ * the bidi override and the homoglyph all work exactly as well in a name, and
+ * the name is the part a reader sees before anything is fetched.
+ */
+const DECLARED: readonly LintSurface[] = ["tool", "prompt", "resource", "name"];
+
+/**
+ * The declared surfaces that hold prose, so a name is left out.
+ *
+ * For the rules that read their subject as a sentence. Measured over 63
+ * subjects (the measurement is in BACKLOG): on a name they report a dotfile, a
+ * credential file, `shell` and `exec.ts` as attacks, which is a filesystem
+ * server being a filesystem server. They keep running on the `title` and the
+ * `description` of the same subject, where the text really is prose.
+ */
+const PROSE: readonly LintSurface[] = ["tool", "prompt", "resource"];
+
+/** Everything declared, plus text a recorded server returned. */
+const DECLARED_AND_OUTPUT: readonly LintSurface[] = [...DECLARED, "output"];
 
 function excerptAround(text: string, index: number, len = 60): string {
   const start = Math.max(0, index - 20);
@@ -105,6 +179,7 @@ const EXFIL_WINDOW = 60;
 const EXFILTRATION_RULE: LintRule = {
   id: "CAS-L004",
   evidence: "shape",
+  surfaces: DECLARED,
   severity: "error",
   describe: "exfiltration-shaped directive (send/post/upload data to a URL)",
   owasp: ["MCP10:2025"],
@@ -192,6 +267,7 @@ const NEW_RULES: LintRule[] = [
   {
     id: "CAS-L009",
     evidence: "shape",
+    surfaces: DECLARED_AND_OUTPUT,
     severity: "error",
     describe: "bidirectional override or unbalanced embedding (Trojan Source)",
     owasp: ["MCP03:2025"],
@@ -211,6 +287,7 @@ const NEW_RULES: LintRule[] = [
   {
     id: "CAS-L010",
     evidence: "shape",
+    surfaces: DECLARED_AND_OUTPUT,
     severity: "error",
     describe: "variation selectors used as a data channel",
     owasp: ["MCP03:2025"],
@@ -237,6 +314,7 @@ const NEW_RULES: LintRule[] = [
   regexRule({
     id: "CAS-L011",
     evidence: "intent",
+    surfaces: DECLARED,
     severity: "warn",
     describe: "tool declares priority over another tool, verify intended",
     owasp: ["MCP02:2025", "MCP06:2025"],
@@ -246,6 +324,7 @@ const NEW_RULES: LintRule[] = [
   regexRule({
     id: "CAS-L012",
     evidence: "intent",
+    surfaces: PROSE,
     severity: "warn",
     describe: "tool declares command execution, verify intended",
     owasp: ["MCP05:2025"],
@@ -255,6 +334,14 @@ const NEW_RULES: LintRule[] = [
   regexRule({
     id: "CAS-L013",
     evidence: "shape",
+    surfaces: DECLARED_AND_OUTPUT,
+    // A persona in a prompt description is the product. "Act as a system
+    // administrator and diagnose the issue" is what a prompt template is for,
+    // and a server that ships one is not impersonating anybody to the model:
+    // the user picked the template. The rule stays on the surface, because the
+    // same sentence in a resource description is still worth reading, and it
+    // never gates there.
+    cap: { prompt: "warn" },
     severity: "error",
     describe: "role or authority impersonation aimed at the model",
     owasp: ["MCP06:2025"],
@@ -264,6 +351,7 @@ const NEW_RULES: LintRule[] = [
   regexRule({
     id: "CAS-L014",
     evidence: "intent",
+    surfaces: DECLARED,
     severity: "warn",
     describe: "tool asks for a credential in its input, verify intended",
     owasp: ["MCP01:2025", "MCP07:2025"],
@@ -273,6 +361,7 @@ const NEW_RULES: LintRule[] = [
   {
     id: "CAS-L015",
     evidence: "shape",
+    surfaces: DECLARED,
     severity: "warn",
     describe: "mixed-script word (homoglyph obfuscation)",
     owasp: ["MCP03:2025"],
@@ -292,6 +381,7 @@ const NEW_RULES: LintRule[] = [
     {
       id: "CAS-L016",
       evidence: "intent",
+      surfaces: DECLARED,
       severity: "warn",
       describe: "tool declares a fetch from an unpinned remote source, verify intended",
       owasp: ["MCP04:2025"],
@@ -305,6 +395,7 @@ const TAIL_RULES: LintRule[] = [
   {
     id: "CAS-L006",
     evidence: "shape",
+    surfaces: DECLARED_AND_OUTPUT,
     severity: "error",
     describe: "invisible/steganographic Unicode in description",
     owasp: ["MCP03:2025"],
@@ -319,6 +410,7 @@ const TAIL_RULES: LintRule[] = [
   {
     id: "CAS-L007",
     evidence: "shape",
+    surfaces: PROSE,
     severity: "warn",
     describe: "large opaque blob (base64-like) embedded in description",
     owasp: ["MCP03:2025"],
@@ -332,6 +424,7 @@ const TAIL_RULES: LintRule[] = [
   {
     id: "CAS-L008",
     evidence: "shape",
+    surfaces: PROSE,
     severity: "warn",
     describe: "oversized description (context-window bloat)",
     owasp: ["MCP10:2025"],
@@ -368,6 +461,9 @@ const INVISIBLE_RUN = /(?:[\u200B-\u200F\u2060\uFEFF]|[\u{E0000}-\u{E007F}]){2,}
 export const INVISIBLE_RUN_RULE: LintRule = {
   id: "CAS-L006",
   evidence: "shape",
+  // The one surface it exists for. The catalogue entry carries `"output"` too,
+  // because the id does run there; `rulesForSurface` is what swaps this in.
+  surfaces: ["output"],
   severity: "error",
   describe: "invisible/steganographic Unicode in description",
   owasp: ["MCP03:2025"],
@@ -384,10 +480,38 @@ export const INVISIBLE_RUN_RULE: LintRule = {
   },
 };
 
+/**
+ * The rules that run on one surface, in catalogue order.
+ *
+ * The replacement for two lists that used to be kept by hand, and the reason
+ * `LintRule.surfaces` exists: a rule's reach is declared once, beside the rule,
+ * and everything that needs to know asks here.
+ */
+export function rulesForSurface(surface: LintSurface): LintRule[] {
+  return LINT_RULES.filter((rule) => rule.surfaces.includes(surface)).map((rule) =>
+    // CAS-L006 is the one id whose threshold differs by surface: a lone
+    // invisible code point is suspicious in a declaration and ordinary in
+    // returned data. See `INVISIBLE_RUN_RULE` for the measurement.
+    surface === "output" && rule.id === INVISIBLE_RUN_RULE.id ? INVISIBLE_RUN_RULE : rule
+  );
+}
+
+/**
+ * The severity a rule can reach on a surface: its own, unless the pairing
+ * carries a lower ceiling.
+ *
+ * The release-discipline cap in check.ts is a separate thing and is applied
+ * after this one; see `LintRule.cap`.
+ */
+export function severityOn(rule: LintRule, surface: LintSurface): LintSeverity {
+  return rule.cap?.[surface] === "warn" ? "warn" : rule.severity;
+}
+
 export const LINT_RULES: LintRule[] = [
   regexRule({
     id: "CAS-L001",
     evidence: "shape",
+    surfaces: DECLARED_AND_OUTPUT,
     severity: "error",
     describe: "instruction-override phrasing (classic prompt-injection)",
     owasp: ["MCP06:2025"],
@@ -397,6 +521,7 @@ export const LINT_RULES: LintRule[] = [
   regexRule({
     id: "CAS-L002",
     evidence: "shape",
+    surfaces: DECLARED,
     severity: "error",
     describe: "hidden-instruction markers in description",
     owasp: ["MCP03:2025"],
@@ -406,6 +531,7 @@ export const LINT_RULES: LintRule[] = [
   regexRule({
     id: "CAS-L003",
     evidence: "shape",
+    surfaces: DECLARED_AND_OUTPUT,
     severity: "error",
     describe: "concealment directive (do not tell/inform the user)",
     owasp: ["MCP03:2025"],
@@ -416,6 +542,7 @@ export const LINT_RULES: LintRule[] = [
   regexRule({
     id: "CAS-L005",
     evidence: "shape",
+    surfaces: PROSE,
     severity: "error",
     describe: "references sensitive local material (SSH keys, .env, credentials)",
     owasp: ["MCP01:2025"],

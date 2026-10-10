@@ -138,6 +138,13 @@ function fails(finding: CheckFinding, failOn: CheckFailOn, lintFailOn: LintFailO
  * under "A new rule ships at `warn` before it may gate", and it covers an
  * existing rule pointed at a surface it did not scan before exactly as it
  * covers a new rule.
+ *
+ * That cap is this release's, and the minor that graduates these surfaces
+ * removes it from the line below. The ceilings a rule declares for itself are
+ * not removed with it: `severityOn` has already applied them, so
+ * `finding.severity` arrives at its permanent level and a pairing the
+ * catalogue holds at `warn` for good cannot be graduated from here. See
+ * `LintRule.cap`, which CAS-L013 over a prompt description carries.
  */
 function asFinding(finding: LintFinding): CheckFinding {
   const isTool = finding.kind === "tool";
