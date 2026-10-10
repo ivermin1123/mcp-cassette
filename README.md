@@ -404,7 +404,7 @@ A description that was already poisoned when it was committed has not pulled any
 result: PASS (0 breaking, 1 dangerous, 0 minor, 0 info; gate: breaking)
 ```
 
-The escalation replaces the `info` line rather than joining it, so one changed description is still one finding. `tool-description-poisoned` sits at `dangerous` in this release, which means it is reported always and gates only under `--fail-on dangerous`. It may graduate to `breaking` in a later minor.
+The escalation replaces the `info` line rather than joining it, so one changed description is still one finding. `tool-description-poisoned` sits at `dangerous`, which means it is reported always and gates only under `--fail-on dangerous`, and it stays there: a reworded description that now declares command execution is worth a look, not a red build on the default gate, so failing on a rug pull is a choice you make with `--fail-on dangerous`.
 
 Only the tool's top-level `description` is compared this way. The same text arriving in a parameter description, a schema `title` or `default`, or an annotation is reported by the structural rules exactly as before, and by the [safety lint](#safety-lint-rules) on every run.
 
