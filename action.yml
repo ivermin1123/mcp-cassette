@@ -1,7 +1,7 @@
 name: mcp-cassette contract gate
 description: >-
-  Health-check a live MCP server and gate schema drift against a committed
-  contract snapshot, with one self-updating pull-request comment.
+  Health-check an MCP server, lint what it tells the model for poisoning, and
+  gate schema drift against a contract snapshot.
 author: Hoang Le
 
 branding:
@@ -68,7 +68,7 @@ inputs:
       the CLI built in this action's own checkout, which is how this repository
       dogfoods the action against itself; it is not useful to consumers.
     required: false
-    default: 0.9.0
+    default: 0.9.1
   github-token:
     description: >-
       Token used to write the pull-request comment. Needs `pull-requests: write`.
