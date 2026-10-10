@@ -27,6 +27,12 @@ below.
   reads the fixture run's JSON report from `--outputFile`, because vitest 5
   writes a bare `--reporter=json` to `.vitest/json/output.json` instead of
   printing it.
+- **`tool-description-poisoned` stays at `dangerous`.** 0.9.0 said it may
+  graduate to `breaking` in a later minor; it will not. At `breaking` it would
+  gate by default on the `intent` rules, which are always `warn` and never
+  fail `check` at its default gate, and
+  `--fail-on dangerous` already makes a rug pull fail the build for anyone who
+  wants that. Nothing changes in this release; the README says the same.
 
 ### Fixed
 

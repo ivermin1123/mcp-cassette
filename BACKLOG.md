@@ -90,9 +90,16 @@ the v0.3.0 release notes.
 
 ---
 
-## The `v*` tag trigger is wider than the releases it is for
+## The `v*` tag trigger is wider than the releases it is for: DECIDED
 
-**Raised** 2026-08-16, observed while cutting `v0.3` by hand.
+**Raised** 2026-08-16, observed while cutting `v0.3` by hand. **Decided**
+2026-10-10: accept the noise, as documented. [RELEASING.md](RELEASING.md)
+already says a float pushed by hand starts a run that fails at the version
+check. Both other directions edit the release path, which only a real release
+exercises, to remove one red run that is itself proof the version gate works,
+and narrowing the pattern would also make a mistyped tag do nothing instead of
+failing. Reopen if a second maintainer reads Actions, or if pushing a float by
+hand becomes a routine step.
 
 [`release.yml`](.github/workflows/release.yml) triggers on `push: tags: ['v*']`,
 which matches the floating tags (`v0`, `v0.3`) as well as real release tags
@@ -111,7 +118,7 @@ moving its own floats is invisible to itself; a maintainer moving one is not.
 So the cost today is one red run in the Actions history per manual float cut.
 Noise, not risk.
 
-**Directions, none chosen:**
+**Directions considered:**
 
 - **Narrow the pattern** to full versions (`v[0-9]+.[0-9]+.[0-9]+*`). Removes the
   noise, and also removes the version gate's protection from anything the
@@ -119,7 +126,7 @@ Noise, not risk.
   instead of failing loudly.
 - **Accept the noise** and document it, treating the red run as proof the
   version gate works. Costs nothing but leaves a permanent "is the release
-  broken?" question for anyone reading Actions.
+  broken?" question for anyone reading Actions. **Chosen.**
 - **Keep the trigger and exit early** on a tag that is not a full version, so
   the run goes green-and-skipped rather than red.
 
@@ -259,12 +266,21 @@ emission, the README roadmap's server-initiated flows.
 
 ---
 
-## Two limits left by tasks replay
+## Two limits left by tasks replay: DECIDED
 
 **Raised** 2026-10-08, from the change that made the
 `io.modelcontextprotocol/tasks` extension replay. Neither blocks a tasks
 session from recording and replaying; both are places where replay serves the
 recording faithfully and the recording is not the whole truth.
+
+**Decided** 2026-10-10: both stay as they are. A cancel rule of "jump to the
+cancelled state when the recording has one" would hold for some cassettes and
+not others, which is a rule nobody can predict; the honest fixture for a cancel
+test is a recording that cancels where the test does. Enforcing a TTL would
+bring the wall clock into replay and break the determinism replay exists for;
+the honest fixture for an expiry test is a recording that outlived its TTL.
+Reopen the first on a real cassette whose client cancels on a timeout, and the
+second when a consumer tests expiry.
 
 ### `tasks/cancel` does not change the states a later poll receives
 
@@ -646,16 +662,26 @@ can predict.
 
 ---
 
-## Which rules belong in a rug pull, and at what tier
+## Which rules belong in a rug pull, and at what tier: DECIDED
 
 **Raised** 2026-10-10, out of the review of the release that added
-`tool-description-poisoned`. **Status: measured, undecided.** The release
-itself is safe: the id ships at `dangerous`, which is reported always and
-gates only under `--fail-on dangerous`, so a consumer on the default gate sees
-the row and stays green. The decision this item owes is the graduation to
-`breaking`, which the README and the CHANGELOG both say may come in a later
-minor. At `breaking` the id gates by default, and the set it is built from has
-not been argued for.
+`tool-description-poisoned`. **Decided** 2026-10-10: it stays at `dangerous`
+for good, reported always and gating only under `--fail-on dangerous`. That
+is what `dangerous` means, and it keeps the lint's rule of never gating an
+`intent` finding by default: at `breaking` the id would gate on CAS-L011,
+CAS-L012, CAS-L014 and CAS-L016, which are always `warn` and never fail `check`
+at its default gate, and on CAS-L015.
+A consumer who wants a rug pull red already has `--fail-on dangerous`. Reopen
+on a real rug pull that a consumer on the default gate missed; graduate the
+`shape` rules only, then, and no sooner than 2026-11-07. The measurement that
+led here follows.
+
+The release that added the id was safe: it shipped at `dangerous`, which is
+reported always and gates only under `--fail-on dangerous`, so a consumer on
+the default gate saw the row and stayed green. The decision this item owed was
+the graduation to `breaking`, which the 0.9.0 README and CHANGELOG said may
+come in a later minor. At `breaking` the id would gate by default, on a rule
+set nobody had argued for.
 
 **What the id compares today.** Every `CAS-L` rule that names a SAFE-MCP
 technique, run over the stored description and over the live one. The one
@@ -694,7 +720,7 @@ rug pull. CAS-L015 is the other shape: it fires on "μs", where the mu is Greek
 inside a Latin word, which is the known noise of a unit symbol in a tool
 description rather than homoglyph obfuscation.
 
-**Three directions to decide between before this graduates.**
+**Three directions were on the table.**
 
 *Graduate only the `shape`-class rules.* It matches the lint's own discipline,
 where only a `shape` rule is ever allowed to gate, and it leaves the `intent`
@@ -709,20 +735,30 @@ rules.
 *Leave it at `dangerous` permanently.* The least work and the honest default if
 neither of the above wins: the id is a report that a `--fail-on dangerous`
 consumer opts into, and the promise in the README becomes a decision taken
-rather than a graduation deferred. The README and CHANGELOG wording would need
-to change with it.
+rather than a graduation deferred. The README and CHANGELOG wording change with
+it. **Chosen.**
 
-Whichever wins, the calendar floor is worth a decision too. CONTRIBUTING gives
-every new `CAS-L` rule a later minor **and** four weeks before it may gate,
-because minors here ship days apart. Drift rule ids are not under that section
-by its letter, and the same reasoning applies to an id that would start
-failing builds.
+Had either graduation won, the calendar floor would have needed a decision too.
+CONTRIBUTING gives every new `CAS-L` rule a later minor **and** four weeks
+before it may gate, because minors here ship days apart. Drift rule ids are not
+under that section by its letter, and the same reasoning applies to an id that
+would start failing builds. That is where the 2026-11-07 floor above comes
+from.
 
 ---
 
-## A rug pull below the top-level description has no id
+## A rug pull below the top-level description has no id: DECIDED
 
-**Raised** 2026-10-10, out of the same review. **Status: undecided.**
+**Raised** 2026-10-10, out of the same review. **Decided** 2026-10-10: won't
+fix, documented in the README under
+[the one reword that is not prose](README.md#the-one-reword-that-is-not-prose).
+Comparing schema-level text would change the snapshot format for something
+nobody has asked for, and every existing snapshot would report an `info` line
+per tool after the upgrade. The same text one level down is already reported:
+by the structural drift rules at `info`, and by the safety lint on every
+`check` run. Reopen on a report of a rug pull through a parameter description
+on a server `check` was not run against.
+
 `tool-description-poisoned` compares the tool's top-level `description` and
 nothing else. The same injection placed one level down is reported exactly as
 it was before the id existed: in a parameter description or the schema's own
@@ -799,9 +835,12 @@ same analysis over a user's own patterns and accepts nothing.
 
 ---
 
-## The client does not retry a rejected `tools/call` after re-listing
+## The client does not retry a rejected `tools/call` after re-listing: DECIDED
 
-**Raised** 2026-10-10, implementing the 2026-07-28 header mirror.
+**Raised** 2026-10-10, implementing the 2026-07-28 header mirror. **Decided**
+2026-10-10: no hidden retry. The reasons are under **Why it was left out**
+and **What it would cost** below, and **What would reopen it** says when to
+revisit.
 
 The spec gives a client one recovery path when a server answers a `tools/call`
 with `400` and `-32020` because the `Mcp-Param-*` headers are missing or stale:
