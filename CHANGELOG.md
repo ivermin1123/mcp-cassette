@@ -16,11 +16,15 @@ below.
   injection is the rug pull (SAFE-T1201, OWASP MCP03:2025), and the snapshot is
   the only place it can be caught: what makes the text an attack is that it is
   new relative to a file somebody read and approved, which a lint run against
-  the live server cannot know. `snapshot --check` now runs the same `CAS-L`
-  rules over the stored description and over the live one. A reword whose new
-  wording trips a rule the approved wording did not is reported as
+  the live server cannot know. `snapshot --check` now runs the `CAS-L` rules
+  over the stored description and over the live one. A reword whose new wording
+  trips a rule the approved wording did not is reported as
   `tool-description-poisoned` at `dangerous` instead of `tool-description-changed`
-  at `info`.
+  at `info`. Only the rules that name a SAFE-MCP technique count, so `CAS-L008`,
+  the 1500-character limit, is advice rather than a signature and a description
+  that merely grew stays `info`. Only the tool's top-level `description` is
+  compared; the same text in a parameter description, a schema `title` or
+  `default`, or an annotation is reported by the structural rules as before.
 
   *What you see:* a job running `snapshot --check --fail-on dangerous` goes red
   on a server whose description was reworded into something a safety-lint rule

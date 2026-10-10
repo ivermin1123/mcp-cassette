@@ -27,7 +27,8 @@ inputs:
   fail-on:
     description: >-
       Lowest drift tier that fails the job: "breaking", or "dangerous" to also
-      gate enum widening, default-value drift and added optional parameters.
+      gate enum widening, default-value drift, added optional parameters, and a
+      reworded description that trips a safety-lint rule the approved one did not.
     required: false
     default: breaking
   lint-fail-on:

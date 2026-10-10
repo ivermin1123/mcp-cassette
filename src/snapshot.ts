@@ -23,8 +23,9 @@
  * description and later serves one carrying an injection is the rug pull
  * (SAFE-T1201, OWASP MCP03:2025), and the snapshot is the only place it can be
  * caught, because the poisoned text is new relative to a file somebody read.
- * So a reword whose new text trips a safety-lint rule the old text did not is
- * `dangerous` rather than `info`; see `diffDescription`.
+ * So a reword whose new text trips a safety-lint rule that names an attack
+ * technique, where the old text did not, is `dangerous` rather than `info`;
+ * see `diffDescription`.
  *
  * Every change also carries a stable `rule` ID (oasdiff-style, e.g.
  * `tool-removed`, `input-enum-value-added`). Rule IDs are part of the public
@@ -39,7 +40,7 @@
 import fs from "node:fs";
 import { EraOption, MiniClient, Target, Tool } from "./client.js";
 import { stableStringify } from "./jsonrpc.js";
-import { lintTool } from "./lint.js";
+import { LINT_RULES, lintTool } from "./lint.js";
 
 export interface ContractSnapshot {
   mcpCassetteContract: 1;
@@ -201,7 +202,23 @@ export function diffContracts(oldSnap: ContractSnapshot, newSnap: ContractSnapsh
 }
 
 /**
- * Safety-lint rule ids one description trips, and nothing else.
+ * The lint rules that name an attack technique.
+ *
+ * A rule that names no SAFE-MCP technique is advice about the text rather than
+ * the signature of an attack on it, and cannot be evidence of a rug pull.
+ * Today that is exactly CAS-L008, the 1500-character limit: a description that
+ * grows from 1373 characters of ordinary prose to 1613 has not been poisoned,
+ * and reporting it under SAFE-T1201 would cite a tool-definition attack for a
+ * length. The set is read off the catalogue's own metadata rather than written
+ * out here, so a future rule written the same way is excluded by the same
+ * sentence, with no list to remember to update.
+ */
+const RUG_PULL_RULES = new Set(
+  LINT_RULES.filter((rule) => rule.safeMcp.length > 0).map((rule) => rule.id)
+);
+
+/**
+ * Attack-naming lint rule ids one description trips, and nothing else.
  *
  * `lintTool` over a tool carrying only this one field runs the published rule
  * set through the scanner the safety lint itself uses, so the two surfaces
@@ -213,7 +230,11 @@ export function diffContracts(oldSnap: ContractSnapshot, newSnap: ContractSnapsh
  */
 function lintedRules(name: string, description: string | undefined): Set<string> {
   if (!description) return new Set();
-  return new Set(lintTool({ name, description }).map((finding) => finding.rule));
+  return new Set(
+    lintTool({ name, description })
+      .map((finding) => finding.rule)
+      .filter((id) => RUG_PULL_RULES.has(id))
+  );
 }
 
 /**
@@ -227,8 +248,8 @@ function lintedRules(name: string, description: string | undefined): Set<string>
  * precisely what this diff holds and what a lint run against the live server
  * alone cannot know.
  *
- * So the comparison is between the rules the old text tripped and the rules the
- * new text trips, not between the two texts. Rules the old text already tripped
+ * So the comparison is between the attack-naming rules the old text tripped and
+ * those the new text trips, not between the two texts. Rules the old text already tripped
  * are the snapshot's problem, not this diff's: the safety lint reports them on
  * every run, and a description that was poisoned when it was approved and is
  * still poisoned after a reword has not pulled anything out from under anyone.

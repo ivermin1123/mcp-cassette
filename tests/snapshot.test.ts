@@ -274,7 +274,7 @@ describe("diffContracts: a reworded description", () => {
       rule: CONTRACT_RULES.toolDescriptionPoisoned,
       subject: "add",
     });
-    expect(changes[0]!.message).toContain("CAS-L001, CAS-L003");
+    expect(changes[0]!.message).toMatch(/trips CAS-L001, CAS-L003, which/);
     expect(changes[0]!.message).toContain("SAFE-T1201");
     expect(changes[0]!.message).toContain("MCP03:2025");
   });
@@ -308,6 +308,26 @@ describe("diffContracts: a reworded description", () => {
     // CAS-L003 was already there; only the newly-tripped rule is named.
     expect(changes[0]!.message).toContain("CAS-L001");
     expect(changes[0]!.message).not.toContain("CAS-L003");
+  });
+
+  it("stays info when the reword only grows past the length a lint rule advises", () => {
+    // CAS-L008 is the one rule in the catalogue that names no attack technique:
+    // it measures a description instead of recognising one, so prose that
+    // merely got longer is not a rug pull and must not be reported as one.
+    const sentence = "Returns the sum of a and b as a number. ";
+    const under = sentence.repeat(34);
+    const over = sentence.repeat(41);
+    expect(under.length).toBeLessThan(1500);
+    expect(over.length).toBeGreaterThan(1500);
+
+    expect(drift(under, over)).toEqual([
+      {
+        kind: "info",
+        rule: CONTRACT_RULES.toolDescriptionChanged,
+        subject: "add",
+        message: "description changed",
+      },
+    ]);
   });
 
   it("stays info when the poison is removed", () => {
