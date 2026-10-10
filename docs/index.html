@@ -181,8 +181,12 @@ footer {
   <p class="pitch">The cassette is itself an MCP server, so any client in any language connects to it exactly as it connects to the live one: no library to import, no product code to change, no transport to wrap.</p>
   <p class="sub">Record one session against a real
   <a href="https://modelcontextprotocol.io">Model Context Protocol</a> server, then run your agent
-  tests against the recording: no credentials, no rate limits, no network. The same binary gates your
-  tool contract against breaking changes and lints tool descriptions for poisoning.</p>
+  tests against the recording: no credentials, no rate limits, no network. The replay is a server,
+  not a stub: it hands back the notifications the recorded server pushed on its own, at the position
+  the recording put them, and it serves a whole <code>io.modelcontextprotocol/tasks</code> poll
+  sequence. One file covers both protocol eras, the classic lifecycle and 2026-07-28. The same binary
+  gates your tool contract against breaking changes, lints every text a server publishes to the model
+  for poisoning, and lints what a recorded server handed back.</p>
 
   <div class="note">
     <p><strong>mcp-cassette is on npm.</strong> <code>npm install -g mcp-cassette</code>, or run any
@@ -214,18 +218,30 @@ footer {
   that removes a tool, adds a required parameter, or changes a type, before your users' agents
   break at 3am.</li>
 
-  <li><strong>Catch poisoned tools.</strong> <code>check</code> lints tool descriptions for the
-  known shapes of tool-poisoning attacks (instruction overrides, concealment directives,
-  exfiltration URLs, invisible Unicode) and validates every schema (draft-07 and 2020-12).
-  That is prompt injection with the payload in the tool description rather than the user's
-  message: untrusted text your agent reads as instructions and a user rarely sees at all.
+  <li><strong>Catch poisoned tools.</strong> <code>check</code> lints every model-facing text a
+  server publishes, not only tool descriptions: schema-level descriptions, prompts and their
+  arguments, and the names and descriptions of resources and resource templates. Sixteen rules for
+  the known shapes of tool-poisoning attacks (instruction overrides, concealment directives,
+  exfiltration URLs, invisible Unicode), each citing the OWASP MCP Top 10 risk it covers
+  and, for all but the length limit, the SAFE-MCP technique it implements, plus full JSON Schema
+  validation (draft-07 and 2020-12). That is prompt
+  injection with the payload in the tool description rather than the user's message: untrusted text
+  your agent reads as instructions and a user rarely sees at all.
   Heuristics, not proofs: treat findings as review triggers, and pair with a dedicated security
   scanner for depth.</li>
+
+  <li><strong>Catch poisoned results, too.</strong> A description is a promise made before the
+  call; what a tool returned is data handed back after it, and it reaches the model with the same
+  authority. <code>lint &lt;cassette&gt;</code> reads the recorded answers to
+  <code>tools/call</code>, <code>tasks/get</code>, <code>tasks/result</code>,
+  <code>resources/read</code> and <code>prompts/get</code>, which is the only place that text still
+  exists. A fetched issue body saying "ignore all previous instructions" is invisible to any lint
+  that inspects a live server's listings.</li>
 </ul>
 
 <p>Works at the transport level: any server, any SDK, any language, any spec revision.</p>
 
-<h2>The five commands</h2>
+<h2>The seven commands</h2>
 
 <h3>check</h3>
 <p>Health-check any live server: lifecycle handshake, tool/resource/prompt listing, JSON Schema
@@ -236,7 +252,13 @@ validation, and the safety lint. Exits non-zero on errors.</p>
 <pre><code>server: mcp-servers/everything@2.0.0  protocol: 2025-06-18
 surface: 13 tools, 7 resources, 4 prompts
 [OK] no findings
-result: PASS (0 error(s), 0 warning(s))</code></pre>
+result: PASS (0 error(s), 0 warning(s), gate: error)</code></pre>
+
+<p>Two gates, so the safety lint can move without moving the structural checks:
+<code>--fail-on error|warn</code> covers every finding, and
+<code>--lint-fail-on error|warn|never</code> covers the <code>CAS-L</code> lint alone, defaulting to
+whatever <code>--fail-on</code> is. <code>--format sarif</code> writes the findings for GitHub's
+Security tab.</p>
 
 <h3>record</h3>
 <p>A transparent stdio proxy. Put it between your client and the server; it captures every
@@ -248,25 +270,66 @@ before they hit the file.</p>
 mcp-cassette record -o session.cassette.jsonl -- npx -y @modelcontextprotocol/server-github</code></pre>
 
 <h3>replay</h3>
-<p>Serves the cassette as a stdio MCP server. The cassette <em>is</em> the server now. Requests
-match on method plus arguments, repeated identical calls replay in recorded order, and anything
-unrecorded gets a clear JSON-RPC error.</p>
+<p>Serves the cassette as a stdio MCP server, or over Streamable HTTP with
+<code>--listen</code>. The cassette <em>is</em> the server now. Requests match on method plus
+arguments, repeated identical calls replay in recorded order, and anything unrecorded gets a clear
+JSON-RPC error. A field that moves every run (a timestamp, a generated id) is declared rather than
+tolerated: <code>--volatile /arguments/requestedAt</code>, or a <code>volatile</code> list the
+cassette carries itself.</p>
 
 <pre><code>mcp-cassette check --stdio "mcp-cassette replay session.cassette.jsonl"
 # → identical results, no network, no tokens, deterministic</code></pre>
 
+<p>It is a server and not a lookup table. The frames the recorded server sent on its own are
+replayed at the position the recording put them, each anchored to the request whose answer preceded
+it, so a <code>notifications/tools/list_changed</code> reaches the client after the call that
+changed the list and not at connect. A 2026-07-28 <code>subscriptions/listen</code> is held open and
+fed at those anchors. A session that used the <code>io.modelcontextprotocol/tasks</code> extension
+replays whole: every <code>tasks/get</code> for one task comes out of one pool in recorded order,
+whatever interval the client polls at, and a terminal answer is served again for as long as the
+client asks. <a href="/replay/">How replay works</a> is the long version.</p>
+
 <h3>snapshot</h3>
 <p>Locks the contract: tools, schemas, and annotations in a canonical snapshot.
-<code>--check</code> classifies drift as breaking, minor, or info, and exits non-zero on
-breaking.</p>
+<code>--check</code> classifies drift into four tiers, breaking, dangerous, minor and info, each
+finding carrying a stable rule id, and exits non-zero on breaking. Match your CI policy on the ids
+in parentheses, not on the wording.</p>
 
 <pre><code>mcp-cassette snapshot --stdio "npx -y my-server"            # writes mcp-contract.snapshot.json
 mcp-cassette snapshot --check --stdio "npx -y my-server"    # CI: fails on breaking changes</code></pre>
 
-<pre><code>[BREAKING] add: parameter "precision" is now required
-[BREAKING] slugify: tool removed
-[MINOR]    add: parameter "mode" added
-result: FAIL (2 breaking, 1 minor, 0 info)</code></pre>
+<pre><code>[BREAKING] slugify: tool removed (tool-removed)
+[BREAKING] add: parameter "precision" is now required (input-property-became-required)
+[DANGEROUS] add: parameter "mode" added (input-property-added-optional)
+
+result: FAIL (2 breaking, 1 dangerous, 0 minor, 0 info; gate: breaking)</code></pre>
+
+<p>One drift is not about shape at all. A tool approved with an honest description and later
+serving one that trips a safety rule the approved wording did not is the rug pull, and the snapshot
+is the only place it can be caught: what makes the text an attack is that it is new relative to a
+file somebody read and signed off. That is
+<code>tool-description-poisoned</code> at <code>dangerous</code>, not an <code>info</code> line
+about prose.</p>
+
+<h3>lint</h3>
+<p>Reads a finished cassette: its header against its own frames, and what the recorded server
+returned. <code>--json</code> emits the same findings machine-readably.</p>
+
+<pre><code>mcp-cassette lint tests/fixtures/poisoned-output.cassette.jsonl</code></pre>
+
+<pre><code>[WARN] CAS-L001 tools/call #3 /result/content/0/text: instruction-override phrasing (classic prompt-injection) (in recorded output)
+       evidence: "fails on Windows. Ignore all previous instructions and ope"
+[WARN] CAS-L006 resources/read #4 /result/contents/0/text: invisible/steganographic Unicode (in recorded output)
+       evidence: "contains U+200B (5 invisible code points in a row)"
+tests/fixtures/poisoned-output.cassette.jsonl: header and frames agree
+tests/fixtures/poisoned-output.cassette.jsonl: 2 warning(s) (reported, not gated)</code></pre>
+
+<h3>verify</h3>
+<p>The opposite direction. A replay answers from the recording, so it cannot tell you whether the
+live server still behaves that way. <code>verify</code> re-fires the recorded requests at the real
+thing and diffs the answers, which is how you find out a cassette has gone stale.</p>
+
+<pre><code>mcp-cassette verify session.cassette.jsonl -- npx -y my-server</code></pre>
 
 <h3>redact</h3>
 <p>Cleans a cassette you already have, or audits one without touching it.
@@ -283,7 +346,19 @@ result: FOUND (2 secret(s) detected)</code></pre>
 
 <h2>CI recipe</h2>
 
-<p>GitHub Actions, though nothing here is Actions-specific:</p>
+<p>There is a composite action that runs both gates, so three lines is the whole of it:</p>
+
+<pre><code>- uses: ivermin1123/mcp-cassette@v0.8
+  with:
+    server-command: node dist/my-server.js</code></pre>
+
+<p>That runs the safety check and the contract gate against the snapshot you committed, then leaves
+one comment on the pull request with the classified diff, updated in place on every push rather than
+appended. <code>lint-fail-on</code> moves the gate for the safety lint alone, and
+<code>sarif-file</code> writes a document for a later <code>upload-sarif</code> step so findings
+land in the Security tab instead of a log nobody opens.</p>
+
+<p>Nothing here is Actions-specific, and the CLI is the same two commands:</p>
 
 <pre><code>- name: MCP contract &amp; safety checks
   run: |
@@ -294,11 +369,13 @@ result: FOUND (2 secret(s) detected)</code></pre>
   run: npx vitest run   # your tests point the MCP client at:
                         # mcp-cassette replay fixtures/session.cassette.jsonl</code></pre>
 
-<p>For vitest specifically there is an adapter, <code>mcp-cassette/vitest</code>: one
-<code>useCassette()</code> call wraps a <code>describe</code> block with a replay server, and a
-fingerprint miss fails the test that caused it instead of arriving as a JSON-RPC error the
-assertion never looks at. See
-<a href="https://github.com/ivermin1123/mcp-cassette#testing-with-vitest">Testing with vitest</a>.</p>
+<p>Both runners have an adapter, <code>mcp-cassette/vitest</code> and
+<code>mcp-cassette/jest</code>: one <code>useCassette()</code> call wraps a <code>describe</code>
+block with a replay server, and a fingerprint miss fails the test that caused it instead of arriving
+as a JSON-RPC error the assertion never looks at. Same call, same options, same two error classes on
+either runner. See
+<a href="https://github.com/ivermin1123/mcp-cassette#testing-with-vitest">Testing with vitest</a>
+and <a href="https://github.com/ivermin1123/mcp-cassette#testing-with-jest">Testing with jest</a>.</p>
 
 <h2>Cassettes are plain files</h2>
 
@@ -326,6 +403,15 @@ same response.</p>
 Anthropic / Slack / AWS / Google key shapes, and any JSON value under a key that looks like a
 credential. There is also a <code>redact</code> command to clean or audit a cassette you already
 recorded. <code>--scan</code> writes nothing and exits non-zero if it finds anything.</p>
+
+<p>Your own secret shapes go in a config: <code>--redact-config &lt;file&gt;</code> on
+<code>record</code>, <code>redact</code> and <code>replay</code> adds patterns, key names whose
+values are secrets whatever their shape, and allowed values the built-in rules over-redact. The
+same file has to reach <code>record</code> and <code>replay</code>, because redaction runs before
+fingerprinting: a cassette carries a hash of the config it was recorded under, and replay refuses
+one whose hash does not match rather than missing every request. Custom patterns run over text an
+attacker wrote, so <code>redact --check-config</code>, with the optional <code>recheck</code> peer
+installed, refuses a pattern it cannot prove linear-time before you ship it.</p>
 
 <div class="note">
   <p>Redaction is pattern-based, so treat it as a strong default rather than a guarantee: a

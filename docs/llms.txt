@@ -9,7 +9,15 @@ poisoning every model-facing text a server publishes. That lint is the prompt
 injection check: a tool description, a prompt template and a resource listing
 are untrusted input an agent reads as instructions, so `check` looks for the
 instruction overrides, concealment directives and exfiltration URLs a
-tool-poisoning attack needs to work.
+tool-poisoning attack needs to work. `lint <cassette>` runs a subset of the
+same rules over what a recorded server returned, which is where indirect
+prompt injection arrives and the only place that text still exists.
+
+A replay is a server, not a lookup table: it originates the frames the recorded
+server sent on its own, at their recorded position, holds a 2026-07-28
+`subscriptions/listen` open and feeds it there, and serves a whole
+`io.modelcontextprotocol/tasks` poll sequence. One file covers both protocol
+eras, the classic lifecycle and 2026-07-28.
 
 ## Install
 
@@ -22,14 +30,19 @@ Or run without installing: `npx mcp-cassette <command>`. Node.js >= 20.
 ## Commands
 
 - `record -o <file> -- <server command>`: sit between a client and a live server, write every message to a cassette. `--redact-config <file>` adds your own redaction rules.
-- `replay <cassette>`: serve the cassette as a real MCP server on stdio, or over Streamable HTTP with `--listen <host:port>`. `--volatile <json-pointer>` declares a request field that changes every run, repeatable.
+- `replay <cassette>`: serve the cassette as a real MCP server on stdio, or over Streamable HTTP with `--listen <host:port>`. `--volatile <json-pointer>` declares a request field that changes every run, repeatable. Server-initiated frames are replayed at their recorded position, a `subscriptions/listen` is held open and fed there, and a `tasks` session replays whole: every `tasks/get` for one task comes out of one pool in recorded order whatever interval the client polls at, and a terminal answer is re-served for as long as the client asks. `--redact-config <file>` must match the one `record` used.
 - `check --stdio "<server command>"`: validate handshake and schemas, lint for poisoning the tool descriptions and schemas, the prompt and prompt-argument descriptions, and the names and descriptions of resources and resource templates. Findings on every surface but tools are reported at `warn` whatever their rule's level, and graduate to it no earlier than the next minor. `--format text|json|sarif`. Two gates: `--fail-on error|warn` covers every finding, and `--lint-fail-on error|warn|never` covers the `CAS-L` description lint alone, defaulting to whatever `--fail-on` is. Exit 1 on a finding at or above its gate; `--lint-fail-on never` reports every lint finding and gates on none, while a structural `CAS-C` finding still fails. Exit 2 at every level when the server could not be inspected at all.
-- `snapshot --stdio "<server command>"`: write the tool contract to a file. With `--check`, diff a live server against it and exit 1 on a breaking change.
+- `snapshot --stdio "<server command>"`: write the tool contract to a file. With `--check`, diff a live server against it into four tiers (breaking, dangerous, minor, info), each finding carrying a stable rule id, and exit 1 on a breaking change. `--fail-on` moves the gate. A description reworded into something that trips a `CAS-L` safety rule the approved wording did not is `tool-description-poisoned` at `dangerous`, not `tool-description-changed` at `info`: the snapshot is the only place a rug pull can be caught, because what makes the text an attack is that it is new relative to a file somebody approved. Only rules naming a SAFE-MCP technique count, so a description that merely grew stays `info`, and only the tool's top-level `description` is compared.
 - `verify <cassette> -- <server command>`: re-fire recorded requests at a live server and diff the answers.
 - `redact <cassette>`: redact secrets in an existing cassette, or `--scan` to audit without writing. `--redact-config <file>` adds your own rules, and `--check-config` analyses their patterns for catastrophic backtracking.
 - `lint <cassette> [--json]`: check a cassette header against its own frames, check the header's newer fields (`volatile` must be a list of valid declarations, `redaction.configHash` must be a sha256 hex digest), and scan what the recorded server returned for indirect prompt injection. Output scanning reads the answers to `tools/call`, `tasks/get`, `tasks/result`, `resources/read` and `prompts/get` with six rules (CAS-L001, L003, L006, L009, L010, L013); the two task methods are read because a task-augmented call delivers its result there. The `intent` rules are excluded by their own premise, a result that mentions a shell being a result about a shell, and six `shape` rules are excluded because they fire on ordinary returned data. CAS-L006 is narrowed on this surface to a run of two or more invisible code points or any Tags-block code point, because a lone zero-width character is what a web editor leaves in real issue bodies; the declaration-side rule is unchanged. A base64 `blob` or image `data` is never decoded or scanned, and text inside a redaction placeholder is not scanned. Findings name the request id, the method and the JSON path. Exit 1 on a header that contradicts its frames and on nothing else: the output and header-field findings are `warn`, reported and never gated. No `--format sarif`: a cassette has no server, tool count or gate to put in one.
 
 Every finding carries a stable rule id in parentheses. Match on the id, not the wording.
+
+## In CI
+
+- GitHub Action, `ivermin1123/mcp-cassette@v0.8`: a composite action that runs `check` and `snapshot --check` against a committed snapshot and leaves one pull-request comment with the classified diff, updated in place on every push rather than appended. `lint-fail-on: error|warn|never` moves the gate for the `CAS-L` safety lint alone; `sarif-file: <path>` writes the findings, `CAS-C` and `CAS-L` alike, as SARIF for a later `upload-sarif` step, and the same path comes back as the `sarif-file` output, empty when the input was unset.
+- Test adapters, `mcp-cassette/vitest` and `mcp-cassette/jest`: one `useCassette()` call wraps a `describe` block with a replay server, over stdio or HTTP. A fingerprint miss fails the test that caused it rather than arriving as a JSON-RPC error the assertion never looks at. Same call, same options, same two error classes on either runner. Both runners are optional peer dependencies, so neither reaches anyone not using its adapter.
 
 ## Docs
 

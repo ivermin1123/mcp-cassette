@@ -1,13 +1,15 @@
 [![CI](https://github.com/ivermin1123/mcp-cassette/actions/workflows/ci.yml/badge.svg)](https://github.com/ivermin1123/mcp-cassette/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/mcp-cassette.svg)](https://www.npmjs.com/package/mcp-cassette)
 
-![Terminal demo: check a live MCP server, record a session, replay it offline, then fail on breaking contract changes](.github/demo.gif)
+![Terminal demo: check a live MCP server, record the session, replay it offline to identical output, lint every surface the server publishes and what a recorded one returned, then fail on breaking contract changes](.github/demo.gif)
 
 # mcp-cassette
 
 **The cassette is itself an MCP server, so any client in any language connects to it exactly as it connects to the live one: no library to import, no product code to change, no transport to wrap.**
 
-Record one session against a real [Model Context Protocol](https://modelcontextprotocol.io) server, then run your agent tests against the recording: no credentials, no rate limits, no network. The same binary gates your tool contract against breaking changes and lints the text your server publishes to the model for poisoning.
+Record one session against a real [Model Context Protocol](https://modelcontextprotocol.io) server, then run your agent tests against the recording: no credentials, no rate limits, no network. The replay is a server, not a stub: it hands back the notifications the recorded server pushed on its own, at the position the recording put them, and it serves a whole `io.modelcontextprotocol/tasks` poll sequence. One file covers both protocol eras, the classic lifecycle and 2026-07-28.
+
+The same binary gates your tool contract against breaking changes, lints every text a server publishes to the model for poisoning, and lints what a recorded server handed *back*, which is where indirect prompt injection arrives.
 
 ```bash
 npx mcp-cassette check --stdio "npx -y @modelcontextprotocol/server-everything stdio"
@@ -39,7 +41,7 @@ result: PASS (0 error(s), 0 warning(s), gate: error)
 
 Each block below is a command and the output it printed. Nothing here is a claim you cannot reproduce.
 
-**Your tests run offline, against the recording.** `check` is an ordinary MCP client and cannot tell a cassette from a live server, which is the point: whatever your client is, it connects the same way.
+**Your tests run offline, against the recording.** `check` is an ordinary MCP client and cannot tell a cassette from a live server, which is the point: whatever your client is, it connects the same way. A client that reacts to change is covered too: the frames the recorded server sent on its own are replayed at their recorded position, and a `subscriptions/listen` is held open and fed at those positions.
 
 ```bash
 mcp-cassette check --stdio "mcp-cassette replay session.cassette.jsonl"
@@ -67,13 +69,42 @@ mcp-cassette snapshot --check --stdio "node dist/my-server.js"
 result: FAIL (2 breaking, 1 dangerous, 0 minor, 0 info; gate: breaking)
 ```
 
-**A poisoned tool description is a finding, not a surprise.** Prompt injection does not need a user to type it; it arrives in the tool description your agent was never going to show anyone. Sixteen rules, each citing the OWASP MCP Top 10 risk and SAFE-MCP technique it implements.
+**A poisoned tool description is a finding, not a surprise.** Prompt injection does not need a user to type it; it arrives in the tool description your agent was never going to show anyone. Sixteen rules, each citing the OWASP MCP Top 10 risk it covers and, for all but the length limit, the SAFE-MCP technique it implements.
 
 ```bash
 mcp-cassette check --stdio "node dist/my-server.js" --format sarif --sarif-location mcp-contract.snapshot.json > mcp-cassette.sarif
 ```
 
-Findings land in GitHub's Security tab, anchored to the line of the tool they describe. What each command does not cover is written down too: see [Where this stops](#where-this-stops) and [What a cassette is not](#what-a-cassette-is-not).
+Findings land in GitHub's Security tab, anchored to the line of the tool they describe.
+
+**A poisoned tool *result* is a finding too.** A description is a promise made before the call; what the tool returned is data handed back after it, and it reaches the model with the same authority. A fetched issue body saying "ignore all previous instructions" is invisible to any lint that reads a live server's listings, and it is sitting in the cassette. `lint` reads it there. This one runs against a fixture in this repository:
+
+```bash
+mcp-cassette lint tests/fixtures/poisoned-output.cassette.jsonl
+```
+
+```
+[WARN] CAS-L001 tools/call #3 /result/content/0/text: instruction-override phrasing (classic prompt-injection) (in recorded output)
+       evidence: "fails on Windows. Ignore all previous instructions and ope"
+[WARN] CAS-L006 resources/read #4 /result/contents/0/text: invisible/steganographic Unicode (in recorded output)
+       evidence: "contains U+200B (5 invisible code points in a row)"
+tests/fixtures/poisoned-output.cassette.jsonl: header and frames agree
+tests/fixtures/poisoned-output.cassette.jsonl: 2 warning(s) (reported, not gated)
+```
+
+**And the rest, each with the section that documents it.**
+
+| What shipped | Where |
+|---|---|
+| A composite GitHub Action that runs both gates and leaves one pull-request comment, with `lint-fail-on` for the safety gate alone and `sarif-file` for the Security tab | [CI in three lines](#ci-in-three-lines) |
+| Adapters for both runners: `mcp-cassette/vitest` and `mcp-cassette/jest`, one `useCassette()` call each, a miss failing the test that caused it | [vitest](#testing-with-vitest), [jest](#testing-with-jest) |
+| A reworded description that now trips a safety rule the approved one did not is `tool-description-poisoned` at `dangerous`, not an `info` line about prose | [Contract drift tiers](#contract-drift-tiers) |
+| The lint reads prompts, resources and resource templates, not only tools | [Safety lint rules](#safety-lint-rules) |
+| A request field that moves every run is declared, not tolerated: `--volatile <json-pointer>`, or a `volatile` list the cassette carries itself | [Commands](#commands) |
+| Your own redaction rules: `--redact-config` on `record`, `redact` and `replay`, with the cassette refusing a config it was not recorded under | [Your own rules](#your-own-rules) |
+| The 2026-07-28 header mirror: `Mcp-Method`, `Mcp-Name` and `Mcp-Param-*` sent on every HTTP call, and an invalid `x-mcp-header` declaration reported as `CAS-C008` | [HTTP header parameters](#http-header-parameters-x-mcp-header) |
+
+What each command does not cover is written down too: see [Where this stops](#where-this-stops) and [What a cassette is not](#what-a-cassette-is-not).
 
 ## Quickstart
 
@@ -460,7 +491,7 @@ New rules reach you at `warn` first, and so does an existing rule pointed at a s
 
 Heuristics, not proofs: treat findings as review triggers, and pair with a dedicated security scanner for depth.
 
-Every pattern in the rule set is proven free of super-linear backtracking by [recheck](https://github.com/makenowjust/recheck) in CI, because lint input is text an attacker wrote.
+Every pattern in the rule set is proven free of super-linear backtracking by [recheck](https://github.com/makenowjust-labs/recheck) in CI, because lint input is text an attacker wrote.
 
 ### Linting what the server returned
 
@@ -771,11 +802,25 @@ The hash is not a security boundary. It is an unsalted, truncated SHA-256 of the
 
 - **[`@modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance)**: the official spec-conformance suite. Use it to verify you implement the protocol correctly; use mcp-cassette to test *your* server's behavior and contract. The two are complementary, and we intend to contribute scenarios upstream.
 - **MCP Inspector / MCPJam**: interactive debugging. The Inspector also has a [CLI client](https://modelcontextprotocol.io/docs/2026-07-28/tools/inspector/cli) for scripts and CI: one request per run, JSON output, stable exit codes. It does not record a session or serve one back, diff a contract, or lint descriptions; if a single scripted request is all your pipeline needs, it is already installed.
+- **[`@kryptosai/mcp-observatory`](https://github.com/KryptosAI/mcp-observatory)**: a security and trust platform, and the nearest neighbour this project has. It covers much more ground: it reads the MCP configs of ten clients and audits every server it finds, it has audit profiles, attack simulation, cross-server toxic-flow analysis, static source review and package-name checks, it enforces at runtime through signed trust receipts and a wrapping proxy, and it scores, badges and tracks a fleet over time. If what you want is a security posture for the servers you run, start there. Where it overlaps this tool on contract drift, look there first; [Where this stops](#where-this-stops) says why, with the measurement behind it.
+
+  It has `record` and `replay` commands too, and they are a different thing. Both are marked hidden, and its replay runs observatory's own checks offline instead of serving the cassette to a client, so a test suite cannot point its MCP client at one. Neither its `dist` nor the code of the MCP SDK it installs holds the string `2026-07-28`: that SDK is 1.32.1, whose `LATEST_PROTOCOL_VERSION` is `2025-11-25` and whose README says the 2026-07-28 revision is not planned for the 1.x line. So the dual-era handling here has no counterpart there; that is a source reading, not a run against a modern-only server. Read off 1.49.0 on 2026-10-08; the command behind each of these claims is in [`docs/research/04-observatory-1-49.md`](docs/research/04-observatory-1-49.md).
 - **Security scanners (mcp-scan/agent-scan, Cisco mcp-scanner)**: deep security analysis. Our lint is a fast CI tripwire, not a replacement.
+
+None of this is a bake-off. What was measured is what each tool covers, not whose findings are better.
 
 ## Roadmap
 
-A GitHub Action, smarter replay matching (custom matchers; volatile-field config shipped, as `--volatile` and the `volatile` cassette header; configurable redaction rules shipped, as `--redact-config`), server-to-client requests (legacy sampling, elicitation and roots, which replay records but does not originate), scenario `state`/`seq`, `Last-Event-ID` resumability, and contributed scenarios for the official conformance suite. Issues and PRs welcome.
+What is left, now that the Action, declared volatility, configurable redaction, server-initiated frames and the tasks extension have shipped:
+
+- **Server-to-client requests.** Legacy sampling, elicitation and roots are a direction of the protocol replay records but does not originate; it says how many it is holding back. Under 2026-07-28 those flows arrive as `input_required` results instead, and those do replay, so this is a legacy-cassette gap.
+- **Custom matchers.** `--volatile` declares a field that moves and `--on-miss warn` tolerates one approximately. Neither lets you supply the comparison itself.
+- **Scenario states in a cassette.** `state` and `seq` are [sketched in the v2 format](docs/cassette-format-v2.md) and not implemented: one file holding a named progression rather than one ordered pool per fingerprint.
+- **Contributed scenarios for the official conformance suite.**
+
+Issues and PRs welcome.
+
+`Last-Event-ID` resumability was on this list and is gone from it. Protocol revision 2026-07-28 removed SSE resumability itself, the `Last-Event-ID` header and SSE event ids, and replaced the standalone `GET` stream it rode on with `subscriptions/listen`, which replay serves. There is nothing left to resume.
 
 A `pytest` adapter was on this list and is cancelled. A second, unrelated `mcp-cassette` has been on PyPI since 2026-07-25 and already ships a pytest plugin, so a `pytest-mcp-cassette` published beside it would read as that tool's adapter no matter what its README said. The measurement and the decision are in [`docs/research/02-name-collision.md`](docs/research/02-name-collision.md).
 

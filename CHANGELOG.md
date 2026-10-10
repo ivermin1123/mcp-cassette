@@ -158,6 +158,18 @@ below.
   judges a mismatch and not an absence: a `Mcp-Param-*` whose value sits
   nowhere in the call's arguments is named, a missing one is not.
 
+- **The README, the site and `llms.txt` describe what the tool does now.** The
+  lead, the "what it does" section, the roadmap and the tool comparison were
+  written against a smaller tool: the roadmap still listed the GitHub Action as
+  unbuilt, the site named five commands and only the vitest adapter, and
+  neither page mentioned replayed server frames, the tasks extension, declared
+  volatility, configurable redaction, the 2026-07-28 header mirror, the rug-pull
+  escalation in `snapshot --check`, or `lint <cassette>`. `Last-Event-ID`
+  resumability leaves the roadmap: revision 2026-07-28 removed the standalone
+  `GET` stream it resumed. The demo recording is rebuilt from the repository's
+  own fixture servers, so it renders offline and shows both lint surfaces.
+  No behaviour changed.
+
 ## [0.8.0] - 2026-10-10
 
 Replay can be told which request fields change on every run: `--volatile`
@@ -1026,7 +1038,7 @@ server. Nobody should meet those by way of `^0.2.0` resolving on its own.
   Lint input is text an attacker wrote, so a pattern with catastrophic
   backtracking would be a denial of service against the job inspecting the
   attacker. Every rule publishes its pattern and
-  [recheck](https://github.com/makenowjust/recheck) analyses it; the gate also
+  [recheck](https://github.com/makenowjust-labs/recheck) analyses it; the gate also
   fails when a rule matches by regex without publishing one.
 
 ### Changed
