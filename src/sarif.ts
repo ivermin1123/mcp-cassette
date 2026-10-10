@@ -52,6 +52,7 @@ const CONTRACT_RULES: Array<[string, string]> = [
   ["CAS-C005", "inputSchema is not valid JSON Schema"],
   ["CAS-C006", "advertised capability failed to list"],
   ["CAS-C007", "advertised capability failed to list"],
+  ["CAS-C008", "x-mcp-header declaration invalid"],
 ];
 
 /**

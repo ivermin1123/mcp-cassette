@@ -671,3 +671,40 @@ measurement in the same shape, not a line in the map.
 **Related:** `scripts/recheck-rules.mjs` (`REDACT_ACCEPTED`), `src/redact.ts`
 (the `urlcreds` and `jwt` comments), `redact --check-config`, which runs the
 same analysis over a user's own patterns and accepts nothing.
+
+---
+
+## The client does not retry a rejected `tools/call` after re-listing
+
+**Raised** 2026-10-10, implementing the 2026-07-28 header mirror.
+
+The spec gives a client one recovery path when a server answers a `tools/call`
+with `400` and `-32020` because the `Mcp-Param-*` headers are missing or stale:
+call `tools/list` again to pick up the current `inputSchema`, then retry the
+original request with the headers it now knows about. It is a SHOULD, and it is
+not implemented. A rejected call is reported as `MISSING` carrying the status
+and the JSON-RPC error the server sent, for example `HTTP 400 from server
+(-32020: Header mismatch: Mcp-Param-Region header value missing)`.
+
+**Why it was left out, rather than overlooked.** Every path that calls a tool
+here already resolves the declarations first: `check` and `snapshot` list as
+their whole job, and `verify` lists before re-firing a cassette that calls one.
+The retry covers the window where a server changed a tool's schema between that
+listing and the call, which is a race a one-shot CLI run barely has, and a
+cassette's recorded calls are the same calls either way.
+
+**What it would cost.** `relay` is the single point every caller goes through,
+and it is deliberately transparent: `verify` depends on getting back whatever
+the server answered, `input_required` included, so a retry hidden inside it
+would make one recorded pair into two live requests and change what `verify`
+reports. The honest version is a retry the caller opts into, which is an API
+decision, not a patch.
+
+**What would reopen it.** A long-lived caller rather than a one-shot command,
+such as a `verify` run against a server that reloads its tool definitions mid
+run, or a real report of `-32020` from a schema change between the listing and
+the call.
+
+**Related:** `src/client.ts` (`listTools`, `prepareToolHeaders`, `relay`),
+`src/transport.ts` (`resolveHeaderParams`, `headerParamHeaders`), the README
+section on [header parameters](README.md#http-header-parameters-x-mcp-header).

@@ -20,6 +20,7 @@ import path from "node:path";
 import { readCassette, type CassetteEntry, type Era } from "../src/cassette.js";
 import { startHttpReplay } from "../src/http-replay.js";
 import { MiniClient } from "../src/client.js";
+import { encodeHeaderValue } from "../src/transport.js";
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-cassette-httpreplay-"));
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -209,6 +210,65 @@ describe("what replay is faithful about, and what it refuses to be", () => {
     expect(JSON.parse(await res.text()).result).toEqual({ tools: [] });
     expect(stderr).toContain('Mcp-Method "tools/call" does not match');
     expect(stderr).toContain('MCP-Protocol-Version "1999-01-01" is not the recorded "2026-07-28"');
+  });
+
+  it("warns on a mirrored header the body contradicts, and still answers correctly", async () => {
+    const call = { name: "execute_sql", arguments: { region: "us-west1", query: "SELECT 1" } };
+    const file = cassette("mirrored", { era: "modern", sessioned: false }, [
+      frame("c2s", { jsonrpc: "2.0", id: 1, method: "tools/call", params: call }),
+      frame("s2c", { jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: "1" }] } }),
+    ]);
+    const server = await startHttpReplay(file, { listen: "127.0.0.1:0" });
+    const [res, stderr] = await withStderr(() =>
+      post(server.url, ask(9, "tools/call", call), {
+        "mcp-method": "tools/call",
+        "mcp-name": "drop_table", // a body saying execute_sql, a header saying something else
+        "mcp-param-region": "eu-west1", // routed one way, executed another
+      })
+    );
+    await server.close();
+
+    expect(res.status).toBe(200); // a real server answers -32020; replay is a double, not a gate
+    expect(JSON.parse(await res.text()).result).toEqual({ content: [{ type: "text", text: "1" }] });
+    expect(stderr).toContain('Mcp-Name "drop_table" does not match the body\'s "execute_sql"');
+    expect(stderr).toContain('mcp-param-region "eu-west1" mirrors no argument of "execute_sql"');
+  });
+
+  it("reads an encoded mirrored header before judging it, and stays quiet when it agrees", async () => {
+    const call = { name: "execute_sql", arguments: { region: " 日本 ", rows: 42, dry: true } };
+    const file = cassette("mirrored-encoded", { era: "modern", sessioned: false }, [
+      frame("c2s", { jsonrpc: "2.0", id: 1, method: "tools/call", params: call }),
+      frame("s2c", { jsonrpc: "2.0", id: 1, result: { content: [] } }),
+    ]);
+    const server = await startHttpReplay(file, { listen: "127.0.0.1:0" });
+    const [, stderr] = await withStderr(() =>
+      post(server.url, ask(9, "tools/call", call), {
+        "mcp-method": "tools/call",
+        "mcp-name": "execute_sql",
+        "mcp-param-region": encodeHeaderValue(" 日本 "),
+        "mcp-param-rows": "42",
+        "mcp-param-dry": "true",
+      })
+    );
+    await server.close();
+
+    expect(stderr).not.toContain("mirrors no argument");
+    expect(stderr).not.toContain("Mcp-Name");
+  });
+
+  it("judges a mirrored header only in the era that defines one", async () => {
+    const file = cassette("mirrored-legacy", { era: "legacy", sessioned: false }, [
+      frame("c2s", { jsonrpc: "2.0", id: 1, method: "initialize" }),
+      frame("s2c", { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } }),
+    ]);
+    const server = await startHttpReplay(file, { listen: "127.0.0.1:0" });
+    const [, stderr] = await withStderr(() =>
+      post(server.url, ask(9, "initialize"), { "mcp-name": "nonsense", "mcp-param-region": "nonsense" })
+    );
+    await server.close();
+
+    expect(stderr).not.toContain("mirrors no argument");
+    expect(stderr).not.toContain("Mcp-Name");
   });
 
   it("refuses a stdio cassette loudly instead of serving something it never recorded", async () => {

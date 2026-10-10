@@ -261,6 +261,14 @@ export async function verifyAgainstServer(
   // server mints its own, and the retry must carry that one to mean the same.
   const liveStateFor = new Map<string, string | undefined>();
   try {
+    // The custom headers a `tools/call` owes come from the tool's
+    // `inputSchema`, so a conformant client lists before it calls. The
+    // recorded calls name the tools but not their schemas, and only
+    // Streamable HTTP in the modern era mirrors anything, so the round trip
+    // is spent only where it buys a header.
+    if (pairs.some((pair) => pair.request.method === "tools/call")) {
+      await client.prepareToolHeaders();
+    }
     for (const pair of pairs) {
       const label = pairLabel(pair.request);
       let live: JsonRpcResponse;

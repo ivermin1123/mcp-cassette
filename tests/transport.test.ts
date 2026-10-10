@@ -107,10 +107,53 @@ describe("HttpTransport", () => {
     await t.close();
   });
 
+  it("mirrors the body into the standard headers once the era says modern", async () => {
+    const { url, seen } = await stub((req, res) => json(res, { jsonrpc: "2.0", id: req.id, result: {} }));
+    const t = new HttpTransport(url);
+    await t.request(request(1, "tools/call", { name: "build" }), 2000);
+    t.setEra("modern");
+    await t.request(request(2, "tools/call", { name: "build" }), 2000);
+    await t.request(request(3, "resources/read", { uri: "file:///a b.txt" }), 2000);
+    await t.request(request(4, "prompts/get", { name: "review" }), 2000);
+    await t.request(request(5, "tools/list"), 2000);
+
+    expect(seen[0]!["mcp-method"]).toBeUndefined(); // the legacy era defines none of this
+    expect(seen[1]).toMatchObject({ "mcp-method": "tools/call", "mcp-name": "build" });
+    expect(seen[2]).toMatchObject({ "mcp-method": "resources/read", "mcp-name": "file:///a b.txt" });
+    expect(seen[3]).toMatchObject({ "mcp-method": "prompts/get", "mcp-name": "review" });
+    expect(seen[4]!["mcp-method"]).toBe("tools/list"); // a method with no name carries only the one
+    expect(seen[4]!["mcp-name"]).toBeUndefined();
+  });
+
+  it("encodes an Mcp-Name a plain header value could not carry", async () => {
+    const { url, seen } = await stub((req, res) => json(res, { jsonrpc: "2.0", id: req.id, result: {} }));
+    const t = new HttpTransport(url);
+    t.setEra("modern");
+    await t.request(request(1, "resources/read", { uri: "file:///名前.txt" }), 2000);
+
+    expect(seen[0]!["mcp-name"]).toBe("=?base64?ZmlsZTovLy/lkI3liY0udHh0?=");
+  });
+
   it("surfaces a transport-level failure as the status, not as a parse error", async () => {
     const { url } = await stub((_req, res) => res.writeHead(500).end("upstream exploded"));
     await expect(new HttpTransport(url).request(request(1, "tools/list"), 2000)).rejects.toThrow(
       "HTTP 500 from server"
+    );
+  });
+
+  it("carries the refusal the body explained, so a caller reads why and not only that", async () => {
+    const { url } = await stub((req, res) => {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: req.id,
+          error: { code: -32020, message: "Header mismatch: Mcp-Param-Region header value missing" },
+        })
+      );
+    });
+    await expect(new HttpTransport(url).request(request(1, "tools/call", { name: "x" }), 2000)).rejects.toThrow(
+      "HTTP 400 from server (-32020: Header mismatch: Mcp-Param-Region header value missing)"
     );
   });
 });

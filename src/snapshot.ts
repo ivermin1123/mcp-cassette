@@ -126,6 +126,11 @@ export function shouldFail(changes: readonly ContractChange[], failOn: FailOn = 
 export async function captureContract(target: Target, era: EraOption = "auto"): Promise<ContractSnapshot> {
   const { client, init } = await MiniClient.connect(target, undefined, era);
   try {
+    // The raw list: a snapshot records what the server advertises, and a tool
+    // a 2026-07-28 HTTP client must refuse is still advertised. Dropping it
+    // would label a present tool `tool-removed` and hide its description from
+    // the reword rules for as long as the declaration stays broken. `check`
+    // reports the declaration instead.
     const tools = await client.listAll<Tool>("tools/list", "tools");
     return {
       mcpCassetteContract: 1,

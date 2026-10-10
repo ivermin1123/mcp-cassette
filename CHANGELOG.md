@@ -46,6 +46,54 @@ below.
 
   `tool-description-poisoned` sits at `dangerous` in this release. It may
   graduate to `breaking` in a later minor, which would gate it by default.
+- **`check` reports an invalid `x-mcp-header` declaration as `CAS-C008`, at
+  `warn`.** The 2026-07-28 Streamable HTTP transport lets a server ask for a
+  tool parameter to be mirrored into an `Mcp-Param-{name}` header, and requires
+  a client to refuse a tool whose declaration breaks the constraints on that
+  name. A server shipping one has a tool no conformant 2026-07-28 HTTP client
+  will call, which is a contract defect of the same class as an `inputSchema`
+  that is not valid JSON Schema, so it is reported the way those are. The check
+  runs on every target, stdio included: the declaration is a property of the
+  schema, not of the wire, and a stdio server reachable over HTTP ships the
+  same schema.
+
+  *What you see:* a job running `check --fail-on warn` (or `--lint-fail-on`
+  left at that gate) goes red on a server with such a declaration, naming the
+  tool and the rule that was broken. At the default gate nothing changes:
+  `CAS-C008` is reported and not gated, so `check` alone still exits 0. The
+  tool itself stays in the listing, in the lint and in a snapshot, so no other
+  finding moves and `snapshot --check` reports no drift.
+
+  *What to do:* fix the declaration on the server. A valid `x-mcp-header` value
+  is a non-empty HTTP field-name token, unique among the schema's others when
+  compared case-insensitively, on a `string`, `integer` or `boolean` property
+  reachable from the schema root through `properties` keys alone. `CAS-C008`
+  ships at `warn` and may graduate to `error` in a later minor, which would
+  gate it by default.
+
+### Added
+
+- **The 2026-07-28 header mirror, client side: `Mcp-Method`, `Mcp-Name` and
+  `Mcp-Param-{name}`.** `check`, `snapshot` and `verify` over `--url` already
+  sent the first two; they now also send the custom headers a tool's
+  `inputSchema` asks for with `x-mcp-header`, which is what lets a load
+  balancer or gateway route a `tools/call` without parsing its body. The
+  parameters are resolved from `tools/list` before any `tools/call`, so
+  `verify` lists the tools once when the cassette calls one; a server that
+  cannot list is called without the headers, which is what the spec tells a
+  client holding no schema to do. Values travel as the spec encodes them:
+  plain when they are plain ASCII with no leading or trailing whitespace, and
+  as `=?base64?...?=` when they are not.
+
+### Changed
+
+- **Replay warns about a mismatched `Mcp-Name` or `Mcp-Param-*` too.** The rule
+  is the one replay already documented and does not change: a header the body
+  contradicts earns a warning on stderr and a correct answer, never a `400`. A
+  real server answers that with `-32020`; checking a client against one is
+  `verify`'s job, not a test double's. Replay holds no `inputSchema`, so it
+  judges a mismatch and not an absence: a `Mcp-Param-*` whose value sits
+  nowhere in the call's arguments is named, a missing one is not.
 
 ## [0.8.0] - 2026-10-10
 

@@ -43,6 +43,7 @@ import {
   type Resource,
   type SubjectKind,
 } from "./lint.js";
+import { resolveHeaderParams } from "./transport.js";
 
 export type FindingLevel = "error" | "warn" | "info";
 
@@ -162,6 +163,11 @@ export async function runCheck(
   const { client, init } = await MiniClient.connect(target, undefined, era);
 
   try {
+    // The raw list, not the one a calling client would keep: `check` lints
+    // what the server advertises to every client, and a tool a 2026-07-28 HTTP
+    // client must refuse is still served to a stdio client and to every client
+    // predating the annotation. Dropping it here would let a server silence a
+    // lint finding with a one-key edit; the declaration is reported instead.
     const tools = await client.listAll<Tool>("tools/list", "tools");
 
     // ---- structural checks -------------------------------------------------
@@ -220,6 +226,20 @@ export async function runCheck(
             code: "CAS-C005",
             subject: tool.name,
             message: `inputSchema is not valid JSON Schema: ${(err as Error).message}`,
+          });
+        }
+        // A tool no conformant client will call is a contract defect of the
+        // same class as the two above, and it is a property of the schema
+        // rather than of the wire, so it is reported on every transport.
+        const declared = resolveHeaderParams(tool.inputSchema);
+        if ("invalid" in declared) {
+          findings.push({
+            level: "warn",
+            code: "CAS-C008",
+            subject: tool.name,
+            message:
+              "invalid x-mcp-header declaration, so a 2026-07-28 Streamable HTTP client must " +
+              `refuse this tool whatever transport it is served over: ${declared.invalid}`,
           });
         }
       }

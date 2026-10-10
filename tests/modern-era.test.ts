@@ -272,6 +272,8 @@ describe("session teardown", () => {
 
 describe("verify across an MRTR exchange", () => {
   const deploy = { name: "deploy", arguments: { env: "prod" } };
+  /** `verify` lists tools before it calls one, to learn the headers the call owes. */
+  const DEPLOY_TOOL = { name: "deploy", inputSchema: { type: "object", properties: { env: { type: "string" } } } };
   const question = (message: string) => ({ confirm: { method: "elicitation/create", params: { message } } });
   const answer = { confirm: { action: "accept" } };
 
@@ -297,6 +299,7 @@ describe("verify across an MRTR exchange", () => {
     let minted = 0;
     return stub((req, res) => {
       if (req.method === "server/discover") return ok(res, req.id, DISCOVER_RESULT);
+      if (req.method === "tools/list") return ok(res, req.id, { tools: [DEPLOY_TOOL] });
       const params = req.params as Record<string, unknown>;
       if (params.requestState === undefined) {
         minted++;
@@ -319,6 +322,7 @@ describe("verify across an MRTR exchange", () => {
   it("drops the recorded state from the retry when the live server minted none", async () => {
     const { url, seen } = await stub((req, res) => {
       if (req.method === "server/discover") return ok(res, req.id, DISCOVER_RESULT);
+      if (req.method === "tools/list") return ok(res, req.id, { tools: [DEPLOY_TOOL] });
       const params = req.params as Record<string, unknown>;
       if (params.inputResponses) return ok(res, req.id, { resultType: "complete", content: [{ type: "text", text: "deployed" }] });
       ok(res, req.id, { resultType: "input_required", inputRequests: question("Deploy to prod?") });
