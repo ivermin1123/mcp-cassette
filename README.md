@@ -140,7 +140,7 @@ The failing output is at the top of this page. Every finding carries a stable ru
 ## CI in three lines
 
 ```yaml
-- uses: ivermin1123/mcp-cassette@v0.8
+- uses: ivermin1123/mcp-cassette@v0.9
   with:
     server-command: node dist/my-server.js
 ```
@@ -169,7 +169,7 @@ jobs:
           node-version: '22.x'
       - run: npm ci && npm run build      # your server must exist before it can be started
 
-      - uses: ivermin1123/mcp-cassette@v0.8
+      - uses: ivermin1123/mcp-cassette@v0.9
         with:
           server-command: node dist/my-server.js
           snapshot-file: mcp-contract.snapshot.json
@@ -222,13 +222,13 @@ A pull request from a fork gets a read-only `GITHUB_TOKEN`, so the comment is sk
 
 | Pin | Follows | Use it when |
 |---|---|---|
-| `@v0.8` | patches within 0.8 only: `0.8.1`, `0.8.2`, and so on | **Recommended.** Bug fixes and new rules that were already `warn` reach you; a minor with a breaking change does not. |
+| `@v0.9` | patches within 0.9 only: `0.9.1`, `0.9.2`, and so on | **Recommended.** Bug fixes and new rules that were already `warn` reach you; a minor with a breaking change does not. |
 | `@v0` | every `0.x` release, **breaking minors included** | You want each release as it lands and have decided that a gate turning red on an unchanged server is acceptable. |
-| `@v0.8.0` | nothing; an immutable tag | You need the gate frozen: reproducing an old run, or holding a release while you work through findings. |
+| `@v0.9.0` | nothing; an immutable tag | You need the gate frozen: reproducing an old run, or holding a release while you work through findings. |
 
 While the major version is `0`, a minor release may carry a breaking change, and [semver](https://semver.org/spec/v2.0.0.html#spec-item-4) permits it and this project uses it. That is the whole difference between `@v0` and a minor pin. Twice now a minor has done it: `0.3.0` added eight safety-lint rules, three at `error`, and `0.4.0` made `snapshot --check` walk nested schemas, which reports breaking changes that were previously hidden. Both reached `@v0` users who had changed nothing on their side. A minor pin holds them back until you move it.
 
-The two floating tags are force-moved onto each release commit, and only after npm and the GitHub Release have both succeeded, so neither can point at a version that failed to ship. Because they move, a checkout's local copy goes stale silently, and `git ls-remote --tags origin` is the only honest answer to "where does `@v0.8` point right now".
+The two floating tags are force-moved onto each release commit, and only after npm and the GitHub Release have both succeeded, so neither can point at a version that failed to ship. Because they move, a checkout's local copy goes stale silently, and `git ls-remote --tags origin` is the only honest answer to "where does `@v0.9` point right now".
 
 **Do not use `@main`.** It is a development branch, not a release channel: its `action.yml` names the version *being prepared*, which may not be on npm yet, and a workflow pointed at it fails with `ETARGET` for reasons that have nothing to do with your server.
 
@@ -607,7 +607,7 @@ permissions:
   security-events: write        # the only permission the upload needs
 
 steps:
-  - uses: ivermin1123/mcp-cassette@v0.8
+  - uses: ivermin1123/mcp-cassette@v0.9
     id: contract
     continue-on-error: true     # let the upload happen even when the gate fails
     with:

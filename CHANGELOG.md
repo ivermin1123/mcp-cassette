@@ -6,7 +6,23 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
-## [Unreleased]
+## [0.9.0] - 2026-10-10
+
+The safety lint reaches the two places a server can change what a model reads
+after it was approved. `snapshot --check` reports a description reword that
+turns into an attack as its own drift finding, `tool-description-poisoned`, and
+`lint <cassette>` scans what the recorded server actually returned for
+indirect prompt injection and checks the cassette header's newer fields. Over
+HTTP, the client paths mirror tool parameters marked `x-mcp-header` into
+`Mcp-Param-*` headers as protocol revision 2026-07-28 asks, `check` reports an
+invalid declaration as `CAS-C008`, and replay warns about a mismatched
+`Mcp-Name` or `Mcp-Param-*` header. The README and the site describe the tool
+as it now is.
+
+The BREAKING items below reach only the stricter gates: `snapshot --check
+--fail-on dangerous`, `check --fail-on warn`, and library callers of
+`CassetteFinding`. Workflows using the action at its defaults are not
+affected.
 
 ### BREAKING
 
@@ -1138,6 +1154,7 @@ Packaging fixes for the first release.
 First public release: stdio record/replay, contract snapshots, safety checks,
 secrets redaction, and the `verify` command.
 
+[0.9.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.9.0
 [0.8.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.8.0
 [0.7.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.7.0
 [0.6.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.6.0
