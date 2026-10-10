@@ -6,7 +6,21 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
-## [Unreleased]
+## [0.8.0] - 2026-10-10
+
+Replay can be told which request fields change on every run: `--volatile`
+or a `volatile` list in the cassette header drops a declared field before
+matching, the precise replacement for the borrowing `--on-miss warn` does, and
+a declaration that would change which matching rule applies is refused by
+name. Redaction becomes configurable: `--redact-config` adds your own
+patterns, sensitive keys and allowed values to `record`, `redact` and
+`replay`, the cassette records a hash of that config, and replay refuses a
+cassette recorded under a config it was not given.
+
+The BREAKING items below are for library callers who build a `ReplayIndex`
+by hand, and for replay sessions on a cassette recorded with a redaction
+config. Workflows using the action are not affected: it runs `check` and
+`snapshot`, which neither change touches.
 
 ### BREAKING
 
@@ -960,6 +974,7 @@ Packaging fixes for the first release.
 First public release: stdio record/replay, contract snapshots, safety checks,
 secrets redaction, and the `verify` command.
 
+[0.8.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.8.0
 [0.7.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.7.0
 [0.6.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.6.0
 [0.5.0]: https://github.com/ivermin1123/mcp-cassette/releases/tag/v0.5.0
