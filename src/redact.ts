@@ -477,8 +477,12 @@ function placeholder(rule: string, secret: string): string {
  * Computed once per rule application over the text as it stands, which is what
  * makes "do not rewrite inside a placeholder" a property of the mechanism
  * rather than something every future rule has to remember.
+ *
+ * Exported for the cassette lint, which has the same need from the other side:
+ * a placeholder is this tool's own text, not the server's, so it is not
+ * scanned for injection. One grammar, read in both places.
  */
-function placeholderSpans(s: string): Array<[number, number]> {
+export function placeholderSpans(s: string): Array<[number, number]> {
   if (!s.includes("[REDACTED:")) return []; // the overwhelmingly common case
   const spans: Array<[number, number]> = [];
   const scan = new RegExp(PLACEHOLDER_ANYWHERE.source, "g");

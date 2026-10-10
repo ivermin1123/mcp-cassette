@@ -71,6 +71,20 @@ below.
   ships at `warn` and may graduate to `error` in a later minor, which would
   gate it by default.
 
+- **`CassetteFinding` gains a required `severity` field.** `lint <cassette>`
+  now reports findings it does not gate on, so a finding has to say which kind
+  it is. `"error"` is a header that contradicts its own frames, which is what
+  this command has always exited 1 on; `"warn"` is everything added since.
+
+  *What you see:* a TypeScript caller who builds a `CassetteFinding` by hand
+  fails to compile with `severity` missing. Nothing changes for a caller who
+  only reads the findings `lintCassette` returns, and the exit code of every
+  existing cassette is unchanged.
+
+  *What to do:* take the findings from `lintCassette` rather than constructing
+  them. If you were filtering its output to decide a gate, filter on
+  `severity === "error"` to keep the behaviour you had.
+
 ### Added
 
 - **The 2026-07-28 header mirror, client side: `Mcp-Method`, `Mcp-Name` and
@@ -84,6 +98,44 @@ below.
   client holding no schema to do. Values travel as the spec encodes them:
   plain when they are plain ASCII with no leading or trailing whitespace, and
   as `=?base64?...?=` when they are not.
+
+- **`lint <cassette>` scans what the recorded server returned.** A tool
+  description is a promise made before the call; a tool result is data handed
+  back after it, and it reaches the model with the same authority. A fetched
+  issue whose body says "ignore all previous instructions", a document carrying
+  zero-width characters, a page with a bidi override: none of it is visible to
+  a lint that inspects a live server's listings, and all of it is in the
+  cassette. Six rules run on the answers to `tools/call`, `resources/read` and
+  `prompts/get`: CAS-L001, L003, L006, L009, L010 and L013. Each finding names
+  the frame it came from, by request id and method, and the JSON path of the
+  string that matched.
+
+  The set is listed in the code and in the README rather than derived, and it
+  was narrowed by measurement. The `intent` rules are excluded by their own
+  premise, and six `shape` rules are excluded because they fire on data a real
+  server returns every day: CAS-L002 on every HTML comment, CAS-L004 on
+  ordinary API documentation, CAS-L005 on any directory listing, CAS-L007 on an
+  inline `data:` URI, CAS-L008 on any long document, and CAS-L015 on a latency
+  written in microseconds. The measurement and the open follow-up are in
+  BACKLOG. A base64 `blob` is carried, never decoded and never scanned, and
+  text inside a `[REDACTED:...]` placeholder is not scanned either.
+
+  Findings are reported at `warn` and never change the exit code: returned text
+  is data a third party wrote, and a pipeline that was green yesterday does not
+  go red because a server it depends on started quoting a GitHub issue. A
+  cassette with clean output prints exactly what it printed before.
+
+- **`lint <cassette>` checks the header fields newer than it.** `volatile` must
+  be a list of strings, each a declaration replay's own parser accepts, and
+  `redaction.configHash`, when present, must be the sha256 hex digest `redact`
+  writes. Both are read by something that refuses rather than degrades, so a
+  hand-edited cassette used to fail at the far end of a replay instead of in a
+  file somebody can open. Each finding names the header field, and both are
+  reported at `warn`.
+
+- **`lint --json`** emits the findings machine-readably. There is no
+  `--format sarif` here: SARIF would have to invent a server, a tool count and
+  a gate the run was decided against, and a cassette has none of those.
 
 ### Changed
 

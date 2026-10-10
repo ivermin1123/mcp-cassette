@@ -23,7 +23,7 @@ import { runCheck, printReport } from "./check.js";
 import { fileAnchor, snapshotAnchor, toSarif, type SarifAnchor } from "./sarif.js";
 import { readCassette, writeCassette } from "./cassette.js";
 import { checkRedactConfig, readRedactConfig, redactCassette, scanCassette } from "./redact.js";
-import { lintCassette } from "./lint.js";
+import { lintCassette, lintCassetteOutput, type CassetteFinding, type OutputFinding } from "./lint.js";
 import { VERSION } from "./version.js";
 import {
   captureContract,
@@ -298,23 +298,74 @@ program
 
 program
   .command("lint")
-  .description("Check a cassette's header against its own frames (era and transport consistency)")
+  .description(
+    "Check a cassette's header against its own frames, and scan what the recorded server returned for injection"
+  )
   .argument("<cassette>", "path to a .cassette.jsonl file")
-  .action((cassette: string) => {
+  .option("--json", "machine-readable findings")
+  .addHelpText(
+    "after",
+    "\nExit 1 on a header that contradicts its own frames, which is what this always gated on.\n" +
+      "Findings about recorded output, and about the header's newer fields, are reported at warn\n" +
+      "and never change the exit code: returned text is data, and a cassette that passed keeps passing.\n" +
+      "No --format sarif: SARIF here would have to invent a server, a tool count and a gate it was\n" +
+      "decided against, none of which a cassette has. Use --json.\n"
+  )
+  .action((cassette: string, opts: { json?: boolean }) => {
     try {
-      const findings = lintCassette(readCassette(cassette));
-      for (const f of findings) process.stdout.write(`${f.rule}: ${f.message}\n`);
-      process.stdout.write(
-        findings.length === 0
-          ? `${cassette}: header and frames agree\n`
-          : `${cassette}: ${findings.length} inconsistency(ies)\n`
-      );
-      process.exitCode = findings.length > 0 ? 1 : 0;
+      const tape = readCassette(cassette);
+      const header = lintCassette(tape);
+      const output = lintCassetteOutput(tape);
+      // The exit code is the one this command always had: the header
+      // contradicting its own frames. Nothing added here can turn a passing
+      // cassette red.
+      const errors = header.filter((f) => f.severity === "error");
+
+      if (opts.json) {
+        process.stdout.write(
+          JSON.stringify({ cassette, ok: errors.length === 0, header, output }, null, 2) + "\n"
+        );
+      } else {
+        printCassetteLint(cassette, header, output, errors.length);
+      }
+      process.exitCode = errors.length > 0 ? 1 : 0;
     } catch (err) {
       process.stderr.write(`${(err as Error).message}\n`);
       process.exit(1);
     }
   });
+
+/**
+ * The report, written so that a cassette with nothing new to say prints exactly
+ * what it printed before this command learned to read output: one line per
+ * header finding, then the verdict. The added sections appear only when they
+ * have something in them.
+ */
+function printCassetteLint(
+  cassette: string,
+  header: CassetteFinding[],
+  output: OutputFinding[],
+  errors: number
+): void {
+  const line = (s: string) => process.stdout.write(s + "\n");
+  // An error keeps the line it has always had. Everything added since is
+  // marked, so a reader can tell at a glance which findings decided the exit
+  // code and which are reports.
+  for (const f of header) {
+    line(f.severity === "error" ? `${f.rule}: ${f.message}` : `[WARN] ${f.rule}: ${f.message}`);
+  }
+  for (const f of output) {
+    line(`[WARN] ${f.rule} ${f.method} #${f.requestId ?? "?"} ${f.path}: ${f.message}`);
+    if (f.excerpt) line(`       evidence: "${f.excerpt}"`);
+  }
+  line(
+    errors === 0
+      ? `${cassette}: header and frames agree`
+      : `${cassette}: ${errors} inconsistency(ies)`
+  );
+  const warnings = header.length - errors + output.length;
+  if (warnings > 0) line(`${cassette}: ${warnings} warning(s) (reported, not gated)`);
+}
 
 program
   .command("verify")

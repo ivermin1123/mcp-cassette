@@ -16,7 +16,12 @@
 
 import type { Tool } from "./client.js";
 import { cassetteEra, type Cassette, type FrameEntry } from "./cassette.js";
-import { isRequest, type JsonRpcRequest } from "./jsonrpc.js";
+import { isRequest, isResponse, type JsonRpcFrame, type JsonRpcId, type JsonRpcRequest } from "./jsonrpc.js";
+// Both reused rather than reimplemented: replay owns what a volatile
+// declaration means, and redact owns what a placeholder looks like. A second
+// copy of either would be a second thing to keep true.
+import { validateVolatile } from "./replay.js";
+import { placeholderSpans } from "./redact.js";
 
 import { LINT_RULES, type LintRule, type LintSeverity } from "./lint-rules.js";
 
@@ -237,6 +242,15 @@ function collectSchemaText(node: unknown, path: string, out: Array<[string, stri
  */
 export interface CassetteFinding {
   rule: string;
+  /**
+   * Whether this finding decides the exit code.
+   *
+   * A header that contradicts its own frames is an `"error"`: the file says
+   * one thing and contains another, and replay will act on the header. The
+   * newer header fields are checked at `"warn"`, because they were never
+   * checked here before and a cassette that passed must keep passing.
+   */
+  severity: LintSeverity;
   message: string;
 }
 
@@ -244,7 +258,10 @@ export function lintCassette(cassette: Cassette): CassetteFinding[] {
   const findings: CassetteFinding[] = [];
   const { header, entries } = cassette;
   const era = cassetteEra(header);
-  const add = (rule: string, message: string) => findings.push({ rule, message });
+  const add = (rule: string, message: string) =>
+    findings.push({ rule, severity: "error", message });
+  const warn = (rule: string, message: string) =>
+    findings.push({ rule, severity: "warn", message });
 
   const requests = entries.filter((e) => e.type === "frame" && e.dir === "c2s" && isRequest(e.frame));
   const asked = (method: string) =>
@@ -274,5 +291,247 @@ export function lintCassette(cassette: Cassette): CassetteFinding[] {
     add("transport-command", 'transport is "http" but the header carries a spawn `command`');
   }
 
+  lintHeaderFields(header, warn);
+  return findings;
+}
+
+/**
+ * The header fields newer than this lint, checked for the shape they promise.
+ *
+ * Both are read by something that refuses rather than degrades: replay throws
+ * on a malformed `volatile` declaration, and on a `configHash` it was not
+ * given the matching config for. A hand-edited cassette therefore fails at the
+ * far end of a run, inside whatever process replay was spawned in, when the
+ * mistake is visible here in a file somebody can open. Reported at `warn`,
+ * because this lint never looked at these fields and a cassette that passed it
+ * has to keep passing it; the failure they predict is still a failure.
+ */
+function lintHeaderFields(
+  header: Cassette["header"],
+  warn: (rule: string, message: string) => void
+): void {
+  if (header.volatile !== undefined) {
+    if (!Array.isArray(header.volatile)) {
+      warn("volatile-type", 'header `volatile` is not a list; it must be a list of declaration strings');
+    } else {
+      header.volatile.forEach((spec, i) => {
+        if (typeof spec !== "string") {
+          warn("volatile-type", `header \`volatile\`[${i}] is not a string; every declaration is a string`);
+          return;
+        }
+        try {
+          // Replay's own parser, one declaration at a time so a list with two
+          // mistakes in it reports both rather than only the first.
+          validateVolatile([spec]);
+        } catch (err) {
+          warn("volatile-declaration", `header \`volatile\`[${i}] is not a valid declaration: ${(err as Error).message}`);
+        }
+      });
+    }
+  }
+
+  const redaction = header.redaction;
+  if (redaction !== undefined && redaction !== null && typeof redaction === "object") {
+    const hash = (redaction as { configHash?: unknown }).configHash;
+    // The documented shape is the sha256 hex digest `redact` writes, which is
+    // what replay compares its own config's hash against; anything else can
+    // only ever mismatch, so it is worth naming now rather than at replay.
+    if (hash !== undefined && (typeof hash !== "string" || !CONFIG_HASH.test(hash))) {
+      warn(
+        "redaction-config-hash",
+        'header `redaction.configHash` is not a sha256 hex digest; `redact` writes 64 lowercase hex characters'
+      );
+    }
+  }
+}
+
+/** The digest `hashConfig` produces in redact.ts: sha256, lowercase hex. */
+const CONFIG_HASH = /^[0-9a-f]{64}$/;
+
+/**
+ * Indirect prompt injection: the text a server *returned*, not the text it declared.
+ *
+ * A tool description is a promise a server makes before it is called. A tool
+ * result is data it hands back afterwards, and that data reaches the model with
+ * the same authority: a file whose contents say "ignore your instructions" is
+ * the published attack on retrieval-augmented agents, and nothing about the
+ * declaration lint sees it. Only a tool that keeps a recording can read what
+ * actually came back, which is why this lives on a cassette rather than on a
+ * live `check`.
+ *
+ * The rule set is narrower than the lint's, and narrowed by measurement rather
+ * than by taste. `LintRule.evidence` already separates the rules that can tell
+ * an attack from a legitimate description (`shape`) from those that only report
+ * what was declared (`intent`), and an `intent` rule is meaningless here: a
+ * result that mentions a shell is a result about a shell. That leaves the
+ * twelve `shape` rules, and six of those fire on ordinary recorded data:
+ *
+ *   CAS-L002  `<!--` matches every HTML comment a page-fetching server returns
+ *   CAS-L004  "send the manifest to https://..." is ordinary API documentation
+ *   CAS-L005  a directory listing or a config body names dotfiles for a living
+ *   CAS-L007  an inline `data:` URI and a bearer token are both opaque blobs
+ *   CAS-L008  a length limit written for a description, meaningless for a body
+ *   CAS-L015  "842 μs" is a unit symbol, not homoglyph obfuscation
+ *
+ * A rule that fires on ordinary data teaches everyone to ignore the lint, which
+ * costs more than the rule catches. What survives is listed below, and the six
+ * exclusions are not permanent judgements about the rules: they are judgements
+ * about running *these* patterns against *this* surface, recorded in BACKLOG so
+ * a narrowed output variant can be argued for with the measurement in hand.
+ */
+export const OUTPUT_RULE_IDS: readonly string[] = Object.freeze([
+  "CAS-L001", // instruction-override phrasing
+  "CAS-L003", // concealment directive
+  "CAS-L006", // invisible or steganographic Unicode
+  "CAS-L009", // bidirectional override
+  "CAS-L010", // variation selectors as a data channel
+  "CAS-L013", // role or authority impersonation
+]);
+
+/**
+ * The rules themselves, resolved from the catalogue rather than copied out of
+ * it, so a rule's severity and wording stay in one place. An id that no longer
+ * resolves is a catalogue change this list has not been told about, which is
+ * what `tests/lint-cassette.test.ts` pins.
+ */
+const OUTPUT_RULES: LintRule[] = LINT_RULES.filter((rule) => OUTPUT_RULE_IDS.includes(rule.id));
+
+/** One finding about text a recorded server returned. */
+export interface OutputFinding {
+  /** The `CAS-L` rule that matched. */
+  rule: string;
+  /**
+   * Always `"warn"`, whatever the rule's own level.
+   *
+   * Returned text is data, and this surface is new: a cassette that passed
+   * before must keep its exit code, so these are reported and never gated.
+   */
+  severity: LintSeverity;
+  /** The id of the request this answers, so the exchange can be found in the file. */
+  requestId: JsonRpcId | null;
+  /** The method that request called. */
+  method: string;
+  /** JSON path of the matching string, from the frame root (`/result/content/0/text`). */
+  path: string;
+  message: string;
+  excerpt?: string;
+}
+
+/**
+ * The methods whose answers carry text written for the model to read.
+ *
+ * Deliberately a list rather than "every response": a `tools/list` answer is
+ * declarations, which `check` already lints and which would be reported twice,
+ * and an `initialize` answer is protocol. These three are the surfaces where a
+ * third party's text arrives as data.
+ */
+const OUTPUT_METHODS = new Set(["tools/call", "resources/read", "prompts/get"]);
+
+/**
+ * Keys whose values are never scanned.
+ *
+ * `blob` is base64 by specification. It is not decoded and not scanned, by
+ * decision rather than oversight: decoding it would mean running an attacker's
+ * bytes through an expansion this tool would then have to bound, and a lint
+ * that silently decodes is a lint nobody can predict. A cassette carrying a
+ * poisoned blob is outside what this reports, and the README says so.
+ */
+const UNSCANNED_KEYS = new Set(["blob"]);
+
+/**
+ * The text with its redaction placeholders blanked out.
+ *
+ * A placeholder is this tool's own writing, not the server's, so matching a
+ * rule against one would report mcp-cassette to its user as an attacker. The
+ * surrounding text is still scanned, which is why this blanks the spans rather
+ * than skipping the whole string: a sentence does not stop being an injection
+ * because a token in it was redacted.
+ */
+function withoutPlaceholders(text: string): string {
+  const spans = placeholderSpans(text);
+  if (spans.length === 0) return text;
+  let out = "";
+  let at = 0;
+  for (const [start, end] of spans) {
+    out += text.slice(at, start) + " ".repeat(end - start);
+    at = end;
+  }
+  return out + text.slice(at);
+}
+
+/** Every string inside a payload, with the JSON path that reaches it. */
+function eachString(node: unknown, path: string, out: Array<[string, string]>, depth = 0): void {
+  if (depth > 12) return;
+  if (typeof node === "string") {
+    out.push([path, node]);
+    return;
+  }
+  if (Array.isArray(node)) {
+    node.forEach((item, i) => eachString(item, `${path}/${i}`, out, depth + 1));
+    return;
+  }
+  if (!node || typeof node !== "object") return;
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (UNSCANNED_KEYS.has(key)) continue;
+    eachString(value, `${path}/${key}`, out, depth + 1);
+  }
+}
+
+/** Which method each request id asked for, so an answer can name the question. */
+function methodsByRequestId(cassette: Cassette): Map<string, string> {
+  const methods = new Map<string, string>();
+  for (const entry of cassette.entries) {
+    if (entry.type !== "frame" || entry.dir !== "c2s") continue;
+    const frame = entry.frame;
+    if (isRequest(frame)) methods.set(String(frame.id), frame.method);
+  }
+  return methods;
+}
+
+/**
+ * Scan what the recorded server returned for indirect prompt injection.
+ *
+ * Findings are additive: `lintCassette` keeps answering the question it always
+ * answered, about the header and the frames, and this answers a different one
+ * about their contents. Both are reported by `lint <cassette>`; only the
+ * header-versus-frames contradictions decide its exit code.
+ */
+export function lintCassetteOutput(cassette: Cassette): OutputFinding[] {
+  const methods = methodsByRequestId(cassette);
+  const findings: OutputFinding[] = [];
+
+  const scanResponse = (frame: JsonRpcFrame): void => {
+    if (!isResponse(frame) || frame.result === undefined) return;
+    const method = methods.get(String(frame.id));
+    if (method === undefined || !OUTPUT_METHODS.has(method)) return;
+
+    const strings: Array<[string, string]> = [];
+    eachString(frame.result, "/result", strings);
+    for (const [path, raw] of strings) {
+      const text = withoutPlaceholders(raw);
+      for (const rule of OUTPUT_RULES) {
+        const evidence = rule.find(text);
+        if (evidence === null) continue;
+        findings.push({
+          rule: rule.id,
+          severity: "warn",
+          requestId: frame.id ?? null,
+          method,
+          path,
+          // Several rules name the surface they were written for inside their
+          // own wording, which is wrong here and nowhere else; `scan` rewrites
+          // the same kind of phrase for prompts and resources.
+          message: `${rule.describe.replace(/ in description$/, "")} (in recorded output)`,
+          excerpt: evidence,
+        });
+      }
+    }
+  };
+
+  for (const entry of cassette.entries) {
+    if (entry.type === "frame" && entry.dir === "s2c") scanResponse(entry.frame);
+    // A streamed answer is the same answer, delivered in pieces.
+    if (entry.type === "chunks") for (const chunk of entry.chunks) scanResponse(chunk.frame);
+  }
   return findings;
 }

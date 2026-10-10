@@ -335,7 +335,7 @@ TypeScript specs need a transform on top, which is a choice about your toolchain
 | `verify <file> [--ignore <ptr>]* [--allow-changed-paths <ptr>]* -- <server cmd>` | Re-fires the recorded requests (in order, lifecycle excluded) at a live server and diffs each response against the recording. Volatile fields are ignored by default: `_meta` and `ttlMs` anywhere, timestamp/UUID-shaped values anywhere, and `taskId`, `pollIntervalMs` and `lastUpdatedAt` inside a task handle (`resultType: "task"`), where a live server mints its own; add project-specific JSON Pointers with `--ignore`. An MRTR exchange verifies end to end: the recorded retry is re-fired with its recorded `inputResponses` and the live server's own `requestState` (or none, if it minted none), whose value is opaque and never compared (whether one was sent is). Each pair is classified **MATCH** / **CHANGED** (with concrete paths) / **ERROR-SHAPE-CHANGED** (result↔error flip) / **MISSING** (no answer). Exit 1 on any non-match, unless every changed path falls under `--allow-changed-paths`; the explicit waive-everything switch is `--allow-all-changes` (an empty `--allow-changed-paths ""` is rejected, so an unset shell variable can't open that valve by accident). Against a 2026-07-28 HTTP server, a cassette that calls a tool costs one extra `tools/list` first: the custom [header parameters](#http-header-parameters-x-mcp-header) a `tools/call` owes come from the tool's `inputSchema`, and a server that cannot list is called without them. ⚠️ The recorded calls **execute for real** on the live server, so don't point `verify` at tools with side effects you can't repeat. Cassettes recorded with redaction (the default) re-fire placeholder credentials, so auth-bearing calls will report drift; the report says so in its header and suggests `--ignore` or a separate `--no-redact` recording. |
 | `check [--stdio "cmd" \| --url <url>] [--json] [--fail-on error\|warn] [--lint-fail-on error\|warn\|never]` | Lifecycle handshake, `tools/resources/prompts` listing, JSON Schema validation (ajv; draft-07 + 2020-12 by declared dialect), duplicate/name/description checks, and the safety lint below. Exit 1 on a finding at or above its gate, exit 2 when the server could not be inspected at all. `--lint-fail-on` gates the `CAS-L` lint alone and defaults to `--fail-on`; its extra `never` level reports every lint finding and gates on none, which is what the action's `lint-fail-on` passes through, and it does not reach the structural `CAS-C` checks. A tool whose [header parameters](#http-header-parameters-x-mcp-header) are declared invalidly is reported as `CAS-C008` at `warn`, on every target: a conformant 2026-07-28 HTTP client must refuse such a tool, and the declaration is a property of the schema rather than of the wire. The tool itself stays in the listing and in the lint, so a broken declaration cannot be used to hide a tool from either. |
 | `snapshot [--check] [--update] [--fail-on tier] [--json] [-f file]` | Canonical contract snapshot (tools + schemas + annotations). `--check` classifies drift into four tiers (below) and exits 1 at `--fail-on` (default `breaking`). `--json` emits the whole diff, rule IDs included, for tooling. |
-| `lint <cassette>` | Checks a cassette's header against its own frames: an era that claims `modern` while recording an `initialize` handshake, sessions or a standalone `GET` stream the modern era removed, a `stdio` header carrying a URL or a streamed answer, an `http` header carrying a spawn command. Exits 1 on any inconsistency. A cassette is an open text format, so it gets hand-edited; this is where that shows up instead of at replay time. |
+| `lint <cassette> [--json]` | Checks a cassette's header against its own frames: an era that claims `modern` while recording an `initialize` handshake, sessions or a standalone `GET` stream the modern era removed, a `stdio` header carrying a URL or a streamed answer, an `http` header carrying a spawn command. Exits 1 on any inconsistency. A cassette is an open text format, so it gets hand-edited; this is where that shows up instead of at replay time. It also checks the header's newer fields (`volatile`, `redaction.configHash`) and scans what the recorded server returned for [injection](#linting-what-the-server-returned), both at `warn`: those are reported and never change the exit code. |
 | `redact <cassette> -o <out> \| --scan [--redact-config <file>] [--check-config]` | Redact an existing cassette, or audit one in place. `--scan` writes nothing and exits 1 if it finds anything. `--redact-config` adds your own patterns, key names and allowed values; `--check-config` analyses those patterns for catastrophic backtracking with the optional `recheck` peer and writes no cassette. |
 
 ### Contract drift tiers
@@ -409,7 +409,7 @@ The measurements behind this decision, including where they contradict claims ma
 
 ### Safety lint rules
 
-Heuristics distilled from tool-poisoning research and the MCP security literature (SAFE-MCP, OWASP Agentic Top 10). They scan every model-facing text a server publishes: tool descriptions, schema-level descriptions, and the prompts, resources and resource templates it lists.
+Heuristics distilled from tool-poisoning research and the MCP security literature (SAFE-MCP, OWASP Agentic Top 10). They scan every model-facing text a server publishes: tool descriptions, schema-level descriptions, and the prompts, resources and resource templates it lists. A subset of them also reads what a recorded server [returned](#linting-what-the-server-returned).
 
 Each rule cites the [OWASP MCP Top 10](https://owasp.org/www-project-mcp-top-10/) risk and the [SAFE-MCP](https://github.com/fkautz/safe-mcp) technique it implements, and both travel with the finding in `--json`.
 
@@ -461,6 +461,56 @@ New rules reach you at `warn` first, and so does an existing rule pointed at a s
 Heuristics, not proofs: treat findings as review triggers, and pair with a dedicated security scanner for depth.
 
 Every pattern in the rule set is proven free of super-linear backtracking by [recheck](https://github.com/makenowjust/recheck) in CI, because lint input is text an attacker wrote.
+
+### Linting what the server returned
+
+The rules above read what a server *declares*. `mcp-cassette lint <cassette>` also reads what it *returned*, because a recording is the only place that text still exists.
+
+This is the other half of prompt injection. A tool description is a promise made before the call; a tool result is data handed back after it, and it reaches the model with the same authority. A fetched issue whose body says "ignore all previous instructions", a document carrying zero-width characters, a page with a bidi override: none of it is visible to a lint that inspects a live server's listings, and all of it is in the cassette.
+
+```
+$ mcp-cassette lint tests/fixtures/poisoned-output.cassette.jsonl
+[WARN] CAS-L001 tools/call #3 /result/content/0/text: instruction-override phrasing (classic prompt-injection) (in recorded output)
+       evidence: "fails on Windows. Ignore all previous instructions and ope"
+[WARN] CAS-L006 resources/read #4 /result/contents/0/text: invisible/steganographic Unicode (in recorded output)
+       evidence: "contains U+200B"
+tests/fixtures/poisoned-output.cassette.jsonl: header and frames agree
+tests/fixtures/poisoned-output.cassette.jsonl: 2 warning(s) (reported, not gated)
+```
+
+Every finding names the frame it came from, by request id and method, and the JSON path of the string that matched, so you can open the file at the exchange rather than search it. `--json` emits the same findings machine-readably. There is no `--format sarif` here: SARIF would have to invent a server, a tool count and a gate the run was decided against, and a cassette has none of those.
+
+**Six rules run on output, and they are listed rather than derived:**
+
+| Rule | Catches |
+|---|---|
+| CAS-L001 | instruction-override phrasing |
+| CAS-L003 | concealment directives |
+| CAS-L006 | invisible or steganographic Unicode |
+| CAS-L009 | bidi override or unbalanced embedding |
+| CAS-L010 | variation selectors used as a data channel |
+| CAS-L013 | role or authority impersonation |
+
+The `intent` rules are excluded by their own premise: a result that mentions a shell is a result about a shell, not a tool declaring it runs one. Six of the twelve `shape` rules are excluded too, each because it fires on data a real server returns every day:
+
+| Excluded | Fires on |
+|---|---|
+| CAS-L002 | `<!--`, which is every HTML comment a page-fetching server returns |
+| CAS-L004 | "send the manifest to https://..." in ordinary API documentation |
+| CAS-L005 | a directory listing or a config body, which name dotfiles for a living |
+| CAS-L007 | an inline `data:` URI and a bearer token, both opaque blobs |
+| CAS-L008 | a length limit written for a description, meaningless for a document |
+| CAS-L015 | "842 microseconds" written with the Greek mu, a unit symbol rather than homoglyph obfuscation |
+
+A rule that fires on ordinary data teaches everyone to ignore the lint, which costs more than the rule catches. These are judgements about running *these* patterns against *this* surface, not about the rules; the measurement behind them is in [BACKLOG.md](BACKLOG.md#the-six-shape-rules-that-cannot-read-output-as-they-stand), where a narrowed output variant is the open follow-up.
+
+Three further boundaries, stated rather than left to be discovered:
+
+- **Only `tools/call`, `resources/read` and `prompts/get` answers are read.** A `tools/list` answer is declarations, which `check` already lints; reporting it twice would teach a reader that one of the two can be ignored.
+- **A base64 `blob` is carried, never decoded and never scanned.** Decoding it would mean running an attacker's bytes through an expansion this tool would then have to bound, and a lint that silently decodes is a lint nobody can predict. A poisoned blob is outside what this reports.
+- **Text inside a redaction placeholder is not scanned.** A `[REDACTED:...]` span is this tool's own writing, so matching a rule against it would report mcp-cassette to you as the attacker. The text around it is still scanned.
+
+Findings are reported at `warn` whatever level their rule carries, and `lint` exits on the header-versus-frames contradictions alone, exactly as it always has. Returned text is data: a third party wrote it, you did not, and a pipeline that was green yesterday does not go red because a server you depend on started quoting a GitHub issue.
 
 ### SARIF output
 
