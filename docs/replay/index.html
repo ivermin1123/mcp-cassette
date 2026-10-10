@@ -344,7 +344,7 @@ Re-record until the task reaches completed, failed or cancelled</code></pre>
 
 <ul>
   <li>A replay answers from the recording, so it cannot compare models or servers and cannot tell you whether a live server still behaves that way. Use <code>verify</code> for that.</li>
-  <li>Replay is a test double, not a conformance checker. A missing session id or a mismatched protocol header is a warning on stderr, never a protocol error.</li>
+  <li>Replay is a test double, not a conformance checker. A missing session id, or a header the body contradicts, is a warning on stderr, never a protocol error. The 2026-07-28 revision mirrors the body into <code>Mcp-Method</code>, <code>Mcp-Name</code> and the custom <code>Mcp-Param-*</code> a tool's <code>inputSchema</code> asks for, and a real server answers a contradiction with <code>400</code> and <code>-32020</code>. Replay names it and answers correctly instead, because holding a client to the protocol is <code>verify</code>'s job. It judges a mismatch and not an absence: whether a header was owed at all is a question only the tool's schema answers, and replay holds no schema.</li>
   <li>Replay reproduces notifications the <em>server</em> initiated, at their recorded position. It does not originate server-to-client <em>requests</em>: legacy sampling, elicitation and roots are a direction of the protocol replay still does not speak, and it says how many it is holding back. The message has this shape, and the count is whatever the cassette holds:
     <pre><code>mcp-cassette replay: N server-initiated request(s) in the cassette are not replayed</code></pre>
   </li>

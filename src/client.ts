@@ -18,7 +18,14 @@
 import { VERSION } from "./version.js";
 import { Era } from "./cassette.js";
 import { JsonRpcFrame, JsonRpcRequest, JsonRpcResponse } from "./jsonrpc.js";
-import { HttpStatusError, HttpTransport, StdioTransport, Transport } from "./transport.js";
+import {
+  HttpStatusError,
+  HttpTransport,
+  resolveHeaderParams,
+  StdioTransport,
+  Transport,
+  type HeaderParam,
+} from "./transport.js";
 
 export interface ServerInfo {
   name?: string;
@@ -290,6 +297,56 @@ export class MiniClient {
   async notify(method: string, params?: unknown): Promise<void> {
     const frame: JsonRpcFrame = { jsonrpc: "2.0", method, ...(params !== undefined ? { params } : {}) };
     await this.transport.notify(frame, this.timeoutMs);
+  }
+
+  /**
+   * `tools/list` for a caller that is going to call one: the header parameters
+   * each tool declares are resolved and handed to the wire, so a later
+   * `tools/call` can mirror them.
+   *
+   * On a wire that mirrors them, a tool whose `x-mcp-header` declarations
+   * break the spec's constraints is withheld, because a client that cannot
+   * form the headers cannot call it, and one malformed declaration must cost
+   * that tool and no other. Every other wire gets the plain list, since it has
+   * no header to mirror a parameter into.
+   *
+   * `check` and `snapshot` read the list rather than calling from it and use
+   * `listAll` directly: an audit reports a broken declaration, it does not
+   * hide the tool that carries one.
+   */
+  async listTools(): Promise<Tool[]> {
+    const tools = await this.listAll<Tool>("tools/list", "tools");
+    if (!this.transport.mirrorsHeaderParams) return tools;
+    const byTool = new Map<string, readonly HeaderParam[]>();
+    const usable: Tool[] = [];
+    for (const tool of tools) {
+      const resolved = resolveHeaderParams(tool.inputSchema);
+      if ("invalid" in resolved) {
+        logProbe(
+          `tool "${tool.name}" has an invalid x-mcp-header declaration (${resolved.invalid}); ` +
+            "a tools/call for it will carry no Mcp-Param-* header"
+        );
+        continue;
+      }
+      if (resolved.params.length > 0) byTool.set(tool.name, resolved.params);
+      usable.push(tool);
+    }
+    this.transport.setHeaderParams(byTool);
+    return usable;
+  }
+
+  /**
+   * Learn the header parameters a `tools/call` will owe, for a caller that
+   * replays recorded calls rather than choosing them from a list. A server
+   * that cannot list is called without them, which is what the spec tells a
+   * client holding no `inputSchema` to do.
+   */
+  async prepareToolHeaders(): Promise<void> {
+    if (!this.transport.mirrorsHeaderParams) return;
+    await this.listTools().catch((err: Error) => {
+      logProbe(`tools/list failed (${err.message}); tools/call will carry no Mcp-Param-* header`);
+      return [];
+    });
   }
 
   /** Paginated list helper: tools/list, resources/list, prompts/list. */

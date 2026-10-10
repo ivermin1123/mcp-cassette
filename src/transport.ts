@@ -31,7 +31,12 @@ export class HttpStatusError extends Error {
     readonly status: number,
     readonly frame?: JsonRpcResponse
   ) {
-    super(`HTTP ${status} from server`);
+    // The status alone says a request was refused but never why. A modern
+    // refusal carries its reason in the body (-32020 names the header it
+    // disagreed with), and that sentence is the one a caller can act on, so it
+    // travels in the message every reporter already prints.
+    const rpc = frame?.error ? ` (${frame.error.code}: ${frame.error.message})` : "";
+    super(`HTTP ${status} from server${rpc}`);
   }
 }
 
@@ -44,6 +49,19 @@ export interface Transport {
   setProtocolVersion(version: string): void;
   /** The era the wire speaks. Only HTTP changes shape between eras. */
   setEra(era: Era): void;
+  /**
+   * The tool parameters to mirror into `Mcp-Param-*`, as the latest
+   * `tools/list` declared them. stdio ignores them, and so does a wire that
+   * does not mirror at all.
+   */
+  setHeaderParams(byTool: HeaderParams): void;
+  /**
+   * Whether this wire mirrors tool parameters into headers at all: Streamable
+   * HTTP in the modern era, and nothing else. It decides whether MiniClient
+   * owes a `tools/list` before a `tools/call`, and whether a tool whose
+   * declarations are invalid has to be withheld.
+   */
+  readonly mirrorsHeaderParams: boolean;
   /**
    * Every frame of the last answer, when it arrived as a stream; undefined
    * when it was plain JSON. MiniClient's own callers want the answer and
@@ -58,13 +76,41 @@ export interface Transport {
 // with whitespace (RFC 9110 § field values). Anything else, and any value that
 // would be mistaken for the sentinel, travels Base64.
 const HEADER_SAFE = /^[\x21-\x7e](?:[\x20\x09\x21-\x7e]*[\x21-\x7e])?$/;
-const SENTINEL = /^=\?base64\?.*\?=$/;
+const SENTINEL = /^=\?base64\?(.*)\?=$/;
 
 /** Modern-era header values, per the spec's `=?base64?...?=` sentinel encoding. */
 export function encodeHeaderValue(value: string): string {
+  // The empty string is already a valid (empty) field value, and the spec's
+  // conformance table spells that case out rather than the sentinel form.
+  if (value === "") return "";
   return HEADER_SAFE.test(value) && !SENTINEL.test(value)
     ? value
     : `=?base64?${Buffer.from(value, "utf8").toString("base64")}?=`;
+}
+
+/**
+ * The value a header carries, undoing the sentinel. The markers are
+ * case-sensitive and must bracket the whole value, so anything else is the
+ * literal value it looks like. A body that is not valid Base64 decodes to
+ * whatever Node makes of it rather than being refused: the spec puts that
+ * refusal on a server, and the only reader here is replay, which compares and
+ * warns (§3.3). Replay staying quiet is not evidence of a conformant encoder.
+ */
+export function decodeHeaderValue(value: string): string {
+  const encoded = SENTINEL.exec(value);
+  return encoded ? Buffer.from(encoded[1]!, "base64").toString("utf8") : value;
+}
+
+/**
+ * The string a mirrored value becomes in a header, or undefined when the spec
+ * says to leave the header out: a null or absent argument, and anything whose
+ * type a valid `x-mcp-header` declaration could not have been put on.
+ */
+export function headerValueOf(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
+  return undefined;
 }
 
 /** Session teardown is a courtesy, not a result, so it gets a short leash. */
@@ -76,6 +122,153 @@ const NAMED_METHODS: Record<string, "name" | "uri"> = {
   "resources/read": "uri",
   "prompts/get": "name",
 };
+
+/** The body field a method's `Mcp-Name` mirrors, or undefined when it has none. */
+export function namedBodyField(method: string): "name" | "uri" | undefined {
+  return NAMED_METHODS[method];
+}
+
+/**
+ * One tool parameter a server asked to be mirrored into a header. `name` is
+ * the `{name}` of `Mcp-Param-{name}`; `path` is the chain of `properties` keys
+ * from the `inputSchema` root, which is the exact place the value is read from
+ * in the call arguments.
+ */
+export interface HeaderParam {
+  name: string;
+  path: readonly string[];
+}
+
+/** The header parameters of every tool that declared any, keyed by tool name. */
+export type HeaderParams = ReadonlyMap<string, readonly HeaderParam[]>;
+
+/**
+ * Keywords whose value is an instance rather than a subschema. A tool that
+ * gives a parameter a `default` or an `enum` holding an object with an
+ * `x-mcp-header` key has declared nothing; walking into them would refuse the
+ * tool over its own data.
+ */
+const INSTANCE_KEYWORDS = new Set(["const", "default", "enum", "examples"]);
+
+/** RFC 9110 § 5.1 `1*tchar`: what a field name, and so an `x-mcp-header` value, may spell. */
+const HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/** The types a value may have to survive the trip through a header. `number` is not one. */
+const PRIMITIVE_TYPES = new Set(["string", "integer", "boolean"]);
+
+/** A nullable primitive is still a primitive: a null value leaves the header out. */
+function isPrimitiveType(type: unknown): boolean {
+  if (typeof type === "string") return PRIMITIVE_TYPES.has(type);
+  if (!Array.isArray(type)) return false;
+  return (
+    type.some((t) => typeof t === "string" && PRIMITIVE_TYPES.has(t)) &&
+    type.every((t) => typeof t === "string" && (PRIMITIVE_TYPES.has(t) || t === "null"))
+  );
+}
+
+/** Why one `x-mcp-header` declaration is not usable, or undefined when it is. */
+function declarationError(
+  schema: Record<string, unknown>,
+  path: readonly string[] | null,
+  taken: Map<string, string>
+): string | undefined {
+  const declared = schema["x-mcp-header"];
+  if (typeof declared !== "string" || declared.length === 0) {
+    return "x-mcp-header must be a non-empty string";
+  }
+  if (!HEADER_TOKEN.test(declared)) {
+    return `x-mcp-header "${declared}" is not an HTTP field-name token`;
+  }
+  if (!path) {
+    return `x-mcp-header "${declared}" is not on a property reachable from the schema root through "properties" alone`;
+  }
+  const prior = taken.get(declared.toLowerCase());
+  if (prior !== undefined) {
+    return `x-mcp-header "${declared}" repeats "${prior}"; header names are case-insensitive`;
+  }
+  if (!isPrimitiveType(schema.type)) {
+    return `x-mcp-header "${declared}" is on /${path.join("/")}, which is not a string, integer or boolean`;
+  }
+  return undefined;
+}
+
+/**
+ * The `x-mcp-header` declarations of one tool's `inputSchema`: the parameters
+ * to mirror, or the reason the tool as a whole is unusable.
+ *
+ * A declaration only counts where it is *statically reachable*, meaning the
+ * walk from the schema root to it went through `properties` keys and nothing
+ * else. An annotation under `items`, a composition or conditional keyword, or
+ * a `$ref` has no single property path to read a value from, so the spec makes
+ * it invalidate the tool rather than letting it be ignored quietly. The whole
+ * schema is walked for exactly that reason: a stray annotation has to be found
+ * to be refused.
+ */
+export function resolveHeaderParams(
+  inputSchema: unknown
+): { params: HeaderParam[] } | { invalid: string } {
+  const params: HeaderParam[] = [];
+  const taken = new Map<string, string>();
+  let invalid: string | undefined;
+
+  const visit = (node: unknown, path: readonly string[] | null): void => {
+    if (invalid !== undefined || node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, null);
+      return;
+    }
+    const schema = node as Record<string, unknown>;
+    if ("x-mcp-header" in schema) {
+      const reason = declarationError(schema, path, taken);
+      if (reason !== undefined) {
+        invalid = reason;
+        return;
+      }
+      const name = schema["x-mcp-header"] as string;
+      taken.set(name.toLowerCase(), name);
+      params.push({ name, path: path! });
+    }
+    for (const [key, value] of Object.entries(schema)) {
+      if (INSTANCE_KEYWORDS.has(key)) continue;
+      // A `properties` map holds property names, never keywords, so its values
+      // are the schemas to walk. Reachable ones extend the path; the rest are
+      // walked only to find an annotation that has to be refused.
+      if (key !== "properties" || value === null || typeof value !== "object" || Array.isArray(value)) {
+        visit(value, null);
+        continue;
+      }
+      for (const [property, child] of Object.entries(value as Record<string, unknown>)) {
+        visit(child, path ? [...path, property] : null);
+      }
+    }
+  };
+
+  visit(inputSchema, []);
+  return invalid !== undefined ? { invalid } : { params };
+}
+
+/** The value at one declaration's property path, reading through plain objects only. */
+function valueAt(args: unknown, path: readonly string[]): unknown {
+  let node = args;
+  for (const key of path) {
+    if (node === null || typeof node !== "object" || Array.isArray(node)) return undefined;
+    node = (node as Record<string, unknown>)[key];
+  }
+  return node;
+}
+
+/** The `Mcp-Param-*` headers one call's arguments produce. */
+export function headerParamHeaders(
+  params: readonly HeaderParam[],
+  args: unknown
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const param of params) {
+    const value = headerValueOf(valueAt(args, param.path));
+    if (value !== undefined) headers[`mcp-param-${param.name}`] = encodeHeaderValue(value);
+  }
+  return headers;
+}
 
 interface Pending {
   resolve: (res: JsonRpcResponse) => void;
@@ -139,12 +332,19 @@ export class StdioTransport implements Transport {
     this.child.stdin!.write(serializeFrame(frame));
   }
 
+  /** stdio mirrors nothing into an envelope it does not have. */
+  readonly mirrorsHeaderParams = false;
+
   setProtocolVersion(): void {
     // stdio carries the negotiated version in the handshake, not per message.
   }
 
   setEra(): void {
     // stdio frames are identical in both eras; only the lifecycle differs.
+  }
+
+  setHeaderParams(): void {
+    // There is no header to mirror a parameter into.
   }
 
   async close(): Promise<void> {
@@ -178,6 +378,7 @@ export class HttpTransport implements Transport {
   private sessionId?: string;
   private protocolVersion?: string;
   private era: Era = "legacy";
+  private headerParams: HeaderParams = new Map();
 
   constructor(
     private url: string,
@@ -202,6 +403,15 @@ export class HttpTransport implements Transport {
     this.era = era;
   }
 
+  setHeaderParams(byTool: HeaderParams): void {
+    this.headerParams = byTool;
+  }
+
+  /** The legacy era has no `Mcp-Param-*`; mirroring there would be an invention. */
+  get mirrorsHeaderParams(): boolean {
+    return this.era === "modern";
+  }
+
   /**
    * The modern era mirrors body fields into headers so intermediaries can route
    * without parsing the body; a server rejects any mismatch with -32020, so
@@ -210,9 +420,17 @@ export class HttpTransport implements Transport {
   private metadataHeaders(frame: JsonRpcFrame): Record<string, string> {
     if (this.era !== "modern" || isResponse(frame)) return {};
     const headers: Record<string, string> = { "mcp-method": frame.method };
+    const params = frame.params as Record<string, unknown> | undefined;
     const field = NAMED_METHODS[frame.method];
-    const value = field ? (frame.params as Record<string, unknown> | undefined)?.[field] : undefined;
+    const value = field ? params?.[field] : undefined;
     if (typeof value === "string") headers["mcp-name"] = encodeHeaderValue(value);
+    // Only a `tools/call` carries custom parameters, and only for a tool whose
+    // `inputSchema` asked for them: a tool nobody listed is called plainly,
+    // which is what the spec tells a client with no schema in hand to do.
+    if (frame.method === "tools/call" && typeof params?.name === "string") {
+      const declared = this.headerParams.get(params.name);
+      if (declared) Object.assign(headers, headerParamHeaders(declared, params.arguments));
+    }
     return headers;
   }
 

@@ -12,9 +12,10 @@
  * Two rules from the design are worth restating where they are implemented.
  * The era comes from the cassette header and is never guessed from frames
  * (§4.3). And replay is a deterministic test double, not a conformance
- * checker (§3.3): a missing session id or a mismatched `Mcp-Method` earns a
- * warning on stderr and a correct answer, never a 400. Checking the client
- * against a real server is `verify`'s job.
+ * checker (§3.3): a missing session id, or a `Mcp-Method`, `Mcp-Name` or
+ * `Mcp-Param-*` that does not match the body, earns a warning on stderr and a
+ * correct answer, never a 400. Checking the client against a real server is
+ * `verify`'s job.
  */
 
 import http from "node:http";
@@ -57,6 +58,7 @@ import {
   type RecordedTaskPolls,
 } from "./replay.js";
 import { MiniClient, type Target } from "./client.js";
+import { decodeHeaderValue, headerValueOf, namedBodyField } from "./transport.js";
 import { readRedactConfig } from "./redact.js";
 
 /** "none" (default) emits chunks back to back; "recorded" honors the offsets the recorder stamped. */
@@ -99,6 +101,28 @@ export interface ReplayServer {
 }
 
 const warn = (message: string) => process.stderr.write(`mcp-cassette replay: ${message}\n`);
+
+/**
+ * Does a `Mcp-Param-*` value mirror one of the call's arguments? Replay has no
+ * `inputSchema` to say which argument a given header belongs to, so it asks
+ * the question the schema would have answered: does this value sit anywhere in
+ * the arguments that an annotation could have been put on, meaning a chain of
+ * plain properties and never through an array. A conforming client took the
+ * value from exactly such a place, so a "no" is a client that did not.
+ *
+ * The comparison is on the text, so a foreign client that mirrors an integer
+ * as `42.0` is warned about against a body holding `42`. The spec tells a
+ * client to send the decimal form and only asks a server to compare
+ * numerically, so this is a warning about a client that did not.
+ */
+function mirrorsArgument(args: unknown, value: string): boolean {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return false;
+  for (const entry of Object.values(args as Record<string, unknown>)) {
+    if (headerValueOf(entry) === value) return true;
+    if (entry !== null && typeof entry === "object" && mirrorsArgument(entry, value)) return true;
+  }
+  return false;
+}
 
 /**
  * Recorded statuses that were not derivable (§1.2), keyed by the very response
@@ -442,6 +466,36 @@ export async function startHttpReplay(cassettePath: string, opts: HttpReplayOpti
     const spoken = req.headers["mcp-protocol-version"];
     if (version && typeof spoken === "string" && spoken !== version) {
       warn(`MCP-Protocol-Version "${spoken}" is not the recorded "${version}"; answering anyway`);
+    }
+    if (era === "modern") checkMirroredHeaders(req, frame);
+  };
+
+  /**
+   * The headers the modern era mirrors out of the body: `Mcp-Name` and the
+   * custom `Mcp-Param-*` a tool's `inputSchema` asked for. A real server
+   * answers a mismatch with a 400 and `-32020`; replay says so and answers
+   * correctly anyway, because it is a test double and conformance is
+   * `verify`'s job (§3.3). Absence is not checked: whether a header was owed
+   * is a question only the tool's schema answers, and replay holds no schema.
+   */
+  const checkMirroredHeaders = (req: http.IncomingMessage, frame: JsonRpcRequest) => {
+    const params = frame.params as Record<string, unknown> | undefined;
+    const field = namedBodyField(frame.method);
+    const named = req.headers["mcp-name"];
+    if (field && typeof named === "string") {
+      const body = params?.[field];
+      const value = decodeHeaderValue(named);
+      if (typeof body === "string" && value !== body) {
+        warn(`Mcp-Name "${value}" does not match the body's "${body}"; answering anyway`);
+      }
+    }
+    if (frame.method !== "tools/call") return;
+    for (const [name, raw] of Object.entries(req.headers)) {
+      if (!name.startsWith("mcp-param-") || typeof raw !== "string") continue;
+      const value = decodeHeaderValue(raw);
+      if (!mirrorsArgument(params?.arguments, value)) {
+        warn(`${name} "${value}" mirrors no argument of "${String(params?.name)}"; answering anyway`);
+      }
     }
   };
 
