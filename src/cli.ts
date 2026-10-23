@@ -483,7 +483,8 @@ program
       failOn: string;
       lintFailOn?: string;
       sarifLocation?: string;
-    }) => {
+    }, cmd: Command) => {
+    warnIgnoredOperands(cmd, opts.stdio);
     try {
       if (opts.failOn !== "error" && opts.failOn !== "warn") {
         process.stderr.write(`check: --fail-on must be error or warn (got '${opts.failOn}')\n`);
@@ -554,7 +555,8 @@ program
       update?: boolean;
       failOn: string;
       json?: boolean;
-    }) => {
+    }, cmd: Command) => {
+      warnIgnoredOperands(cmd, opts.stdio);
       try {
         if (opts.failOn !== "breaking" && opts.failOn !== "dangerous") {
           throw new Error(`--fail-on must be "breaking" or "dangerous" (got "${opts.failOn}")`);
