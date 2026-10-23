@@ -149,6 +149,21 @@ const NO_ANCHOR_WARNING =
   "  Fix: commit a contract snapshot (mcp-cassette snapshot), or pass\n" +
   "  --sarif-location <file> naming a file in the repository.\n";
 
+/**
+ * Commander 12 drops operands a command does not declare without a word, so an
+ * unquoted --stdio command runs its first word alone. Say so, on stderr only:
+ * stdout and the exit code stay exactly what they would have been.
+ */
+function warnIgnoredOperands(cmd: Command, stdio?: string): void {
+  const ignored = cmd.args.slice(cmd.registeredArguments.length);
+  if (ignored.length === 0) return;
+  const list = ignored.join(" ");
+  const hint =
+    stdio === undefined ? "" : `; to pass them to the server, quote the whole command: --stdio "${stdio} ${list}"`;
+  // writeSync: several callers reach process.exit, which can drop a queued pipe write.
+  fs.writeSync(2, `${cmd.name()}: ignored extra argument(s): ${list}${hint}\n`);
+}
+
 function resolveEra(value: string): EraOption {
   if (value === "auto" || value === "legacy" || value === "modern") return value;
   throw new Error(`--era must be legacy | modern | auto (got "${value}")`);
@@ -315,7 +330,8 @@ program
       "No --format sarif: SARIF here would have to invent a server, a tool count and a gate it was\n" +
       "decided against, none of which a cassette has. Use --json.\n"
   )
-  .action((cassette: string, opts: { json?: boolean }) => {
+  .action((cassette: string, opts: { json?: boolean }, cmd: Command) => {
+    warnIgnoredOperands(cmd);
     try {
       const tape = readCassette(cassette);
       const header = lintCassette(tape);
@@ -467,7 +483,8 @@ program
       failOn: string;
       lintFailOn?: string;
       sarifLocation?: string;
-    }) => {
+    }, cmd: Command) => {
+    warnIgnoredOperands(cmd, opts.stdio);
     try {
       if (opts.failOn !== "error" && opts.failOn !== "warn") {
         process.stderr.write(`check: --fail-on must be error or warn (got '${opts.failOn}')\n`);
@@ -538,7 +555,8 @@ program
       update?: boolean;
       failOn: string;
       json?: boolean;
-    }) => {
+    }, cmd: Command) => {
+      warnIgnoredOperands(cmd, opts.stdio);
       try {
         if (opts.failOn !== "breaking" && opts.failOn !== "dangerous") {
           throw new Error(`--fail-on must be "breaking" or "dangerous" (got "${opts.failOn}")`);
@@ -632,7 +650,8 @@ program
     "--check-config",
     "analyse --redact-config's patterns for catastrophic backtracking and exit, writing no cassette. Needs the optional `recheck` peer"
   )
-  .action(async (cassettePath: string | undefined, opts: RedactCliOptions) => {
+  .action(async (cassettePath: string | undefined, opts: RedactCliOptions, cmd: Command) => {
+    warnIgnoredOperands(cmd);
     try {
       const cfg = opts.redactConfig ? readRedactConfig(opts.redactConfig) : undefined;
 

@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 version is `0`, a minor bump may carry a breaking change; each one says so
 below.
 
+## [Unreleased]
+
+- `check`, `snapshot`, `lint` and `redact` print one stderr line naming any positional argument they ignore (commander 12 drops it silently), with a hint to quote the `--stdio` command; exit codes and stdout are unchanged, and a token starting with `-` (as in an unquoted `npx -y ...`) is still rejected by commander before this warning can run.
+
 ## [0.10.0] - 2026-10-10
 
 Two paths that failed sessions nobody had done wrong now work, and the safety
